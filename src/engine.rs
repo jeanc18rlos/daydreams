@@ -668,15 +668,12 @@ impl Engine {
         // -- re-parsed every mesh, re-decoded the door and re-uploaded the lot. Kept alive
         // across the load, every `acquire_*` upgrades instead. The RefCell is only borrowed
         // for the length of the take, and nothing in the old vector is touched again, so the
-        // later drop cannot collide with the load's own borrows.
-        //
-        // The PORTALS are not kept: there is nothing in one worth keeping warm. The eager
-        // framebuffers each used to own (which would have doubled the scene's GPU memory for
-        // the duration of a load) live on the engine now, shared (`portal_fbos`), and the mesh
-        // and two shaders a new portal re-acquires are pinned in `ExtState`. So they go first,
-        // and the reload stays warm without them.
-        self.v_portals.borrow_mut().clear();
+        // later drop cannot collide with the load's own borrows. The portals are kept the
+        // same way: a portal owns nothing heavier than its quad and two shaders, which are
+        // exactly what the next scene's portals re-acquire (the framebuffers it used to carry
+        // live on the engine now, shared per recursion level -- `portal_fbos`).
         let old_objects = std::mem::take(&mut *self.v_objects.borrow_mut());
+        let old_portals = std::mem::take(&mut *self.v_portals.borrow_mut());
         self.player.borrow_mut().reset();
 
         // EXT: per-scene shader state starts clean; a scene that wants it sets it in load().
@@ -718,6 +715,7 @@ impl Engine {
         // EXT: now the old scene can go. Anything the new one did not re-acquire is freed here,
         // GL objects included, while the context is current.
         drop(old_objects);
+        drop(old_portals);
         log::info!("[load] scene {ix} in {:.0} ms", t0.elapsed().as_secs_f32() * 1e3);
     }
 

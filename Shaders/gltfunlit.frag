@@ -15,7 +15,10 @@ precision highp float;
 // two things draw with this shader and they must fade to different places: the building's
 // walls to a dark yellow-brown of their own, and the ground cap under it (GroundCap in
 // src/ext/backrooms.rs) to the interior sky's horizon tone, exactly -- anything else leaves a
-// bright line where the cap's far edge meets the sky. An unset uniform is GL zero, black.
+// bright line where the cap's far edge meets the sky. Those two -- `Backrooms::draw` and
+// `GroundCap::draw` -- are the only things that draw with this shader, and each sets
+// `fog_color` every draw. Left unset it is GL's zero, black: a far end that fades to black
+// is the sign of a new caller that forgot it.
 
 uniform sampler2D tex;    // base colour map as shipped (1x1 white when the material has none)
 uniform vec4 base_color;  // glTF baseColorFactor

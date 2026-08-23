@@ -1070,12 +1070,13 @@ Where it went, in order of effect:
   and portal vectors before `Scene::load`, which expired every `Weak` in the resource caches;
   the title → NEW GAME transition therefore re-parsed the terrain, re-built the grass and
   re-decoded the door. The object vector is moved into a local, the new scene loads against
-  warm caches, and the old objects drop afterwards. The portals are the exception and are
-  dropped first: there is nothing in one worth keeping warm -- the eager framebuffers each
-  used to own (some 60 MB a portal, which keeping twelve of them across the load of twelve
-  more would have doubled) live on the engine now, shared per recursion level -- and the mesh
-  and two shaders a portal re-acquires are pinned in `ExtState`, which is what keeps the
-  reload at the `< 1 ms` above.
+  warm caches, and the old objects drop afterwards. The portals go the same way: a portal
+  owns only its quad and two shaders, which are exactly what the next scene's portals
+  re-acquire. (They used to be dropped first, with those three pinned in `ExtState` instead,
+  from when each portal carried its own framebuffers -- some 60 MB a portal, which keeping
+  twelve of them across the load of twelve more would have doubled. The framebuffers live on
+  the engine now, shared per recursion level, so there is nothing left to avoid holding
+  twice.)
 * Smaller things: `Shader` memoises by-name uniform locations (six lookups per object per pass
   were each a `CString` and a driver call); the eye position is computed once per pass rather
   than inverted per object; the blade vertex shader takes `vp` and `l2w` instead of recovering
@@ -1098,7 +1099,7 @@ Small additions, each tagged `// EXT:`:
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
 | `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery |
 | `frame_buffer.rs` | sized attachments instead of `GH_FBO_SIZE` square |
-| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects kept alive across `load_scene` (its portals dropped first); the triangle-mesh rounds in the collision pass; a room's respawn request applied after the portal pass; the `--forward`/`--strafe`/`--sprint` held keys |
+| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn request applied after the portal pass; the `--forward`/`--strafe`/`--sprint` held keys |
 | `portal.rs` | the nested pass scissored to the quad's screen footprint |
 | `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4`; `new` returns `Result<_, AssetError>` and the attribute scan is a pure, tested `scrape_attribs` |
 | `texture.rs` | `new` returns `Result<_, AssetError>`; the BMP byte walk is a pure, tested `decode_bmp` |
