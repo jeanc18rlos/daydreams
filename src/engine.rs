@@ -787,8 +787,9 @@ impl Engine {
                 let p = self.player.borrow();
                 (p.cam_to_world(), p.obj().pos)
             };
-            let ctx = UpdateCtx { input: &input, cam_to_world, player_pos };
             let v_objects = self.v_objects.borrow();
+            // EXT: the vector itself rides along, for an object that reads the others.
+            let ctx = UpdateCtx { input: &input, cam_to_world, player_pos, scene: &v_objects };
             for i in 0..v_objects.len() {
                 // PORT: `assert(vObjects[i].get())` (Engine.cpp:149) is unnecessary -- an Rc is
                 // never null.
