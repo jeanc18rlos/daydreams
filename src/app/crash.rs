@@ -14,13 +14,57 @@
 
 use std::backtrace::Backtrace;
 use std::panic::PanicHookInfo;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock, Weak};
 use std::thread::ThreadId;
+
+use winit::window::Window;
 
 use super::error::AssetError;
 
 /// The thread `install` ran on -- main -- which is the only one the dialog is shown from.
 static MAIN_THREAD: OnceLock<ThreadId> = OnceLock::new();
+
+/// Set by [`set_headless`] for runs that have nobody at the screen (`--shot`, `gen-terrain`):
+/// the dialog is skipped, the log line is all there is.
+static HEADLESS: AtomicBool = AtomicBool::new(false);
+
+/// The game window, once it exists, so the hook can hand the display back before it blocks
+/// on the dialog. `Weak`: the hook must not keep a window alive that the app is dropping, and
+/// a dropped window (the panic came from the teardown) simply means there is nothing to undo.
+static WINDOW: Mutex<Weak<Window>> = Mutex::new(Weak::new());
+
+/// Headless means no dialog, whatever else is set. `main` decides from the command line:
+/// `--shot` and `gen-terrain` are driven by scripts and CI, which cannot press OK -- and on
+/// macOS the alert is drawn by a system daemon, not by this process, so a modal nobody
+/// dismisses stays on the desktop after the process is killed. `DAYDREAMS_NO_DIALOG` in the
+/// environment is the same switch for a run that is headless for some other reason.
+pub fn set_headless(headless: bool) {
+    HEADLESS.store(headless, Ordering::Relaxed);
+}
+
+/// Register the game window. Once, from `main`'s thread, as soon as the window exists.
+pub fn register_window(window: Weak<Window>) {
+    if let Ok(mut slot) = WINDOW.lock() {
+        *slot = window;
+    }
+}
+
+/// Give the display back before the dialog: ungrab and show the cursor, leave fullscreen.
+/// Without this a panic in a fullscreen run put the alert behind a black borderless window
+/// with the pointer locked -- the dialog was there, invisible, and so was the desktop. Main
+/// thread only: winit's window methods on macOS must be called from it, and a second panic
+/// inside the hook is an abort.
+///
+/// `try_lock`, not `lock`: a panic while `register_window` held the mutex would deadlock the
+/// hook; skipping the release is the lesser harm.
+fn release_display() {
+    let Ok(slot) = WINDOW.try_lock() else { return };
+    let Some(window) = slot.upgrade() else { return };
+    let _ = window.set_cursor_grab(winit::window::CursorGrabMode::None);
+    window.set_cursor_visible(true);
+    window.set_fullscreen(None);
+}
 
 /// Install the panic hook. Before anything else in `main`, so that even a failure in
 /// argument parsing or logging setup is reported through it.
@@ -43,8 +87,15 @@ fn report_panic(info: &PanicHookInfo) {
     // of a game launched by double-click, where nothing sets it.
     let backtrace = Backtrace::force_capture();
     log::error!("panic: {message}\n  at {location}\n{backtrace}");
+    let dialog = dialog_allowed();
+    if !dialog {
+        log::info!("no crash dialog: headless run, or not the main thread");
+    }
     log::logger().flush();
-    show_dialog("DayDreams crashed", &format!("{message}\n\nat {location}"));
+    if dialog {
+        release_display();
+        show_dialog("DayDreams crashed", &format!("{message}\n\nat {location}"));
+    }
 }
 
 /// The payload a `panic!` carries is a `&str` or a `String`; anything else is shown as such.
@@ -63,24 +114,32 @@ fn panic_message(info: &PanicHookInfo) -> String {
 pub fn fatal(err: &AssetError) -> ! {
     log::error!("fatal: {err}");
     log::logger().flush();
-    show_dialog("DayDreams cannot start", &err.to_string());
+    if dialog_allowed() {
+        show_dialog("DayDreams cannot start", &err.to_string());
+    }
     std::process::exit(1);
 }
 
-/// A native error dialog with the log file's path appended -- from the main thread only, and
-/// not when `DAYDREAMS_NO_DIALOG` is set: a headless run (a CI screenshot job, a script
-/// driving `--shot`) has nobody to press OK, and a modal it cannot dismiss is a hang where an
-/// exit code was wanted. The log line carries the same text either way.
+/// Whether a dialog may be shown at all: from the main thread only, and not for a headless
+/// run -- `--shot` and `gen-terrain` through [`set_headless`], or `DAYDREAMS_NO_DIALOG` in the
+/// environment. A headless run has nobody to press OK, and a modal it cannot dismiss is a
+/// hang where an exit code was wanted; on macOS it is worse than a hang, because the alert is
+/// drawn by a system daemon on the process's behalf and stays on the desktop after the process
+/// is killed. The log line carries the same text either way.
 ///
 /// Off the main thread, rfd on macOS would block the caller while it dispatches the alert to
 /// the main thread; if main is at that moment joining the thread that panicked (the glTF
 /// decoder's scoped threads are joined exactly so), neither side can proceed. The scope's own
 /// re-raise of the panic reaches this hook on main a moment later and shows the dialog then,
 /// so nothing is lost by logging only here.
+fn dialog_allowed() -> bool {
+    MAIN_THREAD.get() == Some(&std::thread::current().id())
+        && !HEADLESS.load(Ordering::Relaxed)
+        && std::env::var_os("DAYDREAMS_NO_DIALOG").is_none()
+}
+
+/// A native error dialog with the log file's path appended. Only after [`dialog_allowed`].
 fn show_dialog(title: &str, body: &str) {
-    if MAIN_THREAD.get() != Some(&std::thread::current().id()) || std::env::var_os("DAYDREAMS_NO_DIALOG").is_some() {
-        return;
-    }
     let mut text = body.to_string();
     match super::logging::file_path() {
         Some(path) => text.push_str(&format!("\n\nDetails were written to\n{}", path.display())),

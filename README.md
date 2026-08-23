@@ -1281,13 +1281,24 @@ the process still unwinds the way winit expects (`panic = "unwind"`). The same d
 The dialog is shown from the main thread only: off it, rfd would block the panicking thread
 while dispatching to main, and if main is at that moment joining that very thread (the glTF
 decoder's scoped threads are), neither side could proceed -- the scope's re-raise reaches the
-hook on main a moment later and shows the dialog then. `DAYDREAMS_NO_DIALOG=1` suppresses it
-for headless runs that have nobody to press OK; the log line is identical either way.
+hook on main a moment later and shows the dialog then.
+
+Before it blocks on the dialog the hook hands the display back -- cursor ungrabbed and shown,
+fullscreen left -- through a `Weak<Window>` that `main.rs` registers once the window exists;
+otherwise a fullscreen panic put the alert behind a black borderless window with the pointer
+locked.
+
+**Headless runs never get the dialog.** `--shot` and `gen-terrain` imply it, and
+`DAYDREAMS_NO_DIALOG=1` in the environment is the same switch for any other run that has
+nobody to press OK; the log line is identical either way, plus an info line saying the dialog
+was skipped. This matters more than a hang: on macOS the alert is drawn by a system daemon on
+the process's behalf, not by the process, so it **survives a kill** -- a script that times out
+and kills the game leaves the alert on the desktop until someone dismisses it by hand.
 
 A hidden `--panic-test` flag panics after the first frame, from inside a winit callback with
 the window up, which is where a real one would come from; it was used to confirm that the
 dialog appears over the game on macOS without deadlocking and that the log carries the
-backtrace.
+backtrace. Set `DAYDREAMS_NO_DIALOG=1` when scripting it.
 
 ### Typed asset errors and the fatal sink
 

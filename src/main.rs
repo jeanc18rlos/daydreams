@@ -58,6 +58,7 @@ mod app;
 
 use std::num::NonZeroU32;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use glutin::config::{Config, ConfigTemplateBuilder, GlConfig};
 use glutin::context::{
@@ -193,7 +194,7 @@ enum GlDisplayCreationState {
 struct AppState {
     gl_surface: Surface<WindowSurface>,
     // NOTE: the Window must be dropped after every resource created from its raw window handle.
-    window: Window,
+    window: Arc<Window>,
 }
 
 struct App {
@@ -403,6 +404,10 @@ impl ApplicationHandler for App {
         }
 
         self.gl_context = Some(gl_context);
+        // EXT: the crash hook borrows the window weakly, to hand the display back before it
+        // blocks on the dialog (src/app/crash.rs). The Arc is only for that borrow.
+        let window = Arc::new(window);
+        app::crash::register_window(Arc::downgrade(&window));
         self.state = Some(AppState { gl_surface, window });
     }
 
@@ -643,6 +648,8 @@ fn main() {
     // reported through; then the root, which everything after it loads from.
     app::crash::install();
     let args = Args::from_env();
+    // A screenshot or mesh-generation run is a script's, not a person's: no dialog for it.
+    app::crash::set_headless(args.shot.is_some() || args.command.is_some());
     app::logging::init(args.log_level, !args.no_log_file);
     log::info!(
         "DayDreams {} starting; log file: {}",
