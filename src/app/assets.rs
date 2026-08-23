@@ -93,7 +93,10 @@ fn bundle_resources(exe_dir: &Path) -> Option<PathBuf> {
 }
 
 /// The first candidate `qualifies`, or every one tried.
-fn resolve(candidates: &[PathBuf], qualifies: impl Fn(&Path) -> bool) -> Result<PathBuf, AssetError> {
+fn resolve(
+    candidates: &[PathBuf],
+    qualifies: impl Fn(&Path) -> bool,
+) -> Result<PathBuf, AssetError> {
     candidates
         .iter()
         .find(|dir| qualifies(dir))
@@ -111,7 +114,12 @@ mod tests {
 
     #[test]
     fn explicit_choice_is_the_only_candidate() {
-        let c = candidates(Some(p("/x/assets")), Some(Path::new("/bin/daydreams")), Some(Path::new("/cwd")), Path::new("/src"));
+        let c = candidates(
+            Some(p("/x/assets")),
+            Some(Path::new("/bin/daydreams")),
+            Some(Path::new("/cwd")),
+            Path::new("/src"),
+        );
         assert_eq!(c, vec![p("/x/assets")]);
     }
 
@@ -133,7 +141,12 @@ mod tests {
             ]
         );
         // Not a bundle: no Resources entry.
-        let c = candidates(None, Some(Path::new("/opt/daydreams/target/release/daydreams")), None, Path::new("/src"));
+        let c = candidates(
+            None,
+            Some(Path::new("/opt/daydreams/target/release/daydreams")),
+            None,
+            Path::new("/src"),
+        );
         assert_eq!(c, vec![p("/opt/daydreams/target/release"), p("/src")]);
     }
 
@@ -172,7 +185,8 @@ mod tests {
         assert!(!has_shaders(&tmp.path().join("missing")));
         // The search order is honoured over real directories: the first one that qualifies
         // wins even when a later one would too, and a missing one is skipped.
-        let order = vec![tmp.path().join("missing"), bare.clone(), file.clone(), full.clone(), p("/")];
+        let order =
+            vec![tmp.path().join("missing"), bare.clone(), file.clone(), full.clone(), p("/")];
         assert_eq!(resolve(&order, has_shaders).unwrap(), full);
         let err = resolve(&[bare.clone(), file.clone()], has_shaders).unwrap_err();
         assert!(matches!(&err, AssetError::NoAssetRoot { tried } if tried.len() == 2));

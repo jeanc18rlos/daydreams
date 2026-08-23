@@ -32,7 +32,9 @@ pub fn decode_bmp(data: &[u8], rows: i32, cols: i32) -> Result<Bmp, String> {
     // PORT: `*reinterpret_cast<int32_t*>(&input[18])` -> from_le_bytes; BMP headers are
     // always little-endian, which matched the original's x86 target
     // (was: const GLsizei width = *reinterpret_cast<int32_t*>(&input[18]), Texture.cpp:20-21).
-    let input = data.get(0..54).ok_or_else(|| format!("{} bytes is shorter than a BMP header", data.len()))?;
+    let input = data
+        .get(0..54)
+        .ok_or_else(|| format!("{} bytes is shorter than a BMP header", data.len()))?;
     if &input[0..2] != b"BM" {
         return Err("missing the 'BM' signature".to_string());
     }
@@ -64,7 +66,10 @@ pub fn decode_bmp(data: &[u8], rows: i32, cols: i32) -> Result<Bmp, String> {
             let size = w.checked_mul(h).and_then(|n| n.checked_mul(4)).ok_or_else(too_big)?;
             let need = size.checked_add(54).ok_or_else(too_big)?;
             if data.len() < need {
-                return Err(format!("truncated: {} bytes, {width}x{height}x32 needs {need}", data.len()));
+                return Err(format!(
+                    "truncated: {} bytes, {width}x{height}x32 needs {need}",
+                    data.len()
+                ));
             }
             let mut img = vec![0u8; size];
             for y in (0..h).rev() {
@@ -80,7 +85,10 @@ pub fn decode_bmp(data: &[u8], rows: i32, cols: i32) -> Result<Bmp, String> {
             let stride = row_bytes + if padding != 0 { 4 - padding } else { 0 };
             let need = stride.checked_mul(h).and_then(|n| n.checked_add(54)).ok_or_else(too_big)?;
             if data.len() < need {
-                return Err(format!("truncated: {} bytes, {width}x{height}x24 needs {need}", data.len()));
+                return Err(format!(
+                    "truncated: {} bytes, {width}x{height}x24 needs {need}",
+                    data.len()
+                ));
             }
             // EXT: an error, not an assert, because the atlas shape is data too: `rows` and
             // `cols` are what the scene asked for and the file is what is on disk, and a
@@ -127,7 +135,12 @@ impl Texture {
     // EXT: returns the failure instead of panicking on it; `Resources::acquire_texture` is
     // where it becomes fatal (was: Texture::Texture(const char* fname, int rows, int cols),
     // Texture.cpp:6).
-    pub fn new(gl: &Rc<glow::Context>, fname: &str, rows: i32, cols: i32) -> Result<Texture, AssetError> {
+    pub fn new(
+        gl: &Rc<glow::Context>,
+        fname: &str,
+        rows: i32,
+        cols: i32,
+    ) -> Result<Texture, AssetError> {
         //Check if this is a 3D texture
         // PORT: C++ `assert` (compiled out in release) -> debug_assert! (was: assert(rows >= 1 &&
         // cols >= 1), Texture.cpp:7).
@@ -143,10 +156,13 @@ impl Texture {
         // is returned (was: if (!fin) { texId = 0; return; }, Texture.cpp:12-15).
         // EXT: under the resolved asset root rather than the working directory.
         let path = assets::path(&format!("Textures/{}", fname));
-        let data = std::fs::read(&path).map_err(|source| AssetError::Io { path: path.clone(), source })?;
-        let Bmp { width, height, bpp, pixels: img } =
-            decode_bmp(&data, rows, cols).map_err(|reason| AssetError::BadBmp { path: path.clone(), reason })?;
-        let gl_error = |e: String| AssetError::Gl(format!("glGenTextures failed for '{}': {}", path.display(), e));
+        let data =
+            std::fs::read(&path).map_err(|source| AssetError::Io { path: path.clone(), source })?;
+        let Bmp { width, height, bpp, pixels: img } = decode_bmp(&data, rows, cols)
+            .map_err(|reason| AssetError::BadBmp { path: path.clone(), reason })?;
+        let gl_error = |e: String| {
+            AssetError::Gl(format!("glGenTextures failed for '{}': {}", path.display(), e))
+        };
 
         if bpp == 32 {
             debug_assert!(!is_3d, "32-bit atlases are never 2D arrays");
@@ -157,8 +173,16 @@ impl Texture {
                 // Trilinear + repeat: 32-bit textures are the "modern" path (UI atlases, the
                 // tileable grass noise). Mipmaps matter for the grass -- without them a
                 // high-frequency texture shimmers at distance, which reads as cheap instantly.
-                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR_MIPMAP_LINEAR as i32);
-                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+                gl.tex_parameter_i32(
+                    glow::TEXTURE_2D,
+                    glow::TEXTURE_MIN_FILTER,
+                    glow::LINEAR_MIPMAP_LINEAR as i32,
+                );
+                gl.tex_parameter_i32(
+                    glow::TEXTURE_2D,
+                    glow::TEXTURE_MAG_FILTER,
+                    glow::LINEAR as i32,
+                );
                 gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
                 gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::REPEAT as i32);
                 gl.tex_image_2d(
@@ -173,11 +197,7 @@ impl Texture {
                     PixelUnpackData::Slice(Some(&img)),
                 );
                 gl.generate_mipmap(glow::TEXTURE_2D);
-                return Ok(Texture {
-                    tex,
-                    is_3d: false,
-                    gl: Rc::clone(gl),
-                });
+                return Ok(Texture { tex, is_3d: false, gl: Rc::clone(gl) });
             }
         }
 
@@ -262,11 +282,7 @@ impl Texture {
             // PORT: `delete[] img` is implicit -- `img` is a Vec (was: delete[] img,
             // Texture.cpp:64).
 
-            Ok(Texture {
-                tex,
-                is_3d,
-                gl: Rc::clone(gl),
-            })
+            Ok(Texture { tex, is_3d, gl: Rc::clone(gl) })
         }
     }
 
@@ -355,8 +371,12 @@ mod tests {
 
     #[test]
     fn rejects_what_it_cannot_read() {
-        assert!(decode_bmp(&bmp(1, 1, 8, &[vec![0; 4]]), 1, 1).unwrap_err().contains("bits per pixel"));
-        assert!(decode_bmp(&bmp(1, -1, 24, &[vec![0; 4]]), 1, 1).unwrap_err().contains("dimensions"));
+        assert!(decode_bmp(&bmp(1, 1, 8, &[vec![0; 4]]), 1, 1)
+            .unwrap_err()
+            .contains("bits per pixel"));
+        assert!(decode_bmp(&bmp(1, -1, 24, &[vec![0; 4]]), 1, 1)
+            .unwrap_err()
+            .contains("dimensions"));
         let mut bad = bmp(1, 1, 24, &[vec![0; 4]]);
         bad[0] = b'X';
         assert!(decode_bmp(&bad, 1, 1).unwrap_err().contains("signature"));
@@ -390,7 +410,8 @@ mod tests {
 
     #[test]
     fn shipped_atlas_decodes() {
-        let data = std::fs::read(crate::app::assets::path("Textures/floorplan_textures.bmp")).unwrap();
+        let data =
+            std::fs::read(crate::app::assets::path("Textures/floorplan_textures.bmp")).unwrap();
         let b = decode_bmp(&data, 4, 4).unwrap();
         assert_eq!(b.bpp, 24);
         assert_eq!(b.pixels.len(), (b.width * b.height * 3) as usize);

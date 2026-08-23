@@ -78,8 +78,6 @@ impl Scene for Level5 {
         }
         objs.push(tunnel3);
 
-        player
-            .base
-            .set_position(Vector3::new(0.0, GH_PLAYER_HEIGHT, 5.0));
+        player.base.set_position(Vector3::new(0.0, GH_PLAYER_HEIGHT, 5.0));
     }
 }

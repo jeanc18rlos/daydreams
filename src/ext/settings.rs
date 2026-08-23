@@ -368,12 +368,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join(FILE);
         let legacy = dir.path().join(LEGACY_FILE);
-        std::fs::write(&file, "mouse_sensitivity = 9
+        std::fs::write(
+            &file,
+            "mouse_sensitivity = 9
 muted = false
-").unwrap();
-        std::fs::write(&legacy, "mouse_sensitivity = 2
+",
+        )
+        .unwrap();
+        std::fs::write(
+            &legacy,
+            "mouse_sensitivity = 2
 muted = 1
-").unwrap();
+",
+        )
+        .unwrap();
 
         load_from(&file, &legacy);
         assert_eq!((mouse_level(), muted()), (9, false));
@@ -389,8 +397,12 @@ muted = 1
         let file = dir.path().join(FILE);
         let legacy = dir.path().join(LEGACY_FILE);
         std::fs::create_dir(&file).unwrap();
-        std::fs::write(&legacy, "mouse_sensitivity = 2
-").unwrap();
+        std::fs::write(
+            &legacy,
+            "mouse_sensitivity = 2
+",
+        )
+        .unwrap();
 
         adjust_mouse(3);
         let before = mouse_level();
@@ -403,9 +415,12 @@ muted = 1
     /// keeps the default rather than becoming 3 or 4 by a rule nobody wrote down.
     #[test]
     fn float_level_keeps_the_default() {
-        apply("mouse_sensitivity = 3.5
+        apply(
+            "mouse_sensitivity = 3.5
 pad_sensitivity = 2
-", Path::new("test"));
+",
+            Path::new("test"),
+        );
         assert_eq!((mouse_level(), pad_level()), (DEFAULT_LEVEL, 2));
     }
 

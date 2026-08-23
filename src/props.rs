@@ -47,11 +47,7 @@ pub fn ground(_gl: &Rc<glow::Context>, res: &Resources, slope: bool) -> Object {
     // (was: shader "texture", texture "checker_green.bmp", scale (10,1,10)).
     o.shader = Some(res.acquire_shader("grass_flat"));
     o.texture = Some(res.acquire_texture("grass_noise.bmp", 1, 1));
-    o.scale = if slope {
-        Vector3::new(10.0, 1.0, 10.0)
-    } else {
-        Vector3::new(400.0, 1.0, 400.0)
-    };
+    o.scale = if slope { Vector3::new(10.0, 1.0, 10.0) } else { Vector3::new(400.0, 1.0, 400.0) };
     o
 }
 
@@ -72,35 +68,27 @@ pub fn house(_gl: &Rc<glow::Context>, res: &Resources, tex: &str) -> Object {
 // passes a Portal; the contract types them as `&mut Portal`, so the fields are reached through
 // `portal.base` (was: void SetDoor1(Object& portal) const, House.h:15).
 pub fn house_set_door1(house: &Object, portal: &mut Portal) {
-    portal.base.pos = house
-        .local_to_world()
-        .mul_point(Vector3::new(4.0, 0.5, 10.0));
+    portal.base.pos = house.local_to_world().mul_point(Vector3::new(4.0, 0.5, 10.0));
     portal.base.euler = house.euler;
     portal.base.scale = Vector3::new(2.0, 0.5, 1.0) * house.scale;
 }
 
 pub fn house_set_door2(house: &Object, portal: &mut Portal) {
-    portal.base.pos = house
-        .local_to_world()
-        .mul_point(Vector3::new(10.0, 0.5, 4.0));
+    portal.base.pos = house.local_to_world().mul_point(Vector3::new(10.0, 0.5, 4.0));
     portal.base.euler = house.euler;
     portal.base.euler.y -= GH_PI / 2.0;
     portal.base.scale = Vector3::new(2.0, 0.5, 1.0) * house.scale;
 }
 
 pub fn house_set_door3(house: &Object, portal: &mut Portal) {
-    portal.base.pos = house
-        .local_to_world()
-        .mul_point(Vector3::new(16.0, 0.5, 10.0));
+    portal.base.pos = house.local_to_world().mul_point(Vector3::new(16.0, 0.5, 10.0));
     portal.base.euler = house.euler;
     portal.base.euler.y -= GH_PI;
     portal.base.scale = Vector3::new(2.0, 0.5, 1.0) * house.scale;
 }
 
 pub fn house_set_door4(house: &Object, portal: &mut Portal) {
-    portal.base.pos = house
-        .local_to_world()
-        .mul_point(Vector3::new(10.0, 0.5, 16.0));
+    portal.base.pos = house.local_to_world().mul_point(Vector3::new(10.0, 0.5, 16.0));
     portal.base.euler = house.euler;
     portal.base.euler.y -= GH_PI * 3.0 / 2.0;
     portal.base.scale = Vector3::new(2.0, 0.5, 1.0) * house.scale;
@@ -199,10 +187,7 @@ pub fn tunnel(_gl: &Rc<glow::Context>, res: &Resources, t: TunnelType) -> Tunnel
 }
 
 pub fn tunnel_set_door1(t: &Tunnel, portal: &mut Portal) {
-    portal.base.pos = t
-        .base
-        .local_to_world()
-        .mul_point(Vector3::new(0.0, 1.0, 1.0));
+    portal.base.pos = t.base.local_to_world().mul_point(Vector3::new(0.0, 1.0, 1.0));
     portal.base.euler = t.base.euler;
     portal.base.scale = Vector3::new(0.6, 0.999, 1.0) * t.base.scale.x;
 }
@@ -210,22 +195,13 @@ pub fn tunnel_set_door1(t: &Tunnel, portal: &mut Portal) {
 pub fn tunnel_set_door2(t: &Tunnel, portal: &mut Portal) {
     portal.base.euler = t.base.euler;
     if t.ttype == TunnelType::Scale {
-        portal.base.pos = t
-            .base
-            .local_to_world()
-            .mul_point(Vector3::new(0.0, 0.5, -1.0));
+        portal.base.pos = t.base.local_to_world().mul_point(Vector3::new(0.0, 0.5, -1.0));
         portal.base.scale = Vector3::new(0.3, 0.499, 0.5) * t.base.scale.x;
     } else if t.ttype == TunnelType::Slope {
-        portal.base.pos = t
-            .base
-            .local_to_world()
-            .mul_point(Vector3::new(0.0, -1.0, -1.0));
+        portal.base.pos = t.base.local_to_world().mul_point(Vector3::new(0.0, -1.0, -1.0));
         portal.base.scale = Vector3::new(0.6, 0.999, 1.0) * t.base.scale.x;
     } else {
-        portal.base.pos = t
-            .base
-            .local_to_world()
-            .mul_point(Vector3::new(0.0, 1.0, -1.0));
+        portal.base.pos = t.base.local_to_world().mul_point(Vector3::new(0.0, 1.0, -1.0));
         portal.base.scale = Vector3::new(0.6, 0.999, 1.0) * t.base.scale.x;
     }
 }
@@ -313,10 +289,7 @@ pub struct Sky {
 
 impl Sky {
     pub fn new(_gl: &Rc<glow::Context>, res: &Resources) -> Sky {
-        Sky {
-            mesh: res.acquire_mesh("quad.obj"),
-            shader: res.acquire_shader("sky"),
-        }
+        Sky { mesh: res.acquire_mesh("quad.obj"), shader: res.acquire_shader("sky") }
     }
 
     // PORT: takes the GL context explicitly for the two glDepthMask calls; C++ uses the

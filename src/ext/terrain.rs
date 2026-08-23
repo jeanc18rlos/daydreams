@@ -180,10 +180,7 @@ pub const TILE_MESH: &str = "meadow_tile.obj";
 pub fn tile_aabb(i: i32, j: i32) -> (Vector3, Vector3) {
     let h = PERIOD * 0.5;
     let (cx, cz) = (i as f32 * PERIOD, j as f32 * PERIOD);
-    (
-        Vector3::new(cx - h, -AMP - 1.0, cz - h),
-        Vector3::new(cx + h, AMP + CREST_H + 1.0, cz + h),
-    )
+    (Vector3::new(cx - h, -AMP - 1.0, cz - h), Vector3::new(cx + h, AMP + CREST_H + 1.0, cz + h))
 }
 
 /// The visible ground: one tile mesh, drawn nine times on the lattice.
@@ -473,7 +470,8 @@ mod tests {
     /// into the ground rather than as an obvious bug. Check the copy.
     #[test]
     fn terrain_constants_match_the_shader() {
-        let src = std::fs::read_to_string(crate::app::assets::path("Shaders/grassblade.vert")).expect("blade shader");
+        let src = std::fs::read_to_string(crate::app::assets::path("Shaders/grassblade.vert"))
+            .expect("blade shader");
         for (name, want) in [
             ("#define T_AMP", AMP),
             ("#define T_CLEAR_R", CLEAR_R),
@@ -496,7 +494,9 @@ mod tests {
             "T_DOOR is {door:?}, Rust says ({DOOR_X}, {DOOR_Z})"
         );
         // The harmonics themselves, so a reshaped hill field cannot drift either.
-        for term in ["0.55 * sin(u) * cos(v)", "0.28 * sin(2.0 * u + 1.7)", "0.17 * sin(3.0 * u - 0.9)"] {
+        for term in
+            ["0.55 * sin(u) * cos(v)", "0.28 * sin(2.0 * u + 1.7)", "0.17 * sin(3.0 * u - 0.9)"]
+        {
             assert!(src.contains(term), "grassblade.vert lost the harmonic {term:?}");
         }
     }
@@ -535,7 +535,12 @@ mod tests {
                 let z = -PERIOD * 0.5 + PERIOD * j as f32 / n as f32;
                 let y = height(x, z);
                 assert!(x >= lo.x && x <= hi.x && z >= lo.z && z <= hi.z);
-                assert!(y > lo.y && y < hi.y, "height {y} at ({x},{z}) outside [{}, {}]", lo.y, hi.y);
+                assert!(
+                    y > lo.y && y < hi.y,
+                    "height {y} at ({x},{z}) outside [{}, {}]",
+                    lo.y,
+                    hi.y
+                );
             }
         }
         // Neighbouring tiles tile the plane: shared edges, no gap.
@@ -574,13 +579,17 @@ mod tests {
             if n % 97 != 0 {
                 continue;
             }
-            let f: Vec<f32> =
-                line[2..].split_whitespace().map(|t| t.parse().unwrap()).collect();
+            let f: Vec<f32> = line[2..].split_whitespace().map(|t| t.parse().unwrap()).collect();
             let (i, j) = (n / (VIS_N + 1), n % (VIS_N + 1));
             let x = -PERIOD * 0.5 + j as f32 * step;
             let z = -PERIOD * 0.5 + i as f32 * step;
             assert!((f[0] - x).abs() < 1e-3 && (f[2] - z).abs() < 1e-3, "grid moved at {n}");
-            assert!((f[1] - height(x, z)).abs() < 2e-3, "stale tile at {n}: {} vs {}", f[1], height(x, z));
+            assert!(
+                (f[1] - height(x, z)).abs() < 2e-3,
+                "stale tile at {n}: {} vs {}",
+                f[1],
+                height(x, z)
+            );
             checked += 1;
         }
         assert!(checked > 20, "only checked {checked} vertices");

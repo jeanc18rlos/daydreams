@@ -36,7 +36,8 @@ impl FrameBuffer {
     // EXT: the three allocations' failures are returned rather than unwrapped; `Engine` makes
     // them fatal, since a portal pass has nowhere to draw without them.
     pub fn new(gl: &Rc<glow::Context>, width: i32, height: i32) -> Result<FrameBuffer, AssetError> {
-        let gl_error = |what: &'static str| move |e: String| AssetError::Gl(format!("{what} failed: {e}"));
+        let gl_error =
+            |what: &'static str| move |e: String| AssetError::Gl(format!("{what} failed: {e}"));
         unsafe {
             // PORT: glGenTextures(1, &texId) -> create_texture(), which returns a Result
             // (was: glGenTextures(1, &texId), FrameBuffer.cpp:7).
@@ -56,16 +57,8 @@ impl FrameBuffer {
                 glow::TEXTURE_WRAP_T,
                 glow::CLAMP_TO_EDGE as i32,
             );
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MIN_FILTER,
-                glow::NEAREST as i32,
-            );
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MAG_FILTER,
-                glow::NEAREST as i32,
-            );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
             // PORT: the unsized internal format GL_RGB is not a legal color-attachment format
             // in core profile -> the sized GL_RGB8. The external format stays GL_RGB. nullptr
             // pixel data -> PixelUnpackData::Slice(None)
@@ -98,16 +91,9 @@ impl FrameBuffer {
             //-------------------------
             // PORT: *EXT renderbuffer entry points / GL_RENDERBUFFER_EXT -> core
             // (was: glGenRenderbuffersEXT(1, &renderBuf), FrameBuffer.cpp:19).
-            let render_buf = gl
-                .create_renderbuffer()
-                .map_err(gl_error("glGenRenderbuffers"))?;
+            let render_buf = gl.create_renderbuffer().map_err(gl_error("glGenRenderbuffers"))?;
             gl.bind_renderbuffer(glow::RENDERBUFFER, Some(render_buf));
-            gl.renderbuffer_storage(
-                glow::RENDERBUFFER,
-                glow::DEPTH_COMPONENT16,
-                width,
-                height,
-            );
+            gl.renderbuffer_storage(glow::RENDERBUFFER, glow::DEPTH_COMPONENT16, width, height);
             //-------------------------
             // PORT: GL_DEPTH_ATTACHMENT_EXT -> GL_DEPTH_ATTACHMENT
             // (was: glFramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT,
@@ -144,14 +130,7 @@ impl FrameBuffer {
             // (was: glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0), FrameBuffer.cpp:33).
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
 
-            Ok(FrameBuffer {
-                tex_id,
-                fbo,
-                render_buf,
-                gl: Rc::clone(gl),
-                width,
-                height,
-            })
+            Ok(FrameBuffer { tex_id, fbo, render_buf, gl: Rc::clone(gl), width, height })
         }
     }
 

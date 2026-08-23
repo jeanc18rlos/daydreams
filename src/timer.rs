@@ -18,9 +18,7 @@ impl Timer {
     const FREQUENCY: i64 = 1_000_000_000;
 
     pub fn new() -> Timer {
-        Timer {
-            start: Instant::now(),
-        }
+        Timer { start: Instant::now() }
     }
 
     // PORT: `int64_t GetTicks()` is a non-const member because it stores into t2;

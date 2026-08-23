@@ -513,8 +513,12 @@ impl Engine {
             self.gl.read_buffer(glow::BACK);
             self.gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
             self.gl.read_pixels(
-                0, 0, width, height,
-                glow::BGR, glow::UNSIGNED_BYTE,
+                0,
+                0,
+                width,
+                height,
+                glow::BGR,
+                glow::UNSIGNED_BYTE,
                 glow::PixelPackData::Slice(Some(&mut px)),
             );
         }
@@ -704,9 +708,7 @@ impl Engine {
         // PORT: the Rc<RefCell<Player>> unsize-coerces to Rc<RefCell<dyn ObjectT>>, which is the
         // equivalent of pushing a shared_ptr<Player> into a vector<shared_ptr<Object>>
         // (was: vObjects.push_back(player), Engine.cpp:143).
-        self.v_objects
-            .borrow_mut()
-            .push(Rc::clone(&self.player) as Rc<RefCell<dyn ObjectT>>);
+        self.v_objects.borrow_mut().push(Rc::clone(&self.player) as Rc<RefCell<dyn ObjectT>>);
 
         // EXT: drop anything being carried (the object vector was just replaced, so a held
         // index would dangle) and cross-fade to this scene's music.
@@ -730,11 +732,7 @@ impl Engine {
                 let p = self.player.borrow();
                 (p.cam_to_world(), p.obj().pos)
             };
-            let ctx = UpdateCtx {
-                input: &input,
-                cam_to_world,
-                player_pos,
-            };
+            let ctx = UpdateCtx { input: &input, cam_to_world, player_pos };
             let v_objects = self.v_objects.borrow();
             for i in 0..v_objects.len() {
                 // PORT: `assert(vObjects[i].get())` (Engine.cpp:149) is unnecessary -- an Rc is
@@ -892,7 +890,11 @@ impl Engine {
     ) {
         // EXT: tell materials whether this is the main view or a portal pass, so expensive
         // shaders can drop detail where it costs the most and shows the least.
-        crate::ext::view::set_detail(if self.rec_level.get() >= GH_MAX_RECURSION { 1.0 } else { 0.0 });
+        crate::ext::view::set_detail(if self.rec_level.get() >= GH_MAX_RECURSION {
+            1.0
+        } else {
+            0.0
+        });
 
         let gl: &glow::Context = &self.gl;
         // EXT: one frustum and one eye per pass, shared by every draw below; and the shared

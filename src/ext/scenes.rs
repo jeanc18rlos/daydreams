@@ -106,7 +106,8 @@ mod tests {
             KeyCode::KeyU, KeyCode::KeyV, KeyCode::KeyW, KeyCode::KeyX, KeyCode::KeyY,
             KeyCode::KeyZ,
         ];
-        let reachable: Vec<usize> = candidates.iter().filter_map(|&k| crate::input::key_index(k)).collect();
+        let reachable: Vec<usize> =
+            candidates.iter().filter_map(|&k| crate::input::key_index(k)).collect();
         for entry in SCENES {
             assert!(
                 reachable.contains(&(entry.key as usize)),

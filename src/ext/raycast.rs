@@ -131,12 +131,7 @@ pub fn raycast(
                 continue;
             }
             if best.is_none_or(|b| t < b.dist) {
-                best = Some(RayHit {
-                    dist: t,
-                    point: origin + dir * t,
-                    normal,
-                    object: i,
-                });
+                best = Some(RayHit { dist: t, point: origin + dir * t, normal, object: i });
             }
         }
     }
@@ -225,13 +220,9 @@ mod tests {
         let c = unit_quad();
         // Push the quad 10 further down -Z; the hit distance should move with it.
         let to_world = Matrix4::trans(Vector3::new(0.0, 0.0, -10.0));
-        let (t, _) = ray_collider(
-            Vector3::new(0.0, 0.0, 5.0),
-            Vector3::new(0.0, 0.0, -1.0),
-            &to_world,
-            &c,
-        )
-        .expect("translated quad should still be hit");
+        let (t, _) =
+            ray_collider(Vector3::new(0.0, 0.0, 5.0), Vector3::new(0.0, 0.0, -1.0), &to_world, &c)
+                .expect("translated quad should still be hit");
         assert!((t - 15.0).abs() < 1e-4, "expected t=15, got {t}");
     }
 

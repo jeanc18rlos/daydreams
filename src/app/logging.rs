@@ -17,7 +17,9 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use log::LevelFilter;
-use simplelog::{ColorChoice, CombinedLogger, ConfigBuilder, SharedLogger, TermLogger, TerminalMode, WriteLogger};
+use simplelog::{
+    ColorChoice, CombinedLogger, ConfigBuilder, SharedLogger, TermLogger, TerminalMode, WriteLogger,
+};
 
 /// Files older than the newest this many are deleted at startup.
 const KEEP: usize = 5;
@@ -116,7 +118,10 @@ fn log_dir() -> Option<PathBuf> {
 /// Create this session's file, then prune the directory down to the newest `KEEP` files.
 fn open_log_file() -> std::io::Result<(PathBuf, File)> {
     let dir = log_dir().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "no home directory to put a log directory in")
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no home directory to put a log directory in",
+        )
     })?;
     std::fs::create_dir_all(&dir)?;
     let secs = std::time::SystemTime::now()
@@ -134,7 +139,12 @@ fn open_log_file() -> std::io::Result<(PathBuf, File)> {
 fn file_name(unix_secs: u64, pid: u32) -> String {
     let (y, m, d) = civil_from_days((unix_secs / 86_400) as i64);
     let s = unix_secs % 86_400;
-    format!("daydreams-{y:04}{m:02}{d:02}-{:02}{:02}{:02}-{pid}.log", s / 3600, (s / 60) % 60, s % 60)
+    format!(
+        "daydreams-{y:04}{m:02}{d:02}-{:02}{:02}{:02}-{pid}.log",
+        s / 3600,
+        (s / 60) % 60,
+        s % 60
+    )
 }
 
 /// Days since 1970-01-01 to a proleptic Gregorian (year, month, day). Howard Hinnant's

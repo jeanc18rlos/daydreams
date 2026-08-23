@@ -120,8 +120,10 @@ impl Object {
     }
 
     pub fn forward(&self) -> Vector3 {
-        -(Matrix4::rot_z(self.euler.z) * Matrix4::rot_x(self.euler.x) * Matrix4::rot_y(self.euler.y))
-            .z_axis()
+        -(Matrix4::rot_z(self.euler.z)
+            * Matrix4::rot_x(self.euler.x)
+            * Matrix4::rot_y(self.euler.y))
+        .z_axis()
     }
 
     pub fn local_to_world(&self) -> Matrix4 {

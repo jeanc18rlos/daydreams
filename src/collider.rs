@@ -19,9 +19,7 @@ impl Collider {
         // uninitialized struct field, so it is seeded with identity here; CreateSorted
         // overwrites it unconditionally anyway.
         // (was: Matrix4 mat; // no initializer, Vector.h:165, Collider.cpp:7)
-        let mut col = Collider {
-            mat: Matrix4::identity(),
-        };
+        let mut col = Collider { mat: Matrix4::identity() };
         let ab = b - a;
         let bc = c - b;
         let ca = a - c;
@@ -111,7 +109,11 @@ mod tests {
 
     /// The 2x2 floor rectangle at y = 0 a mesh `c` line of those three corners produces.
     fn floor() -> Collider {
-        Collider::new(Vector3::new(-1.0, 0.0, -1.0), Vector3::new(1.0, 0.0, -1.0), Vector3::new(1.0, 0.0, 1.0))
+        Collider::new(
+            Vector3::new(-1.0, 0.0, -1.0),
+            Vector3::new(1.0, 0.0, -1.0),
+            Vector3::new(1.0, 0.0, 1.0),
+        )
     }
 
     /// Exactly what Engine::update does per hit sphere (Engine.cpp:166-178): the push in the
@@ -139,7 +141,12 @@ mod tests {
         assert!(approx(m.x_axis(), Vector3::new(1.0, 0.0, 0.0)));
         assert!(approx(m.y_axis(), Vector3::new(0.0, 0.0, 1.0)));
         // Any corner order gives the same rectangle up to the sign of its axes.
-        let m2 = *Collider::new(Vector3::new(1.0, 0.0, 1.0), Vector3::new(-1.0, 0.0, -1.0), Vector3::new(1.0, 0.0, -1.0)).mat();
+        let m2 = *Collider::new(
+            Vector3::new(1.0, 0.0, 1.0),
+            Vector3::new(-1.0, 0.0, -1.0),
+            Vector3::new(1.0, 0.0, -1.0),
+        )
+        .mat();
         assert!(approx(m2.translation(), Vector3::zero()));
         assert!((m2.x_axis().mag() - 1.0).abs() < 1e-5 && (m2.y_axis().mag() - 1.0).abs() < 1e-5);
         assert!(m2.x_axis().y.abs() < 1e-6 && m2.y_axis().y.abs() < 1e-6);

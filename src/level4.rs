@@ -73,8 +73,6 @@ impl Scene for Level4 {
         connect(&portal1, &portal4);
         connect(&portal2, &portal3);
 
-        player
-            .base
-            .set_position(Vector3::new(0.0, GH_PLAYER_HEIGHT - 2.0, 8.0));
+        player.base.set_position(Vector3::new(0.0, GH_PLAYER_HEIGHT - 2.0, 8.0));
     }
 }

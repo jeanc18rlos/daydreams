@@ -136,11 +136,7 @@ impl Gamepads {
             }
         };
 
-        let mut pads = Gamepads {
-            gilrs,
-            prev: ButtonState::default(),
-            connected: 0,
-        };
+        let mut pads = Gamepads { gilrs, prev: ButtonState::default(), connected: 0 };
         // A pad that is already connected when the process starts is NOT visible to
         // `gamepads()` yet: gilrs learns about it from a `Connected` event, and `gamepads()`
         // only yields pads it has already been told about. Fresh out of `Gilrs::new()` that
@@ -184,10 +180,7 @@ impl Gamepads {
         // Draining the queue is what advances gilrs' cached gamepad state.
         let mut topology_changed = false;
         while let Some(gilrs::Event { event, .. }) = gilrs.next_event() {
-            if matches!(
-                event,
-                gilrs::EventType::Connected | gilrs::EventType::Disconnected
-            ) {
+            if matches!(event, gilrs::EventType::Connected | gilrs::EventType::Disconnected) {
                 topology_changed = true;
             }
         }

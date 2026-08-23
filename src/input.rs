@@ -36,7 +36,6 @@ pub struct Input {
     // only this, never the raw keys, so the ported movement code does not have to know which
     // input produced it. The title backdrop swaps in a blank `Input`, where it is the walk.
     pub sprint: crate::ext::sprint::Factors,
-
     //Bindings
     //TODO:
 
@@ -209,7 +208,10 @@ mod tests {
             // The scene keys in the registry's own terms.
             (KeyCode::Digit1, crate::ext::scenes::SCENES[0].key as usize),
             (KeyCode::Quote, crate::ext::scenes::SCENES[16].key as usize),
-            (KeyCode::Semicolon, crate::ext::scenes::SCENES[crate::ext::scenes::INTRO].key as usize),
+            (
+                KeyCode::Semicolon,
+                crate::ext::scenes::SCENES[crate::ext::scenes::INTRO].key as usize,
+            ),
         ];
         for (code, slot) in table {
             assert_eq!(key_index(code), Some(slot), "{code:?}");

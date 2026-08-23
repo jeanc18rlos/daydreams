@@ -46,10 +46,7 @@ impl DoorLink {
     pub fn pair() -> (DoorLink, DoorLink) {
         let x = Rc::new(Cell::new(0.0));
         let y = Rc::new(Cell::new(0.0));
-        (
-            DoorLink { mine: x.clone(), partner: y.clone() },
-            DoorLink { mine: y, partner: x },
-        )
+        (DoorLink { mine: x.clone(), partner: y.clone() }, DoorLink { mine: y, partner: x })
     }
 }
 
@@ -215,9 +212,7 @@ impl Door {
 
     /// World position of the hinge: the left post of the opening, at floor level.
     fn hinge_world(&self) -> Vector3 {
-        self.base
-            .local_to_world()
-            .mul_point(Vector3::new(-HALF_W, 0.0, 0.0))
+        self.base.local_to_world().mul_point(Vector3::new(-HALF_W, 0.0, 0.0))
     }
 
     fn place_leaf(&mut self) {
@@ -225,11 +220,8 @@ impl Door {
         // offset the model itself carries (see Anchor::Around). Getting that offset from the
         // file is what stopped the leaf and the frame landing coplanar and z-fighting -- which
         // showed as stripes across the closed door.
-        let out = self
-            .base
-            .local_to_world()
-            .mul_direction(Vector3::new(0.0, 0.0, 1.0))
-            .normalized_safe();
+        let out =
+            self.base.local_to_world().mul_direction(Vector3::new(0.0, 0.0, 1.0)).normalized_safe();
         self.leaf.pos = self.hinge_world() + out * LEAF_SEAT;
         self.leaf.euler = Vector3::new(0.0, self.base.euler.y + self.angle * self.swing_sign, 0.0);
     }
@@ -336,7 +328,9 @@ mod tests {
     /// through the frame or bumps into thin air beside it.
     #[test]
     fn collider_posts_match_half_w() {
-        let src = std::fs::read_to_string(crate::app::assets::path("Meshes/intro_door_collide.obj")).expect("proxy mesh");
+        let src =
+            std::fs::read_to_string(crate::app::assets::path("Meshes/intro_door_collide.obj"))
+                .expect("proxy mesh");
         let xs: Vec<f32> = src
             .lines()
             .filter(|l| l.starts_with("v "))

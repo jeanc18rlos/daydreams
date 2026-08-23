@@ -61,12 +61,7 @@ impl<'a> SStream<'a> {
     }
 
     fn from_bytes(s: &'a [u8], slash_splits: bool) -> SStream<'a> {
-        SStream {
-            s,
-            pos: 0,
-            fail: false,
-            slash_splits,
-        }
+        SStream { s, pos: 0, fail: false, slash_splits }
     }
 
     fn is_sep(&self, b: u8) -> bool {
@@ -499,7 +494,8 @@ impl Mesh {
         let is_3d_tex = parsed.is_3d_tex;
 
         //Setup GL
-        let gl_error = |e: String| AssetError::Gl(format!("buffer allocation for '{}' failed: {}", fname, e));
+        let gl_error =
+            |e: String| AssetError::Gl(format!("buffer allocation for '{}' failed: {}", fname, e));
         unsafe {
             let vao = gl.create_vertex_array().map_err(gl_error)?;
             gl.bind_vertex_array(Some(vao));

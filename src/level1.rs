@@ -68,8 +68,6 @@ impl Scene for Level1 {
 
         // PORT: `player.SetPosition(..)` is Physical::SetPosition, reached through the `base`
         // field (was: Level1.cpp:39).
-        player
-            .base
-            .set_position(Vector3::new(0.0, GH_PLAYER_HEIGHT, 5.0));
+        player.base.set_position(Vector3::new(0.0, GH_PLAYER_HEIGHT, 5.0));
     }
 }

@@ -115,7 +115,11 @@ impl GrassMesh {
             gl.enable_vertex_attrib_array(1);
             gl.vertex_attrib_pointer_f32(1, 3, glow::FLOAT, false, 0, 0);
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(bufs[2]));
-            gl.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, as_bytes(&patch.idx), glow::STATIC_DRAW);
+            gl.buffer_data_u8_slice(
+                glow::ELEMENT_ARRAY_BUFFER,
+                as_bytes(&patch.idx),
+                glow::STATIC_DRAW,
+            );
             gl.bind_vertex_array(None);
             log::info!(
                 "[grass] {} blades, {} vertices, {} indices in {:.0} ms",
@@ -157,8 +161,10 @@ fn ground_range(cell: &Cell, offset: Vector3) -> (f32, f32) {
     let (mut lo, mut hi) = (f32::MAX, f32::MIN);
     for i in 0..3 {
         for j in 0..3 {
-            let x = offset.x + cell.min[0] - SWAY_PAD + (cell.max[0] - cell.min[0] + 2.0 * SWAY_PAD) * i as f32 / 2.0;
-            let z = offset.z + cell.min[2] - SWAY_PAD + (cell.max[2] - cell.min[2] + 2.0 * SWAY_PAD) * j as f32 / 2.0;
+            let x = offset.x + cell.min[0] - SWAY_PAD
+                + (cell.max[0] - cell.min[0] + 2.0 * SWAY_PAD) * i as f32 / 2.0;
+            let z = offset.z + cell.min[2] - SWAY_PAD
+                + (cell.max[2] - cell.min[2] + 2.0 * SWAY_PAD) * j as f32 / 2.0;
             let h = crate::ext::terrain::height(x, z);
             lo = lo.min(h);
             hi = hi.max(h);
@@ -173,7 +179,12 @@ fn ground_range(cell: &Cell, offset: Vector3) -> (f32, f32) {
 /// Cells are tested in index order and consecutive visible cells are merged, so a fully visible
 /// patch is ONE draw call and a typical view is a dozen or so (one per grid row that the frustum
 /// crosses). `ground` gives each cell's terrain y range at this offset.
-fn visible_runs(cells: &[Cell], ground: &[(f32, f32)], offset: Vector3, frustum: &Frustum) -> Vec<(u32, u32)> {
+fn visible_runs(
+    cells: &[Cell],
+    ground: &[(f32, f32)],
+    offset: Vector3,
+    frustum: &Frustum,
+) -> Vec<(u32, u32)> {
     let mut runs: Vec<(u32, u32)> = Vec::new();
     for (cell, &(g_lo, g_hi)) in cells.iter().zip(ground) {
         if cell.count == 0 {
@@ -369,7 +380,8 @@ mod tests {
     /// the frame popping as its blades wave -- is the kind a screenshot does not show.
     #[test]
     fn sway_bound_matches_the_shader() {
-        let src = std::fs::read_to_string(crate::app::assets::path("Shaders/grassblade.vert")).expect("blade shader");
+        let src = std::fs::read_to_string(crate::app::assets::path("Shaders/grassblade.vert"))
+            .expect("blade shader");
         for term in [
             "(g1 - 0.5) * 1.5 + (g2 - 0.5) * 0.7",
             "* 0.12;",
@@ -394,7 +406,8 @@ mod tests {
         cam.set_position_orientation(Vector3::new(3.0, 1.5, 2.0), -0.1, 0.7);
         let f = Frustum::from_view_proj(&cam.matrix());
         for (first, count) in visible_runs(&patch.cells, &ground, Vector3::zero(), &f) {
-            let start = patch.cells.iter().position(|c| c.first == first).expect("run starts a cell");
+            let start =
+                patch.cells.iter().position(|c| c.first == first).expect("run starts a cell");
             let mut n = 0;
             for c in &patch.cells[start..] {
                 if n == count {

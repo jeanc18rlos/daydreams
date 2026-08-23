@@ -53,11 +53,7 @@ const FENCE_MARGIN: f32 = 1.0;
 /// Where a player who has fallen out of the building is put back: a stride inside the arrival
 /// door, at standing height on the carpet, which is where walking through it lands them. They
 /// face down the hall, away from the door, as they would have on arrival.
-const ARRIVAL: Vector3 = Vector3 {
-    x: FAR.x - 1.0,
-    y: FAR.y + GH_PLAYER_HEIGHT,
-    z: FAR.z,
-};
+const ARRIVAL: Vector3 = Vector3 { x: FAR.x - 1.0, y: FAR.y + GH_PLAYER_HEIGHT, z: FAR.z };
 
 impl Scene for Level16 {
     fn load(
@@ -86,11 +82,7 @@ impl Scene for Level16 {
         // rise a margin above it.
         objs.push(Rc::new(RefCell::new(bounds_box(
             res,
-            Vector3::new(
-                0.5 * (lo.x + hi.x),
-                lo.y - FENCE_MARGIN,
-                0.5 * (lo.z + hi.z),
-            ),
+            Vector3::new(0.5 * (lo.x + hi.x), lo.y - FENCE_MARGIN, 0.5 * (lo.z + hi.z)),
             Vector3::new(
                 0.5 * (hi.x - lo.x) + FENCE_MARGIN,
                 hi.y - lo.y + 2.0 * FENCE_MARGIN,
@@ -167,10 +159,7 @@ mod tests {
         let q = delta_inv.mul_point(p);
         // ...lands the same hair past the carpet door on its -x side, at the same height.
         let expect = FAR + Vector3::new(-0.01, GH_PLAYER_HEIGHT, 0.0);
-        assert!(
-            (q - expect).mag() < 1e-3,
-            "landed at {q:?}, expected {expect:?}"
-        );
+        assert!((q - expect).mag() < 1e-3, "landed at {q:?}, expected {expect:?}");
         // The respawn point is a stride further along the same line: where an arrival would
         // be a moment later, not somewhere else in the building.
         let along = ARRIVAL - expect;

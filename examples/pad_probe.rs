@@ -58,8 +58,10 @@ fn main() {
                     println!("      button {b:?} -> {:?}", pad.button_code(b));
                 }
                 for a in [
-                    gilrs::Axis::LeftStickX, gilrs::Axis::LeftStickY,
-                    gilrs::Axis::RightStickX, gilrs::Axis::RightStickY,
+                    gilrs::Axis::LeftStickX,
+                    gilrs::Axis::LeftStickY,
+                    gilrs::Axis::RightStickX,
+                    gilrs::Axis::RightStickY,
                 ] {
                     println!("      axis   {a:?} -> {:?}", pad.axis_code(a));
                 }
@@ -75,10 +77,7 @@ fn main() {
                 gilrs::Axis::RightStickX,
                 gilrs::Axis::RightStickY,
             ];
-            let vals: Vec<String> = axes
-                .iter()
-                .map(|a| format!("{:+.2}", pad.value(*a)))
-                .collect();
+            let vals: Vec<String> = axes.iter().map(|a| format!("{:+.2}", pad.value(*a))).collect();
             let held: Vec<String> = ALL_BUTTONS
                 .iter()
                 .filter(|b| pad.is_pressed(**b))

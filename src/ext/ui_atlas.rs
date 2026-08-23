@@ -2,7 +2,12 @@
 //! Pixel rectangles into the UI atlases, top-origin (see the tool's UV note).
 
 /// (x, y, w, h) in `Textures/ui_cursors.bmp`.
-pub struct Sprite { pub x: u32, pub y: u32, pub w: u32, pub h: u32 }
+pub struct Sprite {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
 pub const CURSOR_ATLAS: (u32, u32) = (256, 128);
 pub const CURSOR_DOT: Sprite = Sprite { x: 0, y: 0, w: 128, h: 128 };
 pub const CURSOR_OPEN: Sprite = Sprite { x: 130, y: 0, w: 55, h: 41 };
@@ -11,7 +16,15 @@ pub const CURSOR_CLOSED: Sprite = Sprite { x: 187, y: 0, w: 49, h: 42 };
 /// One glyph: atlas rect, then bearing (left, top) and advance, all in atlas pixels
 /// at the baked size `FONT_SIZE`. Scale by (target_px / FONT_SIZE) when drawing.
 #[derive(Clone, Copy)]
-pub struct Glyph { pub x: u32, pub y: u32, pub w: u32, pub h: u32, pub bx: i32, pub by: i32, pub adv: i32 }
+pub struct Glyph {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+    pub bx: i32,
+    pub by: i32,
+    pub adv: i32,
+}
 pub const FONT_ATLAS: (u32, u32) = (1024, 512);
 pub const FONT_SIZE: f32 = 72.0;
 pub const FONT_ASCENT: f32 = 67.0;

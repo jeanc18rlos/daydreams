@@ -32,7 +32,9 @@
 use kira::sound::static_sound::StaticSoundData;
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
 use kira::sound::{FromFileError, PlaybackState};
-use kira::{AudioManager, AudioManagerSettings, DefaultBackend, Decibels, Easing, StartTime, Tween};
+use kira::{
+    AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Easing, StartTime, Tween,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -146,11 +148,7 @@ impl Audio {
         }
         self.current_scene = Some(scene);
 
-        let path = self
-            .music_files
-            .get(&scene)
-            .or(self.fallback_music.as_ref())
-            .cloned();
+        let path = self.music_files.get(&scene).or(self.fallback_music.as_ref()).cloned();
 
         // Same track already playing for the previous scene? Let it run rather than restarting.
         let Some(path) = path else {
@@ -159,7 +157,9 @@ impl Audio {
         };
 
         if let Some(handle) = self.current_music.as_ref() {
-            if handle.state() == PlaybackState::Playing && self.playing_path.as_deref() == Some(path.as_path()) {
+            if handle.state() == PlaybackState::Playing
+                && self.playing_path.as_deref() == Some(path.as_path())
+            {
                 return;
             }
         }
@@ -257,10 +257,7 @@ impl Audio {
 
     /// How many assets were actually found -- used for the startup banner.
     pub fn inventory(&self) -> (usize, usize) {
-        (
-            self.music_files.len() + usize::from(self.fallback_music.is_some()),
-            self.sfx.len(),
-        )
+        (self.music_files.len() + usize::from(self.fallback_music.is_some()), self.sfx.len())
     }
 }
 
@@ -288,11 +285,8 @@ fn index_music(dir: &Path) -> (HashMap<usize, PathBuf>, Option<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return (by_scene, fallback);
     };
-    let mut paths: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_file() && is_audio_ext(p))
-        .collect();
+    let mut paths: Vec<PathBuf> =
+        entries.flatten().map(|e| e.path()).filter(|p| p.is_file() && is_audio_ext(p)).collect();
     paths.sort();
 
     for path in paths {

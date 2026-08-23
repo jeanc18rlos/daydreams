@@ -89,11 +89,8 @@ pub fn title_view() -> (Vector3, f32, f32) {
     /// A few degrees down, so the meadow carries the option list rather than the sky.
     const PITCH: f32 = -0.05;
 
-    let eye = Vector3::new(
-        DOOR_POS.x + SIDE,
-        terrain::DOOR_Y + GH_PLAYER_HEIGHT,
-        DOOR_POS.z + BACK,
-    );
+    let eye =
+        Vector3::new(DOOR_POS.x + SIDE, terrain::DOOR_Y + GH_PLAYER_HEIGHT, DOOR_POS.z + BACK);
     // Aim at the door, then turn further right so it falls out of the centred option list.
     // The yaw convention is the engine's own: `Physical::try_portal` re-aims a warped object
     // with exactly this atan2, and `Player::look` decreases the angle when the view turns right.
@@ -165,9 +162,7 @@ pub fn load_meadow(
 
     // Four strides from the door: inside its opening radius, so the game opens on the door
     // swinging open.
-    player
-        .base
-        .set_position(Vector3::new(0.0, terrain::DOOR_Y + GH_PLAYER_HEIGHT, -2.0));
+    player.base.set_position(Vector3::new(0.0, terrain::DOOR_Y + GH_PLAYER_HEIGHT, -2.0));
 
     MeadowSide { link_there, here }
 }

@@ -165,13 +165,8 @@ const OPT_MUTE: usize = 2;
 const OPT_CONTROLS: usize = 3;
 #[allow(dead_code)] // Completes the row list; only the tests need to name the last one.
 const OPT_BACK: usize = 4;
-const OPTIONS_LABELS: [&str; 5] = [
-    "MOUSE SENSITIVITY",
-    "GAMEPAD SENSITIVITY",
-    "MUTE AUDIO",
-    "CONTROLS",
-    "BACK",
-];
+const OPTIONS_LABELS: [&str; 5] =
+    ["MOUSE SENSITIVITY", "GAMEPAD SENSITIVITY", "MUTE AUDIO", "CONTROLS", "BACK"];
 
 const CONTROLS_ROWS: [&str; 1] = ["BACK"];
 const CREDITS_ROWS: [&str; 1] = ["BACK"];
@@ -182,16 +177,16 @@ const CREDITS_ROWS: [&str; 1] = ["BACK"];
 /// just so this screen could read it would be a large refactor in service of one list. The
 /// cost is that this table is documentation, and goes stale if a binding moves without it.
 const KEYMAP: [(&str, &str, &str); 10] = [
-    ("MOVE",            "W A S D",        "LEFT STICK"),
-    ("SPRINT",          "HOLD SHIFT",     "L3 (STICK CLICK) TOGGLES"),
-    ("LOOK",            "MOUSE",          "RIGHT STICK"),
-    ("GRAB / RELEASE",  "E",              "CROSS / SQUARE / R2"),
-    ("ROTATE HELD",     "HOLD R + MOUSE", "HOLD R1 + RIGHT STICK"),
-    ("PAUSE MENU",      "ESC",            "OPTIONS"),
-    ("MENU: MOVE",      "ARROWS / W A S D", "D-PAD"),
-    ("MENU: CONFIRM",   "ENTER / SPACE",  "CROSS"),
-    ("MUTE",            "M",              "CREATE"),
-    ("FULLSCREEN",      "ALT + ENTER",    "PS BUTTON"),
+    ("MOVE", "W A S D", "LEFT STICK"),
+    ("SPRINT", "HOLD SHIFT", "L3 (STICK CLICK) TOGGLES"),
+    ("LOOK", "MOUSE", "RIGHT STICK"),
+    ("GRAB / RELEASE", "E", "CROSS / SQUARE / R2"),
+    ("ROTATE HELD", "HOLD R + MOUSE", "HOLD R1 + RIGHT STICK"),
+    ("PAUSE MENU", "ESC", "OPTIONS"),
+    ("MENU: MOVE", "ARROWS / W A S D", "D-PAD"),
+    ("MENU: CONFIRM", "ENTER / SPACE", "CROSS"),
+    ("MUTE", "M", "CREATE"),
+    ("FULLSCREEN", "ALT + ENTER", "PS BUTTON"),
 ];
 const CREDITS_TEXT: [&str; 7] = [
     "ORIGINAL ENGINE: CODEPARADE (NONEUCLIDEAN, MIT)",
@@ -225,10 +220,7 @@ impl Menu {
     /// True on the title screen and its sub-screens, where the world behind the menu is the
     /// intro level running as a backdrop rather than a paused game the player is standing in.
     pub fn is_title(&self) -> bool {
-        matches!(
-            self.screen,
-            Screen::Title | Screen::Options | Screen::Controls | Screen::Credits
-        )
+        matches!(self.screen, Screen::Title | Screen::Options | Screen::Controls | Screen::Credits)
     }
 
     pub fn open_pause(&mut self) {
@@ -418,7 +410,14 @@ impl Menu {
         // Footer: navigation hints hug the left edge, the back hint the right edge, so the
         // line reads as two groups instead of one run of words.
         let margin = w * HINT_MARGIN;
-        ui.draw_text("UP/DOWN  SELECT     ENTER  CONFIRM", margin, h * HINT_Y, h * HINT_SIZE, DIM, Align::Left);
+        ui.draw_text(
+            "UP/DOWN  SELECT     ENTER  CONFIRM",
+            margin,
+            h * HINT_Y,
+            h * HINT_SIZE,
+            DIM,
+            Align::Left,
+        );
         ui.draw_text("ESC  BACK", w - margin, h * HINT_Y, h * HINT_SIZE, DIM, Align::Right);
     }
 
@@ -461,7 +460,8 @@ impl Menu {
             let Some((value, can_less, can_more)) = &values[i] else {
                 // A plain row still centres, so CONTROLS and BACK read as buttons rather than
                 // as settings with the value missing.
-                let text = if i == self.sel { format!("{MARKER}{label}") } else { label.to_string() };
+                let text =
+                    if i == self.sel { format!("{MARKER}{label}") } else { label.to_string() };
                 ui.draw_text(&text, w * 0.5, y, size, colour, Align::Center);
                 continue;
             };

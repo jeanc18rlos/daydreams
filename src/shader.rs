@@ -84,9 +84,9 @@ impl Shader {
 
         unsafe {
             //Create the program
-            let prog_id = gl
-                .create_program()
-                .map_err(|e| AssetError::Gl(format!("glCreateProgram failed for '{}': {}", name, e)))?;
+            let prog_id = gl.create_program().map_err(|e| {
+                AssetError::Gl(format!("glCreateProgram failed for '{}': {}", name, e))
+            })?;
             gl.attach_shader(prog_id, vert_id);
             gl.attach_shader(prog_id, frag_id);
 
@@ -173,10 +173,12 @@ impl Shader {
             if ty == glow::VERTEX_SHADER {
                 // EXT: the scan is `scrape_attribs`, split out so it can be tested without a
                 // context; its one failure is reported like a compile error, which is what it is.
-                attribs.extend(scrape_attribs(&str).map_err(|log| AssetError::ShaderCompile {
-                    path: fname.to_path_buf(),
-                    log,
-                })?);
+                attribs.extend(
+                    scrape_attribs(&str).map_err(|log| AssetError::ShaderCompile {
+                        path: fname.to_path_buf(),
+                        log,
+                    })?,
+                );
             }
 
             //Return the shader id
@@ -191,12 +193,10 @@ impl Shader {
         unsafe {
             //GL_TRUE: Matrix4 is row-major, so the upload must transpose.
             if let Some(mvp) = mvp {
-                self.gl
-                    .uniform_matrix_4_f32_slice(self.mvp_id.as_ref(), true, &mvp.m);
+                self.gl.uniform_matrix_4_f32_slice(self.mvp_id.as_ref(), true, &mvp.m);
             }
             if let Some(mv) = mv {
-                self.gl
-                    .uniform_matrix_4_f32_slice(self.mv_id.as_ref(), true, &mv.m);
+                self.gl.uniform_matrix_4_f32_slice(self.mv_id.as_ref(), true, &mv.m);
             }
         }
     }
@@ -287,7 +287,8 @@ mod tests {
 
     #[test]
     fn shipped_texture_shader_declares_three() {
-        let src = std::fs::read_to_string(crate::app::assets::path("Shaders/texture.vert")).unwrap();
+        let src =
+            std::fs::read_to_string(crate::app::assets::path("Shaders/texture.vert")).unwrap();
         assert_eq!(scrape_attribs(&src).unwrap(), ["in_pos", "in_uv", "in_normal"]);
     }
 

@@ -14,35 +14,32 @@
 // part of the port that is a genuine rewrite rather than a transcription: winit owns the window
 // and the event loop, glutin owns the GL context and the swap chain.
 
-mod vector;
-mod game_header;
-mod timer;
-mod sphere;
-mod input;
 mod camera;
 mod collider;
-mod mesh;
-mod shader;
-mod texture;
-mod frame_buffer;
-mod resources;
-mod object;
-mod physical;
-mod player;
-mod portal;
-mod scene;
-mod props;
 mod engine;
+mod frame_buffer;
+mod game_header;
+mod input;
 mod level1;
 mod level2;
 mod level3;
 mod level4;
 mod level5;
 mod level6;
+mod mesh;
+mod object;
+mod physical;
+mod player;
+mod portal;
+mod props;
+mod resources;
+mod scene;
+mod shader;
+mod sphere;
+mod texture;
+mod timer;
+mod vector;
 // EXT: extension scenes (key 8 onward).
-mod level7;
-mod level8;
-mod level9;
 mod level10;
 mod level11;
 mod level12;
@@ -50,6 +47,9 @@ mod level13;
 mod level14;
 mod level15;
 mod level16;
+mod level7;
+mod level8;
+mod level9;
 
 // EXT: new work beyond the port -- grab mechanic, audio, gamepad.
 mod ext;
@@ -117,13 +117,15 @@ fn start_fullscreen(args: &Args) -> bool {
 // plus 8 stencil), so the request is for 24 and the picker takes whatever is largest.
 fn gl_config_picker(configs: Box<dyn Iterator<Item = Config> + '_>) -> Config {
     configs
-        .reduce(|accum, config| {
-            if config.depth_size() > accum.depth_size() {
-                config
-            } else {
-                accum
-            }
-        })
+        .reduce(
+            |accum, config| {
+                if config.depth_size() > accum.depth_size() {
+                    config
+                } else {
+                    accum
+                }
+            },
+        )
         .expect("no suitable GL config found")
 }
 
@@ -272,17 +274,13 @@ impl App {
             return;
         };
         if self.is_fullscreen {
-            state
-                .window
-                .set_fullscreen(Some(Fullscreen::Borderless(None)));
+            state.window.set_fullscreen(Some(Fullscreen::Borderless(None)));
         } else {
             state.window.set_fullscreen(None);
             let _ = state
                 .window
                 .request_inner_size(LogicalSize::new(GH_SCREEN_WIDTH, GH_SCREEN_HEIGHT));
-            state
-                .window
-                .set_outer_position(LogicalPosition::new(GH_SCREEN_X, GH_SCREEN_Y));
+            state.window.set_outer_position(LogicalPosition::new(GH_SCREEN_X, GH_SCREEN_Y));
         }
     }
 }
@@ -298,10 +296,9 @@ impl ApplicationHandler for App {
                         self.template.clone(),
                         gl_config_picker,
                     ) {
-                        Ok((window, gl_config)) => (
-                            window.expect("DisplayBuilder returned no window"),
-                            gl_config,
-                        ),
+                        Ok((window, gl_config)) => {
+                            (window.expect("DisplayBuilder returned no window"), gl_config)
+                        }
                         Err(err) => {
                             log::error!("failed to create a window: {err}");
                             event_loop.exit();
@@ -362,10 +359,9 @@ impl ApplicationHandler for App {
                 log::warn!("could not disable vsync: {err:?}");
             }
             log::info!("[dev] vsync off");
-        } else if let Err(err) = gl_surface.set_swap_interval(
-            &gl_context,
-            SwapInterval::Wait(NonZeroU32::new(1).unwrap()),
-        ) {
+        } else if let Err(err) = gl_surface
+            .set_swap_interval(&gl_context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()))
+        {
             log::warn!("could not enable vsync: {err:?}");
         }
 
@@ -553,10 +549,7 @@ impl ApplicationHandler for App {
     ) {
         if let DeviceEvent::MouseMotion { delta } = event {
             if let Some(engine) = self.engine.as_ref() {
-                engine
-                    .input()
-                    .borrow_mut()
-                    .add_mouse_motion(delta.0 as f32, delta.1 as f32);
+                engine.input().borrow_mut().add_mouse_motion(delta.0 as f32, delta.1 as f32);
             }
         }
     }
@@ -608,11 +601,9 @@ impl ApplicationHandler for App {
             self.toggle_fullscreen();
         }
 
-        let (Some(state), Some(gl_context), Some(engine)) = (
-            self.state.as_ref(),
-            self.gl_context.as_ref(),
-            self.engine.as_ref(),
-        ) else {
+        let (Some(state), Some(gl_context), Some(engine)) =
+            (self.state.as_ref(), self.gl_context.as_ref(), self.engine.as_ref())
+        else {
             return;
         };
 

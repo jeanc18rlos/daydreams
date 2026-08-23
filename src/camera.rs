@@ -139,13 +139,27 @@ mod tests {
 
     #[test]
     fn inverse_projection_is_the_full_inverse_of_projection() {
-        for (w, h, n, f) in [(1280, 720, 0.001, 100.0), (256, 256, 0.1, 10.0), (2560, 1440, 0.5, 1000.0), (640, 480, 1.0, 2.0)] {
+        for (w, h, n, f) in [
+            (1280, 720, 0.001, 100.0),
+            (256, 256, 0.1, 10.0),
+            (2560, 1440, 0.5, 1000.0),
+            (640, 480, 1.0, 2.0),
+        ] {
             let mut cam = Camera::new();
             cam.set_size(w, h, n, f);
             let closed = cam.inverse_projection();
             let brute = cam.projection.inverse();
             // The closed form fills five entries; everything else must be zero in both.
-            assert!(approx_m(&closed, &brute, 1e-4 * brute.m.iter().fold(1.0f32, |a, &b| a.max(b.abs()))), "{w}x{h} n={n} f={f}\n{:?}\n{:?}", closed.m, brute.m);
+            assert!(
+                approx_m(
+                    &closed,
+                    &brute,
+                    1e-4 * brute.m.iter().fold(1.0f32, |a, &b| a.max(b.abs()))
+                ),
+                "{w}x{h} n={n} f={f}\n{:?}\n{:?}",
+                closed.m,
+                brute.m
+            );
             assert!(approx_m(&(cam.projection * closed), &Matrix4::identity(), 1e-4));
             assert!(approx_m(&(closed * cam.projection), &Matrix4::identity(), 1e-4));
         }

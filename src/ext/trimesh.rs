@@ -73,11 +73,8 @@ impl TriMeshCollider {
             .chunks_exact(3)
             .map(|t| [t[0], t[1], t[2]])
             .filter(|t| {
-                let (a, b, c) = (
-                    vertices[t[0] as usize],
-                    vertices[t[1] as usize],
-                    vertices[t[2] as usize],
-                );
+                let (a, b, c) =
+                    (vertices[t[0] as usize], vertices[t[1] as usize], vertices[t[2] as usize]);
                 (b - a).cross(c - a).length_squared() > DEGENERATE_AREA_SQ
             })
             .collect();
@@ -111,11 +108,8 @@ impl TriMeshCollider {
             }
             // Direction to push: away from the closest point, or along the face normal if the
             // centre sits exactly on the triangle and there is no "away" to speak of.
-            let dir = if dist > 1e-6 {
-                away / dist
-            } else {
-                from_p(tri.normal().unwrap_or(PVec::Y))
-            };
+            let dir =
+                if dist > 1e-6 { away / dist } else { from_p(tri.normal().unwrap_or(PVec::Y)) };
             best = Some((depth, dir * depth));
         }
         best.map(|(_, push)| push)
@@ -126,9 +120,7 @@ impl TriMeshCollider {
     /// juggling. `dir` must be normalised.
     pub fn cast_ray(&self, origin: Vector3, dir: Vector3, max_dist: f32) -> Option<(f32, Vector3)> {
         let ray = Ray::new(to_p(origin), to_p(dir));
-        let hit = self
-            .mesh
-            .cast_local_ray_and_get_normal(&ray, max_dist, true)?;
+        let hit = self.mesh.cast_local_ray_and_get_normal(&ray, max_dist, true)?;
         if hit.time_of_impact <= 1e-5 {
             return None;
         }
@@ -176,9 +168,7 @@ mod tests {
     #[test]
     fn sphere_inside_box_is_pushed_off_the_nearest_face() {
         let c = cube();
-        let push = c
-            .push_sphere(Vector3::new(0.9, 0.0, 0.0), 0.2)
-            .expect("touching +x face");
+        let push = c.push_sphere(Vector3::new(0.9, 0.0, 0.0), 0.2).expect("touching +x face");
         assert!(
             (push.x + 0.1).abs() < 1e-5 && push.y.abs() < 1e-6 && push.z.abs() < 1e-6,
             "{push:?}"
@@ -194,100 +184,60 @@ mod tests {
     fn deepest_penetration_wins() {
         let c = cube();
         // 0.05 into the +x face and 0.15 into the +y face: the y push comes first, alone.
-        let push = c
-            .push_sphere(Vector3::new(0.85, 0.95, 0.0), 0.2)
-            .expect("corner contact");
-        assert!(
-            (push.y + 0.15).abs() < 1e-5 && push.x.abs() < 1e-6,
-            "{push:?}"
-        );
+        let push = c.push_sphere(Vector3::new(0.85, 0.95, 0.0), 0.2).expect("corner contact");
+        assert!((push.y + 0.15).abs() < 1e-5 && push.x.abs() < 1e-6, "{push:?}");
         // A second round then clears the x face, the way the engine loops.
-        let push2 = c
-            .push_sphere(Vector3::new(0.85, 0.95, 0.0) + push, 0.2)
-            .expect("x face next");
-        assert!(
-            (push2.x + 0.05).abs() < 1e-5 && push2.y.abs() < 1e-6,
-            "{push2:?}"
-        );
+        let push2 = c.push_sphere(Vector3::new(0.85, 0.95, 0.0) + push, 0.2).expect("x face next");
+        assert!((push2.x + 0.05).abs() < 1e-5 && push2.y.abs() < 1e-6, "{push2:?}");
     }
 
     #[test]
     fn floor_contact_pushes_up() {
         // The cube's top face, seen from above, is a floor: a sphere resting 0.1 into it.
         let c = cube();
-        let push = c
-            .push_sphere(Vector3::new(0.0, 1.1, 0.0), 0.2)
-            .expect("standing on the top face");
+        let push =
+            c.push_sphere(Vector3::new(0.0, 1.1, 0.0), 0.2).expect("standing on the top face");
         assert!(push.y > 0.0 && (push.y - 0.1).abs() < 1e-5, "{push:?}");
-        assert!(
-            push.normalized().y > 0.7,
-            "Player::on_collide would not count this as ground"
-        );
+        assert!(push.normalized().y > 0.7, "Player::on_collide would not count this as ground");
     }
 
     #[test]
     fn world_transform_is_baked_in() {
-        let p = [
-            [-1.0, 0.0, -1.0],
-            [1.0, 0.0, -1.0],
-            [1.0, 0.0, 1.0],
-            [-1.0, 0.0, 1.0],
-        ];
+        let p = [[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, 1.0], [-1.0, 0.0, 1.0]];
         let idx = [0u32, 2, 1, 0, 3, 2];
         let floor = TriMeshCollider::new(&p, &idx, &Matrix4::trans(Vector3::new(1000.0, 5.0, 0.0)));
-        let push = floor
-            .push_sphere(Vector3::new(1000.2, 5.1, 0.1), 0.2)
-            .expect("on the moved floor");
+        let push =
+            floor.push_sphere(Vector3::new(1000.2, 5.1, 0.1), 0.2).expect("on the moved floor");
         assert!((push.y - 0.1).abs() < 1e-5, "{push:?}");
-        assert!(floor
-            .push_sphere(Vector3::new(0.0, 5.1, 0.0), 0.2)
-            .is_none());
+        assert!(floor.push_sphere(Vector3::new(0.0, 5.1, 0.0), 0.2).is_none());
     }
 
     #[test]
     fn ray_hits_the_expected_face_with_a_facing_normal() {
         let c = cube();
         let (t, n) = c
-            .cast_ray(
-                Vector3::new(5.0, 0.0, 0.0),
-                Vector3::new(-1.0, 0.0, 0.0),
-                100.0,
-            )
+            .cast_ray(Vector3::new(5.0, 0.0, 0.0), Vector3::new(-1.0, 0.0, 0.0), 100.0)
             .expect("ray toward the cube");
         assert!((t - 4.0).abs() < 1e-5, "t = {t}");
         assert!(n.x > 0.99, "normal should face the ray, got {n:?}");
         // From inside, the first face along +y is the top at distance 1, and the normal is
         // flipped to face back down the ray.
-        let (t, n) = c
-            .cast_ray(Vector3::zero(), Vector3::new(0.0, 1.0, 0.0), 100.0)
-            .expect("inside");
+        let (t, n) =
+            c.cast_ray(Vector3::zero(), Vector3::new(0.0, 1.0, 0.0), 100.0).expect("inside");
         assert!((t - 1.0).abs() < 1e-5 && n.y < -0.99, "t = {t} n = {n:?}");
         // Range-limited.
         assert!(c
-            .cast_ray(
-                Vector3::new(5.0, 0.0, 0.0),
-                Vector3::new(-1.0, 0.0, 0.0),
-                3.0
-            )
+            .cast_ray(Vector3::new(5.0, 0.0, 0.0), Vector3::new(-1.0, 0.0, 0.0), 3.0)
             .is_none());
         // Pointing away.
         assert!(c
-            .cast_ray(
-                Vector3::new(5.0, 0.0, 0.0),
-                Vector3::new(1.0, 0.0, 0.0),
-                100.0
-            )
+            .cast_ray(Vector3::new(5.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 0.0), 100.0)
             .is_none());
     }
 
     #[test]
     fn degenerate_triangles_are_dropped() {
-        let p = [
-            [0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [2.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-        ];
+        let p = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
         // One collinear (zero-area) triangle and one real one.
         let idx = [0u32, 1, 2, 0, 1, 3];
         let m = TriMeshCollider::new(&p, &idx, &Matrix4::identity());

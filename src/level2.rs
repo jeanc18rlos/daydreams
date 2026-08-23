@@ -119,8 +119,6 @@ impl Scene for Level2 {
             connect_warps(&portal3, Side::Front, &portal1, Side::Back);
         }
 
-        player
-            .base
-            .set_position(Vector3::new(3.0, GH_PLAYER_HEIGHT, 3.0));
+        player.base.set_position(Vector3::new(3.0, GH_PLAYER_HEIGHT, 3.0));
     }
 }

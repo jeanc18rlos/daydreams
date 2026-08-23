@@ -29,7 +29,9 @@ fn main() {
             let pbr = m.pbr_metallic_roughness();
             println!(
                 "  prim {:?} mat={:?} pos={np} nrm={nn} tan={nt} uv={nuv} idx={ni} mode={:?}",
-                mesh.name(), m.name(), prim.mode()
+                mesh.name(),
+                m.name(),
+                prim.mode()
             );
             // Extent in the primitive's own space, so a scene can be planned from the printout.
             if let Some(it) = r.read_positions() {
@@ -41,8 +43,10 @@ fn main() {
                         hi[k] = hi[k].max(p[k]);
                     }
                 }
-                println!("    bbox x[{:.2}, {:.2}] y[{:.2}, {:.2}] z[{:.2}, {:.2}]",
-                    lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]);
+                println!(
+                    "    bbox x[{:.2}, {:.2}] y[{:.2}, {:.2}] z[{:.2}, {:.2}]",
+                    lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]
+                );
             }
             println!(
                 "    base={:?} bc_tex={:?} metal={} rough={} mr_tex={:?} normal_tex={:?}(scale {:?}) occl_tex={:?}(str {:?}) double={} alpha={:?}",
@@ -73,8 +77,15 @@ fn main() {
     }
     for node in doc.nodes() {
         let t = node.transform().decomposed();
-        println!("  node {} {:?} mesh={:?} T={:?} R={:?} S={:?} children={:?}",
-            node.index(), node.name(), node.mesh().map(|m| m.index()),
-            t.0, t.1, t.2, node.children().map(|c| c.index()).collect::<Vec<_>>());
+        println!(
+            "  node {} {:?} mesh={:?} T={:?} R={:?} S={:?} children={:?}",
+            node.index(),
+            node.name(),
+            node.mesh().map(|m| m.index()),
+            t.0,
+            t.1,
+            t.2,
+            node.children().map(|c| c.index()).collect::<Vec<_>>()
+        );
     }
 }

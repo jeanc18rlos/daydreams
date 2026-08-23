@@ -197,7 +197,10 @@ mod tests {
         // B's frame, so 2.004 out along B's forward (-x in world) from B's centre.
         let depth = 1.0 + 2.0 * (2.0 * GH_NEAR_MIN);
         assert!(approx(p.base.pos, Vector3::new(10.0 - 2.0 * depth, 0.0, 0.0)), "{:?}", p.base.pos);
-        assert!(approx(b.base.world_to_local().mul_point(p.base.pos), Vector3::new(0.0, 0.0, -depth)));
+        assert!(approx(
+            b.base.world_to_local().mul_point(p.base.pos),
+            Vector3::new(0.0, 0.0, -depth)
+        ));
         // prev_pos is reset to the new position so the next step cannot re-cross.
         assert!(approx(p.prev_pos, p.base.pos));
         // Velocity turns with the frame and doubles with it: -z at speed s becomes -x at 2s.
@@ -231,7 +234,8 @@ mod tests {
     fn a_step_that_does_not_cross_changes_nothing() {
         let (a, _) = portals();
         let mut p = stepped(Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, 0.0, 0.5));
-        let (pos, prev, vel, ey, ps) = (p.base.pos, p.prev_pos, p.velocity, p.base.euler.y, p.base.p_scale);
+        let (pos, prev, vel, ey, ps) =
+            (p.base.pos, p.prev_pos, p.velocity, p.base.euler.y, p.base.p_scale);
         assert!(!p.try_portal(&a));
         assert!(approx(p.base.pos, pos) && approx(p.prev_pos, prev) && approx(p.velocity, vel));
         assert!(p.base.euler.y == ey && p.base.p_scale == ps);

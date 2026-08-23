@@ -64,17 +64,9 @@ pub const FLOOR_Y: f32 = -0.12;
 /// the end wall: enough to walk round behind the door, not enough to waste the hall. Verified
 /// against a screenshot from the spot; the tests below measure the faces from the model
 /// itself, so a nudge can never put a frame post inside a wall unnoticed.
-pub const DOOR_SPOT: Vector3 = Vector3 {
-    x: 5.6,
-    y: FLOOR_Y,
-    z: 5.0,
-};
+pub const DOOR_SPOT: Vector3 = Vector3 { x: 5.6, y: FLOOR_Y, z: 5.0 };
 /// The door faces +x in model space (toward the east wall).
-pub const DOOR_FACING: Vector3 = Vector3 {
-    x: 1.0,
-    y: 0.0,
-    z: 0.0,
-};
+pub const DOOR_FACING: Vector3 = Vector3 { x: 1.0, y: 0.0, z: 0.0 };
 
 /// How far under the carpet a player may be before they count as having fallen out of the
 /// building (see the module docs). Half a metre: more than any skirting or stray chair leg
@@ -102,11 +94,7 @@ fn load_spec() -> Load<'static> {
 /// fence is what keeps them from getting there.
 pub fn fell_out(pos: Vector3, carpet_y: f32, (lo, hi): (Vector3, Vector3)) -> bool {
     let feet = pos.y - crate::game_header::GH_PLAYER_HEIGHT;
-    feet < carpet_y - FALL_DEPTH
-        && pos.x >= lo.x
-        && pos.x <= hi.x
-        && pos.z >= lo.z
-        && pos.z <= hi.z
+    feet < carpet_y - FALL_DEPTH && pos.x >= lo.x && pos.x <= hi.x && pos.z >= lo.z && pos.z <= hi.z
 }
 
 pub struct Backrooms {
@@ -131,12 +119,7 @@ impl Backrooms {
         let (pos, idx) = model.triangles(PART);
         let collider = Rc::new(TriMeshCollider::new(pos, idx, &base.local_to_world()));
 
-        Backrooms {
-            base,
-            model,
-            shader: res.acquire_shader("gltfunlit"),
-            collider,
-        }
+        Backrooms { base, model, shader: res.acquire_shader("gltfunlit"), collider }
     }
 
     /// World height of the carpet: the model's floor level, where the door's foot lands.
@@ -148,10 +131,7 @@ impl Backrooms {
     pub fn world_bounds(&self) -> (Vector3, Vector3) {
         let b = self.model.bounds(PART);
         let p = self.base.pos;
-        (
-            Vector3::new(b[0], b[2], b[4]) + p,
-            Vector3::new(b[1], b[3], b[5]) + p,
-        )
+        (Vector3::new(b[0], b[2], b[4]) + p, Vector3::new(b[1], b[3], b[5]) + p)
     }
 }
 
@@ -220,15 +200,13 @@ impl GroundCap {
         let (lo, hi) = rooms.world_bounds();
         let mut base = Object::new();
         base.mesh = Some(res.acquire_mesh("double_quad.obj"));
-        base.pos = Vector3::new(0.5 * (lo.x + hi.x), rooms.carpet_y() - CAP_DROP, 0.5 * (lo.z + hi.z));
+        base.pos =
+            Vector3::new(0.5 * (lo.x + hi.x), rooms.carpet_y() - CAP_DROP, 0.5 * (lo.z + hi.z));
         // The quad is in its own xy plane; a quarter turn about x lays it flat, and then its
         // local y is world z.
         base.euler.x = -std::f32::consts::FRAC_PI_2;
-        base.scale = Vector3::new(
-            0.5 * (hi.x - lo.x) + CAP_MARGIN,
-            0.5 * (hi.z - lo.z) + CAP_MARGIN,
-            1.0,
-        );
+        base.scale =
+            Vector3::new(0.5 * (hi.x - lo.x) + CAP_MARGIN, 0.5 * (hi.z - lo.z) + CAP_MARGIN, 1.0);
         GroundCap {
             base,
             shader: res.acquire_shader("gltfunlit"),
@@ -303,18 +281,29 @@ mod tests {
         for t in idx.chunks_exact(3) {
             let (a, b, c) = (v(t[0]), v(t[1]), v(t[2]));
             let n = (b - a).cross(c - a).normalized_safe();
-            let lo = Vector3::new(a.x.min(b.x).min(c.x), a.y.min(b.y).min(c.y), a.z.min(b.z).min(c.z));
-            let hi = Vector3::new(a.x.max(b.x).max(c.x), a.y.max(b.y).max(c.y), a.z.max(b.z).max(c.z));
+            let lo =
+                Vector3::new(a.x.min(b.x).min(c.x), a.y.min(b.y).min(c.y), a.z.min(b.z).min(c.z));
+            let hi =
+                Vector3::new(a.x.max(b.x).max(c.x), a.y.max(b.y).max(c.y), a.z.max(b.z).max(c.z));
             let centre = (a + b + c) / 3.0;
             let spans_mid = lo.y <= mid_y && hi.y >= mid_y;
-            if n.z.abs() > 0.9 && spans_mid && lo.x <= DOOR_SPOT.x + reach && hi.x >= DOOR_SPOT.x - reach {
+            if n.z.abs() > 0.9
+                && spans_mid
+                && lo.x <= DOOR_SPOT.x + reach
+                && hi.x >= DOOR_SPOT.x - reach
+            {
                 if centre.z < DOOR_SPOT.z {
                     south = south.max(hi.z);
                 } else {
                     north = north.min(lo.z);
                 }
             }
-            if n.x.abs() > 0.9 && spans_mid && lo.z <= DOOR_SPOT.z + reach && hi.z >= DOOR_SPOT.z - reach && centre.x > DOOR_SPOT.x {
+            if n.x.abs() > 0.9
+                && spans_mid
+                && lo.z <= DOOR_SPOT.z + reach
+                && hi.z >= DOOR_SPOT.z - reach
+                && centre.x > DOOR_SPOT.x
+            {
                 east = east.min(lo.x);
             }
             // The carpet: the highest upward face under the spot that is below head height.

@@ -28,8 +28,6 @@ impl Scene for Level6 {
         // (was: Level6.cpp:7).
         floorplan_add_portals(&floorplan1.borrow(), res, portals);
 
-        player
-            .base
-            .set_position(Vector3::new(2.0, GH_PLAYER_HEIGHT, 2.0));
+        player.base.set_position(Vector3::new(2.0, GH_PLAYER_HEIGHT, 2.0));
     }
 }

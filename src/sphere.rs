@@ -15,16 +15,10 @@ impl Sphere {
     // PORT: `Sphere(float r=1.0f)` (default argument) and `Sphere(const Vector3&, float)`
     // become two named ctors (was: Sphere(float r=1.0f) : center(0.0f), radius(r), Sphere.h:7-8).
     pub fn new(r: f32) -> Sphere {
-        Sphere {
-            center: Vector3::splat(0.0),
-            radius: r,
-        }
+        Sphere { center: Vector3::splat(0.0), radius: r }
     }
     pub fn new_at(pos: Vector3, r: f32) -> Sphere {
-        Sphere {
-            center: pos,
-            radius: r,
-        }
+        Sphere { center: pos, radius: r }
     }
 
     //Transformations to and frpom sphere coordinates

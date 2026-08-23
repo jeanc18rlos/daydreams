@@ -183,10 +183,7 @@ impl Scene for Level12 {
             let dist = d.mag();
             let (solved, was) = if let Ok(c) = cube.try_borrow() {
                 let already = c.base().p_scale > 0.5;
-                (
-                    if already { dist < SOLVE_EXIT } else { dist < SOLVE_ENTER },
-                    already,
-                )
+                (if already { dist < SOLVE_EXIT } else { dist < SOLVE_ENTER }, already)
             } else {
                 (false, false)
             };
@@ -195,7 +192,9 @@ impl Scene for Level12 {
             }
             if solved && !was && !announced {
                 announced = true;
-                log::debug!("[cube] on the spot -- aim at the cube (crosshair turns gold) and press E");
+                log::debug!(
+                    "[cube] on the spot -- aim at the cube (crosshair turns gold) and press E"
+                );
             }
         });
         objs.push(Rc::new(RefCell::new(logic)) as Rc<RefCell<dyn ObjectT>>);
@@ -215,17 +214,16 @@ mod tests {
     #[test]
     fn scene_fits_inside_the_room() {
         let lo = Vector3::new(ROOM_CENTRE.x - ROOM_HALF.x, 0.0, ROOM_CENTRE.z - ROOM_HALF.z);
-        let hi = Vector3::new(
-            ROOM_CENTRE.x + ROOM_HALF.x,
-            ROOM_HALF.y,
-            ROOM_CENTRE.z + ROOM_HALF.z,
-        );
+        let hi =
+            Vector3::new(ROOM_CENTRE.x + ROOM_HALF.x, ROOM_HALF.y, ROOM_CENTRE.z + ROOM_HALF.z);
         let spawn = Vector3::new(5.0, GH_PLAYER_HEIGHT, 12.0);
         for (name, p) in [("spawn", spawn), ("station", STATION), ("cube", CUBE_POS)] {
             assert!(
                 p.x > lo.x && p.x < hi.x && p.z > lo.z && p.z < hi.z && p.y >= 0.0 && p.y < hi.y,
                 "{name} at ({}, {}, {}) is outside the room",
-                p.x, p.y, p.z
+                p.x,
+                p.y,
+                p.z
             );
         }
     }

@@ -131,11 +131,8 @@ fn scatter(rng: &mut Pcg32) -> Vec<[f32; 5]> {
             continue;
         }
         // Keep everything close in; thin out with distance so the far half costs little.
-        let keep = if r <= DENSE_R {
-            1.0
-        } else {
-            (1.0 - (r - DENSE_R) / (half - DENSE_R)).max(0.06)
-        };
+        let keep =
+            if r <= DENSE_R { 1.0 } else { (1.0 - (r - DENSE_R) / (half - DENSE_R)).max(0.06) };
         if rng.unit() <= keep {
             out.push([x, z, rng.unit(), rng.unit(), rng.unit()]);
         }

@@ -310,7 +310,10 @@ mod tests {
         input.pad_move_f = 0.0;
         assert!(!level(&mut s, &input, false), "stick centred: run over");
         input.pad_move_f = 1.0;
-        assert!(!level(&mut s, &input, false), "pushing again walks; the toggle does not come back");
+        assert!(
+            !level(&mut s, &input, false),
+            "pushing again walks; the toggle does not come back"
+        );
     }
 
     #[test]

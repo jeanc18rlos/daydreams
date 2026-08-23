@@ -19,7 +19,9 @@
 //! is Roboto Condensed Bold baked at 72 px, vendored under `assets/fonts/` so the atlas is
 //! reproducible on any machine; `draw_text` scales it to any size.
 
-use crate::ext::ui_atlas::{Glyph, Sprite, CURSOR_ATLAS, FONT_ASCENT, FONT_ATLAS, FONT_SIZE, GLYPHS};
+use crate::ext::ui_atlas::{
+    Glyph, Sprite, CURSOR_ATLAS, FONT_ASCENT, FONT_ATLAS, FONT_SIZE, GLYPHS,
+};
 use crate::mesh::Mesh;
 use crate::resources::Resources;
 use crate::shader::Shader;
@@ -120,12 +122,8 @@ impl Ui {
     /// Cursor-atlas sprite, centred on (cx, cy), scaled to `h` pixels tall (aspect preserved).
     pub fn draw_cursor(&self, s: &Sprite, cx: f32, cy: f32, h: f32, color: Color) {
         let (aw, ah) = (CURSOR_ATLAS.0 as f32, CURSOR_ATLAS.1 as f32);
-        let uv = [
-            s.x as f32 / aw,
-            s.y as f32 / ah,
-            (s.x + s.w) as f32 / aw,
-            (s.y + s.h) as f32 / ah,
-        ];
+        let uv =
+            [s.x as f32 / aw, s.y as f32 / ah, (s.x + s.w) as f32 / aw, (s.y + s.h) as f32 / ah];
         let w = h * s.w as f32 / s.h as f32;
         self.draw_quad(&self.cursors, cx - w * 0.5, cy - h * 0.5, w, h, uv, color);
     }
@@ -142,9 +140,7 @@ impl Ui {
     /// Width in pixels of `text` drawn at `size_px`.
     pub fn measure(&self, text: &str, size_px: f32) -> f32 {
         let k = size_px / FONT_SIZE;
-        text.chars()
-            .map(|c| Self::glyph(c).map_or(0.0, |g| g.adv as f32 * k))
-            .sum()
+        text.chars().map(|c| Self::glyph(c).map_or(0.0, |g| g.adv as f32 * k)).sum()
     }
 
     /// Draw `text` with its baseline-top at `y` (i.e. `y` is the top of the line box).

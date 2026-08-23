@@ -30,9 +30,7 @@ pub const WATCH_HALF_ANGLE: f32 = 1.05; // ~60 degrees
 pub fn in_view_cone(cam_to_world: &Matrix4, point: Vector3, half_angle: f32) -> bool {
     let eye = cam_to_world.translation();
     // The camera looks down its own -Z (Object.cpp:33-35).
-    let forward = cam_to_world
-        .mul_direction(Vector3::new(0.0, 0.0, -1.0))
-        .normalized_safe();
+    let forward = cam_to_world.mul_direction(Vector3::new(0.0, 0.0, -1.0)).normalized_safe();
     let to_point = point - eye;
     let dist = to_point.mag();
     if dist < 1e-4 {

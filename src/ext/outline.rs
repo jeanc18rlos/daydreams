@@ -73,8 +73,16 @@ impl Outline {
             gl.bind_texture(glow::TEXTURE_2D, Some(tex));
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
             gl.tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
@@ -148,10 +156,8 @@ impl Outline {
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(tex));
             self.edge_shader.use_program();
-            self.edge_shader.set_vec4(
-                "params",
-                [1.0 / width as f32, 1.0 / height as f32, WIDTH_PX, 0.0],
-            );
+            self.edge_shader
+                .set_vec4("params", [1.0 / width as f32, 1.0 / height as f32, WIDTH_PX, 0.0]);
             self.quad.draw();
 
             // ── Restore the ported renderer's state (Engine.cpp:420-425) ──────────────

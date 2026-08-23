@@ -72,7 +72,13 @@ impl Scene for Level14 {
         // Props on the plateau, at ground height plus a little so they settle.
         let y = PLATEAU_Y + 0.6;
         objs.push(grabbable(res, "cube.obj", "checker_gray.bmp", Vector3::new(2.5, y, -3.0), 0.45));
-        objs.push(grabbable(res, "suzanne.obj", "gold.bmp", Vector3::new(-2.5, y + 0.3, -3.5), 0.5));
+        objs.push(grabbable(
+            res,
+            "suzanne.obj",
+            "gold.bmp",
+            Vector3::new(-2.5, y + 0.3, -3.5),
+            0.5,
+        ));
         objs.push(grabbable(res, "teapot.obj", "white.bmp", Vector3::new(0.0, y, -5.0), 0.25));
 
         // Walls at the edge of the world, well below the hills' line of sight.
@@ -82,9 +88,6 @@ impl Scene for Level14 {
             Vector3::new(HALF, 60.0, HALF),
         ))) as Rc<RefCell<dyn ObjectT>>);
 
-        player
-            .base
-            .set_position(Vector3::new(0.0, PLATEAU_Y + GH_PLAYER_HEIGHT + 0.2, 0.0));
+        player.base.set_position(Vector3::new(0.0, PLATEAU_Y + GH_PLAYER_HEIGHT + 0.2, 0.0));
     }
 }
-

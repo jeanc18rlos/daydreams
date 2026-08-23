@@ -114,20 +114,20 @@ impl Scene for Level9 {
         objs.push(tunnel2);
 
         // ── Props on the large side, to carry through and shrink. ──────────────────────────
-        objs.push(grabbable(res, "teapot.obj", "gold.bmp", Vector3::new(1.0, 0.9, 4.2), 0.30, 0.45)
-            as Rc<RefCell<dyn ObjectT>>);
-        objs.push(grabbable(res, "suzanne.obj", "gold.bmp", Vector3::new(-1.0, 1.0, 4.6), 0.40, 0.5)
-            as Rc<RefCell<dyn ObjectT>>);
+        objs.push(
+            grabbable(res, "teapot.obj", "gold.bmp", Vector3::new(1.0, 0.9, 4.2), 0.30, 0.45)
+                as Rc<RefCell<dyn ObjectT>>,
+        );
+        objs.push(
+            grabbable(res, "suzanne.obj", "gold.bmp", Vector3::new(-1.0, 1.0, 4.6), 0.40, 0.5)
+                as Rc<RefCell<dyn ObjectT>>,
+        );
 
         // ── And one already on the small side, to carry back and grow. ─────────────────────
-        objs.push(grabbable(
-            res,
-            "bunny.obj",
-            "white.bmp",
-            Vector3::new(200.0, 0.6, 3.4),
-            6.0,
-            0.35,
-        ) as Rc<RefCell<dyn ObjectT>>);
+        objs.push(
+            grabbable(res, "bunny.obj", "white.bmp", Vector3::new(200.0, 0.6, 3.4), 6.0, 0.35)
+                as Rc<RefCell<dyn ObjectT>>,
+        );
 
         player.base.set_position(Vector3::new(0.0, GH_PLAYER_HEIGHT, 5.0));
 

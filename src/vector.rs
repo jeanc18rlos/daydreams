@@ -36,11 +36,7 @@ impl Vector3 {
     }
     #[inline]
     pub fn from_slice(b: &[f32]) -> Vector3 {
-        Vector3 {
-            x: b[0],
-            y: b[1],
-            z: b[2],
-        }
+        Vector3 { x: b[0], y: b[1], z: b[2] }
     }
 
     //General
@@ -342,21 +338,11 @@ impl Vector4 {
     }
     #[inline]
     pub fn splat(b: f32) -> Vector4 {
-        Vector4 {
-            x: b,
-            y: b,
-            z: b,
-            w: b,
-        }
+        Vector4 { x: b, y: b, z: b, w: b }
     }
     #[inline]
     pub fn from_vec3(xyz: Vector3, w: f32) -> Vector4 {
-        Vector4 {
-            x: xyz.x,
-            y: xyz.y,
-            z: xyz.z,
-            w,
-        }
+        Vector4 { x: xyz.x, y: xyz.y, z: xyz.z, w }
     }
 
     #[inline]
@@ -945,20 +931,14 @@ mod tests {
         // MulDirection reads rows (m[0],m[1],m[2]) / (m[4],m[5],m[6]) / (m[8],m[9],m[10]),
         // so unit_x -> (cos a, 0, -sin a) -> (0, 0, -1) at a = pi/2.
         let r = Matrix4::rot_y(std::f32::consts::PI / 2.0);
-        assert!(approx_eq_v3(
-            r.mul_direction(Vector3::unit_x()),
-            -Vector3::unit_z()
-        ));
+        assert!(approx_eq_v3(r.mul_direction(Vector3::unit_x()), -Vector3::unit_z()));
     }
 
     #[test]
     fn transpose_reverses_product() {
         let a = sample();
         let b = Matrix4::rot_z(1.1) * Matrix4::trans(Vector3::new(-1.0, 2.0, 0.5));
-        assert!(approx_eq_m4(
-            &(a * b).transposed(),
-            &(b.transposed() * a.transposed())
-        ));
+        assert!(approx_eq_m4(&(a * b).transposed(), &(b.transposed() * a.transposed())));
     }
 
     #[test]

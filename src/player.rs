@@ -48,9 +48,7 @@ impl Player {
             steps: 0,
         };
         p.reset();
-        p.base
-            .hit_spheres
-            .push(Sphere::new_at(Vector3::new(0.0, 0.0, 0.0), GH_PLAYER_RADIUS));
+        p.base.hit_spheres.push(Sphere::new_at(Vector3::new(0.0, 0.0, 0.0), GH_PLAYER_RADIUS));
         p.base.hit_spheres.push(Sphere::new_at(
             Vector3::new(0.0, GH_PLAYER_RADIUS - GH_PLAYER_HEIGHT, 0.0),
             GH_PLAYER_RADIUS,
@@ -201,9 +199,7 @@ impl Player {
         //Don't allow non-falling speeds above the player's max speed
         let temp_y = self.base.velocity.y;
         self.base.velocity.y = 0.0;
-        self.base
-            .velocity
-            .clip_mag(self.base.base.p_scale * GH_WALK_SPEED * sprint.speed);
+        self.base.velocity.clip_mag(self.base.base.p_scale * GH_WALK_SPEED * sprint.speed);
         self.base.velocity.y = temp_y;
     }
 

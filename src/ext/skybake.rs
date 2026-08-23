@@ -77,7 +77,11 @@ impl SkyBake {
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
             // Longitude wraps; latitude must not (the poles would bleed into each other).
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
             gl.tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
@@ -152,13 +156,7 @@ impl SkyBake {
 
     fn publish(&self, blend: f32) {
         let f = self.front.get();
-        INPUTS.with(|p| {
-            p.set(Some(SkyInputs {
-                a: self.tex[f],
-                b: self.tex[1 - f],
-                blend,
-            }))
-        });
+        INPUTS.with(|p| p.set(Some(SkyInputs { a: self.tex[f], b: self.tex[1 - f], blend })));
     }
 
     /// Call once per rendered frame, menu frames included, before the viewport is set (a bake

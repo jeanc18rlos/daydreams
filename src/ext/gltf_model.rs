@@ -175,12 +175,8 @@ pub struct GltfModel {
 // Matrix4 is row-major and unrelated; keep the two apart and only convert at the end.
 type M = [[f32; 4]; 4];
 
-const IDENT: M = [
-    [1.0, 0.0, 0.0, 0.0],
-    [0.0, 1.0, 0.0, 0.0],
-    [0.0, 0.0, 1.0, 0.0],
-    [0.0, 0.0, 0.0, 1.0],
-];
+const IDENT: M =
+    [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
 
 fn mul(a: M, b: M) -> M {
     let mut o = [[0.0f32; 4]; 4];
@@ -308,7 +304,10 @@ impl GltfModel {
         let mut built: HashMap<String, Vec<Prim>> = HashMap::new();
         let mut geometry: HashMap<String, Geometry> = HashMap::new();
         for (name, list) in raw.iter() {
-            built.insert(name.clone(), list.iter().map(|r| upload(gl, r)).collect::<Result<_, _>>()?);
+            built.insert(
+                name.clone(),
+                list.iter().map(|r| upload(gl, r)).collect::<Result<_, _>>()?,
+            );
             geometry.insert(name.clone(), gather(list));
         }
 
@@ -358,7 +357,14 @@ impl GltfModel {
     /// (`ext::cull`). The backrooms sits 1,000 units from the meadow and is drawn by the
     /// meadow's main pass too; without this its 70k triangles would be transformed and clipped
     /// in every pass that cannot see it.
-    pub fn draw_part(&self, part: &str, obj: &Object, shader: &Shader, cam: &Camera, ctx: &RenderCtx) {
+    pub fn draw_part(
+        &self,
+        part: &str,
+        obj: &Object,
+        shader: &Shader,
+        cam: &Camera,
+        ctx: &RenderCtx,
+    ) {
         let Some(prims) = self.parts.get(part) else { return };
         let local_to_world = obj.local_to_world();
         let (centre, radius) = self.bounding_sphere(part);
@@ -443,7 +449,8 @@ fn parse(spec: &Load) -> Result<Parsed, AssetError> {
     let Load { path: rel, parts, fit, .. } = *spec;
     let path = assets::path(rel);
     let bad = |reason: String| AssetError::Gltf { path: path.clone(), reason };
-    let bytes = std::fs::read(&path).map_err(|source| AssetError::Io { path: path.clone(), source })?;
+    let bytes =
+        std::fs::read(&path).map_err(|source| AssetError::Io { path: path.clone(), source })?;
     let gltf = gltf::Gltf::from_slice(&bytes).map_err(|e| bad(format!("parse: {e}")))?;
     let blob = gltf.blob.clone().ok_or_else(|| bad("no BIN chunk".to_string()))?;
     let doc = gltf.document;
@@ -577,8 +584,7 @@ fn walk(node: &gltf::Node, parent: M, blob: &[u8], out: &mut Vec<Raw>) {
             // It doubles this model to ~5,300 triangles, which is nothing.
             let front = idx.len();
             if prim.material().double_sided() {
-                let back: Vec<u32> =
-                    idx.chunks_exact(3).flat_map(|t| [t[2], t[1], t[0]]).collect();
+                let back: Vec<u32> = idx.chunks_exact(3).flat_map(|t| [t[2], t[1], t[0]]).collect();
                 idx.extend(back);
             }
             out.push(Raw {
@@ -666,12 +672,13 @@ fn as_bytes<T: bytemuck::Pod>(v: &[T]) -> &[u8] {
 ///
 /// Decoding by *image* rather than by material also de-duplicates: `SM_Door4_Parts` is worn by
 /// three of the door's five primitives, and its four maps are now decoded once between them.
-fn decode_maps(doc: &gltf::Document, blob: &[u8], max_map: u32) -> HashMap<usize, image::RgbaImage> {
-    let mut wanted: Vec<usize> = doc
-        .materials()
-        .flat_map(|m| material_sources(&m))
-        .flatten()
-        .collect();
+fn decode_maps(
+    doc: &gltf::Document,
+    blob: &[u8],
+    max_map: u32,
+) -> HashMap<usize, image::RgbaImage> {
+    let mut wanted: Vec<usize> =
+        doc.materials().flat_map(|m| material_sources(&m)).flatten().collect();
     wanted.sort_unstable();
     wanted.dedup();
 

@@ -101,7 +101,13 @@ impl Portal {
     #[cfg(test)]
     pub fn detached() -> Portal {
         let id = NEXT_PORTAL_ID.fetch_add(1, Ordering::Relaxed);
-        Portal { base: Object::new(), id, front: Warp::new(id), back: Warp::new(id), err_shader: None }
+        Portal {
+            base: Object::new(),
+            id,
+            front: Warp::new(id),
+            back: Warp::new(id),
+            err_shader: None,
+        }
     }
 
     pub fn draw(&self, ctx: &RenderCtx, cam: &Camera, cur_fbo: Option<glow::Framebuffer>) {
@@ -122,11 +128,7 @@ impl Portal {
         let mut normal = self.base.forward();
         let cam_pos = cam.world_view.inverse().translation();
         let front_direction = (cam_pos - self.base.pos).dot(normal) > 0.0;
-        let warp = if front_direction {
-            &self.front
-        } else {
-            &self.back
-        };
+        let warp = if front_direction { &self.front } else { &self.back };
         if front_direction {
             normal = -normal;
         }
@@ -189,11 +191,7 @@ impl Portal {
 
     pub fn get_bump(&self, a: Vector3) -> Vector3 {
         let n = self.base.forward();
-        n * (if (a - self.base.pos).dot(n) > 0.0 {
-            1.0
-        } else {
-            -1.0
-        })
+        n * (if (a - self.base.pos).dot(n) > 0.0 { 1.0 } else { -1.0 })
     }
 
     // PORT: `const Warp*` -> Option<&Warp>; nullptr becomes None (was: Portal.cpp:67).
@@ -269,30 +267,17 @@ pub fn connect(a: &Rc<RefCell<Portal>>, b: &Rc<RefCell<Portal>>) {
 // PORT: `static void Portal::Connect(Warp& a, Warp& b)` -> free function taking the two owning
 // portals plus the side of each warp, because the C++ signature's two mutable Warp references
 // would be two simultaneous borrow_mut()s (was: Portal.cpp:111).
-pub fn connect_warps(
-    a: &Rc<RefCell<Portal>>,
-    a_side: Side,
-    b: &Rc<RefCell<Portal>>,
-    b_side: Side,
-) {
+pub fn connect_warps(a: &Rc<RefCell<Portal>>, a_side: Side, b: &Rc<RefCell<Portal>>, b_side: Side) {
     // PORT: both transforms are read (and the borrows dropped) before anything is written.
     // C++ interleaves the reads and writes freely; `a` and `b` may be the same cell, so the
     // borrows must not overlap (was: Portal.cpp:112-117).
     let (a_id, a_local_to_world, a_world_to_local) = {
         let p = a.borrow();
-        (
-            p.id,
-            p.base.local_to_world(),
-            p.base.world_to_local(),
-        )
+        (p.id, p.base.local_to_world(), p.base.world_to_local())
     };
     let (b_id, b_local_to_world, b_world_to_local) = {
         let p = b.borrow();
-        (
-            p.id,
-            p.base.local_to_world(),
-            p.base.world_to_local(),
-        )
+        (p.id, p.base.local_to_world(), p.base.world_to_local())
     };
 
     let a_delta = a_local_to_world * b_world_to_local;
@@ -434,9 +419,15 @@ mod tests {
         let w = a.intersects(Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, 0.0, -1.0), bump);
         assert!(w.is_some_and(|w| std::ptr::eq(w, &a.back)));
         // Same side, or crossing the plane outside the quad: nothing.
-        assert!(a.intersects(Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, 0.0, 0.5), bump).is_none());
-        assert!(a.intersects(Vector3::new(3.0, 0.0, 1.0), Vector3::new(3.0, 0.0, -1.0), bump).is_none());
-        assert!(a.intersects(Vector3::new(0.0, 1.5, 1.0), Vector3::new(0.0, 1.5, -1.0), bump).is_none());
+        assert!(a
+            .intersects(Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, 0.0, 0.5), bump)
+            .is_none());
+        assert!(a
+            .intersects(Vector3::new(3.0, 0.0, 1.0), Vector3::new(3.0, 0.0, -1.0), bump)
+            .is_none());
+        assert!(a
+            .intersects(Vector3::new(0.0, 1.5, 1.0), Vector3::new(0.0, 1.5, -1.0), bump)
+            .is_none());
         // Distance to the quad: straight out from its centre, and diagonally from a corner.
         assert!((a.dist_to(Vector3::new(0.0, 0.0, 3.0)) - 3.0).abs() < 1e-5);
         assert!((a.dist_to(Vector3::new(4.0, 5.0, 0.0)) - 5.0).abs() < 1e-5);

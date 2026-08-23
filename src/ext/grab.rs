@@ -136,14 +136,8 @@ impl Grabbable {
         //    (Engine.cpp:167-190 iterates `physical->hitSpheres`);
         //  - `as_grabbable` uses "exactly one sphere" as the marker for grabbability, which is
         //    what keeps the player (two spheres, Player.cpp:9-10) from picking itself up.
-        base.hit_spheres.push(crate::sphere::Sphere::new_at(
-            Vector3::zero(),
-            mesh_radius,
-        ));
-        Grabbable {
-            base,
-            radius: mesh_radius,
-        }
+        base.hit_spheres.push(crate::sphere::Sphere::new_at(Vector3::zero(), mesh_radius));
+        Grabbable { base, radius: mesh_radius }
     }
 
     pub fn obj(&self) -> &Object {
@@ -435,11 +429,7 @@ pub fn update(
     }
 
     // Crosshair feedback: is something grabbable under the reticle right now?
-    state.hover = if state.held.is_some() {
-        true
-    } else {
-        pick(objects, origin, dir).is_some()
-    };
+    state.hover = if state.held.is_some() { true } else { pick(objects, origin, dir).is_some() };
 
     // ── Carry: reposition and rescale whatever is held. ──────────────────────────────────────
     let Some(idx) = state.held else { return };
@@ -568,7 +558,9 @@ fn try_grab(
     state.ratio = p_scale / dist;
     state.radius = radius;
     state.just_grabbed = true;
-    log::debug!("[grab] picked up object #{idx} at {dist:.2} units (aim and press E again to place it)");
+    log::debug!(
+        "[grab] picked up object #{idx} at {dist:.2} units (aim and press E again to place it)"
+    );
 }
 
 fn release(objects: &[Rc<RefCell<dyn ObjectT>>], state: &mut GrabState) {
@@ -702,10 +694,7 @@ mod tests {
             let d = hit_dist / (1.0 + radius * k);
             let p_scale = k * d;
             // p_scale / distance is the angular size; it must not drift.
-            assert!(
-                (p_scale / d - k).abs() < 1e-6,
-                "apparent size drifted at hit_dist={hit_dist}"
-            );
+            assert!((p_scale / d - k).abs() < 1e-6, "apparent size drifted at hit_dist={hit_dist}");
         }
     }
 

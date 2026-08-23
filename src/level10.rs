@@ -117,11 +117,10 @@ impl Scene for Level10 {
             chamber_portals.push(portal);
 
             // EXT: invisible bounds keeping players and thrown props inside this chamber.
-            objs.push(Rc::new(RefCell::new(bounds_box(
-                res,
-                origin,
-                Vector3::new(20.0, 8.0, 20.0),
-            ))) as Rc<RefCell<dyn ObjectT>>);
+            objs.push(
+                Rc::new(RefCell::new(bounds_box(res, origin, Vector3::new(20.0, 8.0, 20.0))))
+                    as Rc<RefCell<dyn ObjectT>>,
+            );
         }
 
         // Link the chambers. `connect` wires front<->back both ways (Portal.cpp:106-109), so the

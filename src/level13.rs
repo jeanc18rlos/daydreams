@@ -91,8 +91,9 @@ mod tests {
     /// guard against regenerating the model without its `c` lines.
     #[test]
     fn model_carries_a_collision_shell() {
-        let text = std::fs::read_to_string(crate::app::assets::path("Meshes/escher_relativity.obj"))
-            .expect("Meshes/escher_relativity.obj missing");
+        let text =
+            std::fs::read_to_string(crate::app::assets::path("Meshes/escher_relativity.obj"))
+                .expect("Meshes/escher_relativity.obj missing");
         let parsed = crate::mesh::parse_obj(&text);
         assert!(
             parsed.colliders.len() > 300,
