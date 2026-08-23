@@ -110,7 +110,8 @@ pub fn fov() -> f32 {
 
 /// Override the field of view. Clamped to a sane range -- past roughly 150 degrees the
 /// projection degenerates and the near plane math in `Camera::SetSize` stops being meaningful.
-#[allow(dead_code)] // EXT: available for a dolly-zoom effect; no scene currently drives it.
+/// Driven every frame by the sprint kick (`ext/sprint.rs`); a dolly zoom would go through the
+/// same call.
 pub fn set_fov(deg: f32) {
     FOV.with(|f| f.set(deg.clamp(20.0, 150.0)));
 }

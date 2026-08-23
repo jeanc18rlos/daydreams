@@ -251,8 +251,11 @@ impl Engine {
         // EXT: menus. Escape (key slot 27) opens the pause menu while playing; while any menu
         // is open the world is frozen -- no physics, no look, no grab -- and only the menu
         // reads input. The menu's own update consumes its navigation keys.
+        // EXT: this frame's pad edges. Taken out here, once, because two readers share them:
+        // the menu block directly below, and the sprint toggle after it -- which must not see
+        // an L3 press made while a menu was open, and does not, because that path returns.
+        let pad = self.pad_events.replace(crate::ext::gamepad::PadEvents::default());
         let menu_open = {
-            let pad = self.pad_events.replace(crate::ext::gamepad::PadEvents::default());
             let action = {
                 // EXT: the RefMut must be released before apply_menu_action, which re-borrows
                 // self.ext mutably (a shadowed `&mut *guard` would outlive a drop of itself).
@@ -336,6 +339,16 @@ impl Engine {
                     }
                 }
             }
+        }
+
+        // EXT: sprint. Resolved once per rendered frame, here, for the same reason as the
+        // rotate block: `key_press[16]` (the Shift edge) is zeroed by the first `end_frame`
+        // inside the loop below. The level is written into `Input::sprint`, which is what the
+        // ported `Player::update_player` reads on every step of this frame.
+        {
+            let mut input = self.input.borrow_mut();
+            let sprinting = self.ext.borrow_mut().sprint.resolve(&input, pad.sprint);
+            input.sprint = sprinting;
         }
 
         //Used fixed time steps for updates
@@ -998,22 +1011,30 @@ impl Engine {
         player.set_look(yaw, pitch);
     }
 
-    /// EXT: one frame of forced-perspective grab logic, plus the sounds it triggers.
+    /// EXT: one frame of forced-perspective grab logic, plus the sounds it triggers, the
+    /// footsteps the physics loop just took, and the sprint's field-of-view ease.
     ///
     /// Called from `run_frame` after the fixed-step physics loop, so the held object's
-    /// transform is authoritative for this frame's draw.
+    /// transform is authoritative for this frame's draw -- and so the FOV set here is the one
+    /// `Camera::set_size` picks up a few lines later for the same draw.
     fn ext_update(&self) {
         // The grab latch, set either by the E key at the top of run_frame or by the gamepad.
         // NOT read from key_press directly: EndFrame has already cleared it by this point.
         let grab_pressed = self.pad_grab.replace(false);
 
-        let cam_to_world = self.player.borrow().cam_to_world();
+        let (cam_to_world, steps) = {
+            let p = self.player.borrow();
+            (p.cam_to_world(), p.steps())
+        };
+        let sprinting = self.input.borrow().sprint;
         let objects = self.v_objects.borrow();
 
         let mut ext = self.ext.borrow_mut();
         let ext = &mut *ext;
         crate::ext::grab::update(&objects, &cam_to_world, grab_pressed, &mut ext.grab);
         ext.fire_grab_sfx();
+        ext.fire_footstep_sfx(steps);
+        crate::ext::view::set_fov(ext.sprint.ease_fov(crate::ext::view::time(), sprinting));
     }
 
     /// EXT: reach the ported `Input` so the platform layer can write gamepad axes into it.

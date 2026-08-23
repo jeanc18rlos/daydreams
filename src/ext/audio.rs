@@ -26,7 +26,8 @@
 //!
 //! Drop files into `assets/sfx/` named after the `Sfx` variants below (`grab.wav`,
 //! `release.wav`, `portal.wav`, `land.wav`, `footstep.wav`). They are preloaded at startup and
-//! fired by name. The call sites are already wired -- the files simply do not exist yet.
+//! fired by name. `Grab`, `Release` and `Footstep` have call sites (src/ext/mod.rs); `Portal`
+//! and `Land` are indexed and loadable but nothing fires them yet. None of the files ship.
 
 use kira::sound::static_sound::StaticSoundData;
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
@@ -39,7 +40,8 @@ use std::time::Duration;
 const MUSIC_DIR: &str = "assets/music";
 const SFX_DIR: &str = "assets/sfx";
 
-/// Named one-shot effects. Call sites exist; drop matching files into `assets/sfx/` to hear them.
+/// Named one-shot effects. Drop matching files into `assets/sfx/` to hear the ones with call
+/// sites (see the module docs for which).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Sfx {
     /// Player picked an object up.
@@ -50,7 +52,7 @@ pub enum Sfx {
     Portal,
     /// A falling object hit the ground.
     Land,
-    /// Footfall, driven by the head-bob phase.
+    /// Footfall, driven by the head-bob phase (`Player::steps`, fired from `Engine::ext_update`).
     Footstep,
 }
 

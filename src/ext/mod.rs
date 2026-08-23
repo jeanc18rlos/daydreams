@@ -28,6 +28,7 @@
 //! | `skybake`  | Clouds baked once into a panorama; the sky is one texture tap     |
 //! | `door`     | A freestanding door with a swinging leaf (the intro level)       |
 //! | `grassfield` | Real grass blades, in a patch that follows the player          |
+//! | `sprint`   | Running: Shift to hold, L3 to toggle, with an FOV kick and footsteps |
 
 pub mod audio;
 pub mod bounds;
@@ -44,6 +45,7 @@ pub mod room;
 pub mod rotate;
 pub mod settings;
 pub mod skybake;
+pub mod sprint;
 pub mod terrain;
 pub mod ui;
 pub mod ui_atlas;
@@ -55,6 +57,7 @@ use grab::GrabState;
 use menu::Menu;
 use outline::Outline;
 use rotate::Rotate;
+use sprint::Sprint;
 use ui::Ui;
 
 /// All extension state, owned by `Engine` behind a single `RefCell`.
@@ -72,6 +75,11 @@ pub struct ExtState {
     pub ghost_shader: std::rc::Rc<crate::shader::Shader>,
     /// Baked cloud panorama the sky shader samples (see skybake.rs).
     pub sky: skybake::SkyBake,
+    pub sprint: Sprint,
+    /// `Player::steps()` as of the last footstep fired, so each footfall sounds once. Never
+    /// reset: the counter only ever grows, and equality is the test, so a scene load (which
+    /// leaves the counter alone) cannot fire a stale step.
+    footsteps_heard: u32,
 }
 
 impl ExtState {
@@ -85,6 +93,8 @@ impl ExtState {
             menu: Menu::new(),
             ghost_shader: res.acquire_shader("ghost"),
             sky: skybake::SkyBake::new(gl, res),
+            sprint: Sprint::new(crate::ext::view::time()),
+            footsteps_heard: 0,
         }
     }
 
@@ -94,7 +104,19 @@ impl ExtState {
         self.grab.clear();
         // EXT: an effect must never leak into the next scene.
         crate::ext::view::reset_fov();
+        self.sprint.reset(crate::ext::view::time());
         self.audio.set_scene(scene);
+    }
+
+    /// One footstep sound per footfall the player has taken since the last call -- at most
+    /// one per rendered frame, which is the cadence this is called at. Two footfalls in one
+    /// frame would need a frame longer than a bob half-period (~200 ms), where a second
+    /// identical sample a few milliseconds later would be noise rather than information.
+    pub fn fire_footstep_sfx(&mut self, steps: u32) {
+        if steps != self.footsteps_heard {
+            self.footsteps_heard = steps;
+            self.audio.play(Sfx::Footstep);
+        }
     }
 
     /// Convert grab state changes into one-shot sounds.
