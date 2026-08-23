@@ -94,6 +94,20 @@ impl Collider {
     pub fn mat(&self) -> &Matrix4 {
         &self.mat
     }
+
+    /// EXT: a rectangle by its centre and two half-extent vectors, which must be
+    /// perpendicular. The ported `new` takes three CORNERS -- `a`, `b`, `c` in either
+    /// winding, the longest of the three sides being the diagonal -- the way an `.obj` `c`
+    /// line lists them (Mesh.cpp:85-89); code that has a centre and two axes in hand would
+    /// have to build corners only to have them turned back into this, so the sorting is
+    /// skipped and the matrix written as `create_sorted` would: translation `centre`, X axis
+    /// `half_u`, Y axis `half_v`.
+    #[allow(dead_code)] // EXT: scene code builds its in-memory colliders with it.
+    pub fn rect(centre: Vector3, half_u: Vector3, half_v: Vector3) -> Collider {
+        let mut col = Collider { mat: Matrix4::identity() };
+        col.create_sorted(half_u, centre, half_v);
+        col
+    }
 }
 
 #[cfg(test)]
@@ -150,6 +164,24 @@ mod tests {
         assert!(approx(m2.translation(), Vector3::zero()));
         assert!((m2.x_axis().mag() - 1.0).abs() < 1e-5 && (m2.y_axis().mag() - 1.0).abs() < 1e-5);
         assert!(m2.x_axis().y.abs() < 1e-6 && m2.y_axis().y.abs() < 1e-6);
+    }
+
+    /// EXT: `rect` is the corner constructor with the sorting already done.
+    #[test]
+    fn rect_is_the_same_rectangle_as_its_three_corners() {
+        let c = Vector3::new(3.0, 1.0, -2.0);
+        let u = Vector3::new(2.0, 0.0, 0.0);
+        let v = Vector3::new(0.0, 0.0, 0.5);
+        let r = Collider::rect(c, u, v);
+        let by_corners = Collider::new(c - u - v, c + u - v, c + u + v);
+        let (m, n) = (r.mat(), by_corners.mat());
+        assert!(approx(m.translation(), n.translation()) && approx(m.translation(), c));
+        assert!(approx(m.x_axis(), n.x_axis()) && approx(m.x_axis(), u));
+        assert!(approx(m.y_axis(), n.y_axis()) && approx(m.y_axis(), v));
+        // And it collides like one: a unit sphere half sunk into it is pushed up by half.
+        let phys = unit_sphere_at(c + Vector3::new(0.0, 0.5, 0.0));
+        let push = world_push(&phys, &Object::new(), &r).expect("overlapping");
+        assert!(approx(push, Vector3::new(0.0, 0.5, 0.0)), "{push:?}");
     }
 
     #[test]

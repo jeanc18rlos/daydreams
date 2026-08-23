@@ -550,6 +550,39 @@ impl Mesh {
         }
     }
 
+    /// EXT: a mesh that is nothing but colliders -- the in-memory twin of
+    /// `intro_door_collide.obj`, for scene code that knows its rectangles as numbers and has
+    /// no file to parse. No faces: the VAO is empty and `draw` issues a draw of zero
+    /// vertices, `bound_radius` is 0 so the cull (`ext::cull::object_sphere`) leaves it
+    /// alone, and the collision pass reads `colliders` exactly as it would off a loaded mesh.
+    /// The three buffers exist, empty, so `Drop` has nothing to special-case.
+    #[allow(dead_code)] // EXT: scene code builds its collision-only props with it.
+    pub fn colliders_only(gl: &Rc<glow::Context>, colliders: Vec<Collider>) -> Mesh {
+        use glow::HasContext;
+        fn fatal<T>(e: String) -> T {
+            crate::app::crash::fatal(&AssetError::Gl(format!(
+                "buffer allocation for a collider-only mesh failed: {e}"
+            )))
+        }
+        unsafe {
+            let vao = gl.create_vertex_array().unwrap_or_else(fatal);
+            let vbo = [
+                gl.create_buffer().unwrap_or_else(fatal),
+                gl.create_buffer().unwrap_or_else(fatal),
+                gl.create_buffer().unwrap_or_else(fatal),
+            ];
+            Mesh {
+                colliders,
+                vao,
+                vbo,
+                vert_count: 0,
+                gl: Rc::clone(gl),
+                tris: Vec::new(),
+                bound_radius: 0.0,
+            }
+        }
+    }
+
     // Mesh::Draw (Mesh.cpp:160-163)
     pub fn draw(&self) {
         use glow::HasContext;
