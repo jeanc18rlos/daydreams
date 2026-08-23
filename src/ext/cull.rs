@@ -160,6 +160,29 @@ mod tests {
         assert!(f.aabb(Vector3::new(-200.0, -200.0, -200.0), Vector3::new(200.0, 200.0, 200.0)));
     }
 
+    /// The portal cameras clip against the portal's plane instead of the near plane
+    /// (`Camera::clip_oblique`, Camera.cpp:68-85). `Portal::draw` passes the plane's normal
+    /// pointing back toward the viewer, and everything on that side -- between the camera and
+    /// the portal -- is what the GPU discards; the planes extracted here must say the same, or
+    /// the nested pass would cull what it should draw (or draw what is clipped anyway).
+    #[test]
+    fn oblique_clip_plane_is_the_near_plane() {
+        let mut c = cam();
+        // A portal plane 5 units ahead, normal toward the camera.
+        c.clip_oblique(Vector3::new(0.0, 0.0, -5.0), Vector3::new(0.0, 0.0, 1.0));
+        let f = Frustum::from_view_proj(&c.matrix());
+        // Just beyond the plane: drawn. Just short of it, on the camera's side: clipped.
+        assert!(f.sphere(Vector3::new(0.0, 0.0, -5.1), 0.0));
+        assert!(!f.sphere(Vector3::new(0.0, 0.0, -4.9), 0.0));
+        // The ordinary near plane no longer applies -- the oblique one replaced it -- but the
+        // side planes still do.
+        assert!(!f.sphere(Vector3::new(0.0, 0.0, -0.05), 0.0));
+        assert!(!f.sphere(Vector3::new(0.0, 6.0, -10.0), 0.0));
+        assert!(f.sphere(Vector3::new(0.0, 5.5, -10.0), 0.0));
+        // A sphere straddling the plane is kept.
+        assert!(f.sphere(Vector3::new(0.0, 0.0, -4.9), 0.5));
+    }
+
     #[test]
     fn follows_the_view_matrix() {
         // Turn the camera to look down +x: what was in front is now off to the side.

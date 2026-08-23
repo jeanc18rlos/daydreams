@@ -325,9 +325,16 @@ impl Sky {
 
     // PORT: takes the GL context explicitly for the two glDepthMask calls; C++ uses the
     // implicit current context (was: void Draw(const Camera& cam), Sky.h:12).
+    // EXT: drawn after the scene rather than before it (Engine::render), at the far plane
+    // under GL_LEQUAL so it passes exactly where the cleared depth survived -- the pixels
+    // nothing else covered, including the holes a `discard` left. The original's sky-first
+    // order shaded every pixel of every pass and then overdrew about half of them; the
+    // sky's per-pixel atan/asin and two panorama taps were the most expensive thing being
+    // thrown away. The depth mask stays off, as before.
     pub fn draw(&self, gl: &glow::Context, cam: &Camera) {
         unsafe {
             gl.depth_mask(false);
+            gl.depth_func(glow::LEQUAL);
         }
         let mvp = cam.projection.inverse();
         let mv = cam.world_view.inverse();
@@ -351,6 +358,7 @@ impl Sky {
         self.shader.set_f32("mood", crate::ext::view::mood_for(eye));
         self.mesh.draw();
         unsafe {
+            gl.depth_func(glow::LESS);
             gl.depth_mask(true);
         }
     }

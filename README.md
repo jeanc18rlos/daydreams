@@ -802,6 +802,40 @@ Where it went, in order of effect:
   plane. Now a portal whose quad lies wholly outside the pass's frustum is settled on the CPU
   (it would pass no samples either way, so the answer is identical), and a pass with no
   portal in view skips the query block altogether. Facing away from the door, no pass stalls.
+* **The readback that remained is one frame late** (`src/ext/occlusion.rs`). The queries are
+  still issued every pass, but the answer used is the one the same slot produced *last*
+  frame, read with `GL_QUERY_RESULT_AVAILABLE` first; a slot with no result -- never issued,
+  out of the frustum last frame, or not yet available -- counts as visible. No pass ever
+  stalls. A slot is one portal seen from one pass, and a pass is named by the chain of
+  portals it is seen through, so the same portal seen through two different portals keeps two
+  answers. What this changes on screen: a portal that becomes fully hidden is drawn for one
+  extra frame (it is hidden, so nothing shows), and a portal uncovered after being fully hidden
+  is first drawn on the frame *after* it appears -- for that one frame the uncovered sliver,
+  one frame's motion wide, shows what was drawn behind the quad. Portals entering from
+  outside the frustum are unaffected: the CPU pre-test above settles those in the current
+  frame.
+* **Each portal pass is scissored to the quad's screen footprint** (`src/ext/scissor.rs`).
+  `portal.frag` samples the nested framebuffer by screen-space projection, so only the quad's
+  footprint is ever read; the quad's corners are projected, their NDC box is clamped and
+  padded by two pixels, and the nested `Engine::render` -- its depth clear included -- runs
+  under that scissor. A quad with a corner at or behind the eye gets the full viewport.
+* **The sky is drawn last**, at the far plane under `GL_LEQUAL`, so it shades exactly the
+  pixels nothing else covered (the holes a `discard` leaves included). The port drew it first
+  and let the scene overdraw about half of it, in every pass.
+* **One portal framebuffer per recursion level, sized to the drawable.** The port gave every
+  Portal its own three 2048-square framebuffers (~20 MB each: 360 MB for the floorplan, a
+  gigabyte for a twelve-portal scene) and under-sampled the door on any drawable wider than
+  2048. A portal renders its framebuffer and draws from it before any sibling at the same level
+  renders, so `Engine` owns `GH_MAX_RECURSION - 1` of them for all portals, rebuilt on resize
+  and capped at `GH_FBO_SIZE` (now 4096) a side.
+* **What is left per portal is the render-target round trip itself.** On this machine a
+  portal in view costs ~0.9 ms whatever is drawn into its framebuffer: skipping the nested
+  draw entirely, drawing it into the main framebuffer instead, clearing first, or shrinking
+  the framebuffer to 256 square all measure the same, so the cost is Apple's GL-on-Metal
+  layer switching render targets and sampling a texture rendered this frame, not fill or
+  readback. Scenes whose portals nest several deep (Six Rooms, 1.48 -> 1.12 ms) are where the
+  items above show; the intro and title, one portal in view, are within noise of where they
+  were.
 * **The blade patch is generated, indexed and culled** (`src/ext/grassgen.rs`,
   `src/ext/grassfield.rs`). The 124 MB `grass_patch.obj` is gone; the same scatter runs in
   20 ms at startup and is pinned for the life of the engine. Ten shared vertices per blade
@@ -845,10 +879,12 @@ Small additions, each tagged `// EXT:`:
 | `collider.rs` | read-only `mat()` accessor, so rays can transform the rectangle to world space |
 | `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`8`–`=`/`'` key mappings; `Shift` into the `VK_SHIFT` slot and the sprint levels |
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
-| `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum and eye, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery |
-| `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and query pool; the old scene kept alive across `load_scene`; the triangle-mesh rounds in the collision pass |
+| `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery |
+| `frame_buffer.rs` | sized attachments instead of `GH_FBO_SIZE` square |
+| `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene kept alive across `load_scene`; the triangle-mesh rounds in the collision pass |
+| `portal.rs` | the nested pass scissored to the quad's screen footprint |
 | `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4` |
-| `props.rs` | `Sky::draw` takes the eye from the inverse it already computes |
+| `props.rs` | `Sky::draw` takes the eye from the inverse it already computes, and draws at the far plane under `GL_LEQUAL` so it can go last |
 | `main.rs` | gamepad polling in `about_to_wait`; `--no-vsync`; key levels dropped on focus loss |
 
 ### One bug this surfaced
@@ -880,7 +916,7 @@ the original demo's portal-recursive first level. Every expensive thing happens 
 
 | What | Where the cost went |
 |------|---------------------|
-| Cloud shapes (6-octave domain-warped FBM, single-scatter lighting, cirrus layer) | Baked **once** into a 1536x768 panorama by a GLSL pass (`src/ext/skybake.rs`, `Shaders/cloudbake.*`), re-baked every 5 s with advanced noise time so the field evolves. The runtime sky (`Shaders/sky.frag`) is one texture fetch + the original sun term -- which matters because the ported renderer draws the sky inside every 2048x2048 portal pass. |
+| Cloud shapes (6-octave domain-warped FBM, single-scatter lighting, cirrus layer) | Baked **once** into a 1536x768 panorama by a GLSL pass (`src/ext/skybake.rs`, `Shaders/cloudbake.*`), re-baked every 6 s with advanced noise time so the field evolves, on the title screen as well as in play. The runtime sky (`Shaders/sky.frag`) is one texture fetch + the original sun term -- which matters because the ported renderer draws the sky inside every portal pass. |
 | Grass detail | Baked offline into a tileable noise atlas (`tools/gen_meadow.py` -> `Textures/grass_noise.bmp`). The shader does two or three taps and zero noise math. |
 | Rolling hills | One heightfield mesh with smooth normals smuggled through the engine's 3-component `vt` channel (the parser discards `vn`), plus a gradient-tilted collider shell -- same scheme as the Relativity walk shell. |
 | "Realism" | Three illusions in `Shaders/grass.frag`: drifting **cloud shadows** (a scrolled low-frequency tap), **valley occlusion** (world height as free AO), and **atmospheric perspective** toward the sky's horizon colour. Plus a backlit sun sheen and a wind ripple that moves no vertices. |
@@ -916,7 +952,12 @@ the return door and the placement follows. An invisible fence one metre outside 
 extent, and a net at its lowest point, keep the player inside whatever the scan's seams allow.
 The backrooms shader ignores the weather grade every other surface takes -- its lighting is
 painted in -- and adds a squared-distance fog toward dark yellow-brown so the far end of the
-maze fades rather than popping at the 100-unit far plane.
+maze fades rather than popping at the 100-unit far plane. What does take the grade past the
+split -- the return door's paint, the sky through a window pane or a gap in the scan's
+single-sided walls -- is told the far world is an **interior** (`view::set_far_mood`,
+`MOOD_INTERIOR`): the door stays white instead of sunset-pink, the sky is the near-black of an
+unlit building going on past its walls, and a dark ground cap under the whole footprint
+(`backrooms::GroundCap`) makes the void below the horizon the same darkness.
 
 Frame cost, measured with `glFinish` after each frame on a shared M3 Max at 2560x1440 (so
 absolute numbers are pessimistic; the comparison is what matters): meadow spawn in the intro

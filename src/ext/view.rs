@@ -26,15 +26,23 @@ thread_local! {
 }
 
 /// EXT: scenes that want two worlds with different weather put the second one beyond this x.
-/// Every shader that cares (sky, grass, sea) receives `mood` = 0 (storm) or 1 (sunset) based
-/// on where the CAMERA of the current render pass is -- so a portal pass looking into the far
-/// region grades itself as sunset while the main pass stays stormy. Same baked clouds, two
-/// colour grades, no extra cost. Scenes that never cross the line never see mood 1.
+/// Every shader that cares (sky, grass, sea) receives `mood` = 0 (storm) on the near side and
+/// the scene's far mood -- [`MOOD_SUNSET`] unless it says otherwise -- beyond it, based on
+/// where the CAMERA of the current render pass is: a portal pass looking into the far region
+/// grades itself as that world while the main pass stays stormy. Same baked clouds, two colour
+/// grades, no extra cost. Scenes that never cross the line never see the far mood.
 pub const MOOD_SPLIT_X: f32 = 250.0;
-// Whether the current scene uses the split at all (set by the intro level on load, cleared by
-// every load), and the door's warm light pool as (x, y, z, intensity).
+/// The far moods a scene can choose from. Sunset is the intro's sea; interior is the
+/// Backrooms, whose "sky" is the black of an unlit building beyond its walls and whose door
+/// paint must stay the colour it is -- nothing outdoors grades it.
+pub const MOOD_SUNSET: f32 = 1.0;
+pub const MOOD_INTERIOR: f32 = 2.0;
+// Whether the current scene uses the split at all and what lies past it (both set by the
+// scene on load, both reset by every load), and the door's warm light pool as
+// (x, y, z, intensity).
 thread_local! {
     static MOOD_ENABLED: Cell<bool> = const { Cell::new(false) };
+    static FAR_MOOD: Cell<f32> = const { Cell::new(MOOD_SUNSET) };
     static GLOW: Cell<[f32; 4]> = const { Cell::new([0.0; 4]) };
     /// 1.0 while drawing the main view, 0.0 inside a portal's framebuffer.
     static DETAIL: Cell<f32> = const { Cell::new(1.0) };
@@ -61,14 +69,20 @@ pub fn set_mood_enabled(on: bool) {
     MOOD_ENABLED.with(|m| m.set(on));
 }
 
+/// What a pass whose eye is past the split grades itself as. `MOOD_SUNSET` by default; the
+/// Backrooms sets `MOOD_INTERIOR`. Reset on every scene load.
+pub fn set_far_mood(mood: f32) {
+    FAR_MOOD.with(|m| m.set(mood));
+}
+
 /// Mood for a render pass whose camera eye is at `eye`:
 ///   -1 = plain daylight (scenes without the split),
-///    0 = storm (intro meadow), 1 = sunset (the world behind the door).
+///    0 = storm (intro meadow), 1 = sunset / 2 = interior (the world behind the door).
 pub fn mood_for(eye: crate::vector::Vector3) -> f32 {
     if !MOOD_ENABLED.with(|m| m.get()) {
         -1.0
     } else if eye.x > MOOD_SPLIT_X {
-        1.0
+        FAR_MOOD.with(|m| m.get())
     } else {
         0.0
     }
@@ -83,7 +97,7 @@ pub fn glow() -> [f32; 4] {
 }
 
 /// EXT: detail level for the render pass in flight. The ported renderer re-draws the whole
-/// scene into every portal's 2048x2048 framebuffer, up to four levels deep (Engine.cpp:207-270),
+/// scene into every portal's framebuffer, up to four levels deep (Engine.cpp:207-270),
 /// so anything expensive costs several times what the main view suggests. Materials use this to
 /// take a cheap path in portal passes, where the result is a small quad on screen anyway.
 pub fn detail() -> f32 {
@@ -138,6 +152,21 @@ mod tests {
         assert!((fov() - 95.0).abs() < 1e-6);
         reset_fov();
         assert!((fov() - GH_FOV).abs() < 1e-6);
+    }
+
+    #[test]
+    fn far_mood_is_the_scenes_choice_past_the_split() {
+        use crate::vector::Vector3;
+        let near = Vector3::new(0.0, 1.0, 0.0);
+        let far = Vector3::new(MOOD_SPLIT_X + 10.0, 1.0, 0.0);
+        set_mood_enabled(true);
+        assert_eq!(mood_for(far), MOOD_SUNSET, "sunset unless the scene says otherwise");
+        set_far_mood(MOOD_INTERIOR);
+        assert_eq!(mood_for(far), MOOD_INTERIOR);
+        assert_eq!(mood_for(near), 0.0, "the near side is storm whatever lies beyond");
+        set_far_mood(MOOD_SUNSET);
+        set_mood_enabled(false);
+        assert_eq!(mood_for(far), -1.0);
     }
 
     #[test]

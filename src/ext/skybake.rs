@@ -3,8 +3,8 @@
 //! # The performance trick
 //!
 //! A procedural cloud shader evaluated per pixel per frame is expensive anywhere, and ruinous
-//! here: the ported renderer draws the sky at the start of **every** render pass, including each
-//! portal's 2048x2048 framebuffer, up to four levels deep (Engine.cpp:209-211, Portal.cpp:42).
+//! here: the ported renderer draws the sky in **every** render pass, including each portal's
+//! screen-sized framebuffer, up to four levels deep (Engine.cpp:209-211, Portal.cpp:42).
 //! Six-octave FBM times several million pixels times several passes is not a 60 fps budget.
 //!
 //! So the clouds are computed once, into an equirectangular panorama texture, by a single
@@ -161,8 +161,9 @@ impl SkyBake {
         });
     }
 
-    /// Call once per rendered frame (main pass only, before the scene is drawn). Advances the
-    /// cross-fade; when it completes, the faded-out panorama becomes the next bake target.
+    /// Call once per rendered frame, menu frames included, before the viewport is set (a bake
+    /// leaves it at the panorama's size). Advances the cross-fade; when it completes, the
+    /// faded-out panorama becomes the next bake target.
     pub fn maybe_rebake(&self, now: f32) {
         let mut blend = (now - self.fade_start.get()) / REBAKE_SECS;
         if blend >= 1.0 {

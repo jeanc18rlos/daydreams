@@ -35,8 +35,8 @@ float snap_freq(float f) {
 // Weather grade (-1 daylight, 0 storm, 1 sunset) and the intro door's light pool (xyz, power).
 uniform float mood;
 uniform vec4 glow;
-// 1.0 in the main view, 0.0 inside a portal pass (src/ext/view.rs). Portal passes render at
-// 2048x2048, up to four deep, so the wind taps there cost several times what they show.
+// 1.0 in the main view, 0.0 inside a portal pass (src/ext/view.rs). Portal passes nest up to
+// three deep, so the wind taps there cost several times what they show.
 uniform float detail;
 in vec3 ex_world;
 in vec3 ex_normal;

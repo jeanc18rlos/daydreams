@@ -1,12 +1,16 @@
 //! Port of FrameBuffer.h / FrameBuffer.cpp -- the off-screen render target a Portal draws
 //! its recursive view into.
+//!
+//! EXT: the C++ gives every Portal its own `GH_FBO_SIZE`-square FrameBuffer per recursion
+//! level (Portal.h:43). Here the framebuffers are owned by `Engine`, one per recursion level
+//! for ALL portals, and sized to the drawable; see `Engine::portal_fbos` for why that is
+//! equivalent. This file only gains a size.
 
 use std::rc::Rc;
 
 use glow::HasContext;
 
 use crate::camera::Camera;
-use crate::game_header::GH_FBO_SIZE;
 use crate::object::RenderCtx;
 
 pub struct FrameBuffer {
@@ -18,12 +22,16 @@ pub struct FrameBuffer {
     // PORT: the C++ reaches the GL through the global GLEW function pointers; glow needs an
     // explicit context, so every GL-owning type carries an Rc to it (no C++ equivalent).
     gl: Rc<glow::Context>,
+    // EXT: the attachment size, where the C++ hard-codes GH_FBO_SIZE square.
+    pub width: i32,
+    pub height: i32,
 }
 
 impl FrameBuffer {
     // PORT: the default constructor takes the GL context as a parameter
     // (was: FrameBuffer::FrameBuffer(), FrameBuffer.cpp:6).
-    pub fn new(gl: &Rc<glow::Context>) -> FrameBuffer {
+    // EXT: and the size of the attachments, which the C++ fixes at GH_FBO_SIZE square.
+    pub fn new(gl: &Rc<glow::Context>, width: i32, height: i32) -> FrameBuffer {
         unsafe {
             // PORT: glGenTextures(1, &texId) -> create_texture(), which returns a Result
             // (was: glGenTextures(1, &texId), FrameBuffer.cpp:7).
@@ -62,8 +70,8 @@ impl FrameBuffer {
                 glow::TEXTURE_2D,
                 0,
                 glow::RGB8 as i32,
-                GH_FBO_SIZE,
-                GH_FBO_SIZE,
+                width,
+                height,
                 0,
                 glow::RGB,
                 glow::UNSIGNED_BYTE,
@@ -92,8 +100,8 @@ impl FrameBuffer {
             gl.renderbuffer_storage(
                 glow::RENDERBUFFER,
                 glow::DEPTH_COMPONENT16,
-                GH_FBO_SIZE,
-                GH_FBO_SIZE,
+                width,
+                height,
             );
             //-------------------------
             // PORT: GL_DEPTH_ATTACHMENT_EXT -> GL_DEPTH_ATTACHMENT
@@ -121,6 +129,8 @@ impl FrameBuffer {
                     fbo,
                     render_buf,
                     gl: Rc::clone(gl),
+                    width,
+                    height,
                 };
             }
 
@@ -134,6 +144,8 @@ impl FrameBuffer {
                 fbo,
                 render_buf,
                 gl: Rc::clone(gl),
+                width,
+                height,
             }
         }
     }
@@ -160,7 +172,9 @@ impl FrameBuffer {
     ) {
         unsafe {
             ctx.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
-            ctx.gl.viewport(0, 0, GH_FBO_SIZE, GH_FBO_SIZE);
+            // EXT: the attachment size (was: glViewport(0, 0, GH_FBO_SIZE, GH_FBO_SIZE),
+            // FrameBuffer.cpp:42).
+            ctx.gl.viewport(0, 0, self.width, self.height);
             ctx.engine.render(cam, Some(self.fbo), skip_portal);
             ctx.gl.bind_framebuffer(glow::FRAMEBUFFER, cur_fbo);
         }
@@ -170,6 +184,8 @@ impl FrameBuffer {
 // PORT: FrameBuffer has no destructor at all in C++, so every GL object it owns leaks when a
 // scene is unloaded -- cycling the 7 scenes leaks ~78 framebuffers, roughly 1.8 GiB of texture
 // and renderbuffer memory. Drop deletes them (no C++ equivalent, FrameBuffer.h:8-19).
+// EXT: with the engine owning the three shared framebuffers there is nothing left to leak per
+// scene; Drop now runs on a window resize and at shutdown.
 impl Drop for FrameBuffer {
     fn drop(&mut self) {
         unsafe {

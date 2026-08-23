@@ -43,7 +43,11 @@ pub const GH_FOV: f32 = 60.0;
 pub const GH_NEAR_MIN: f32 = 1e-3;
 pub const GH_NEAR_MAX: f32 = 1e-1;
 pub const GH_FAR: f32 = 100.0;
-pub const GH_FBO_SIZE: i32 = 2048;
+// EXT: was 2048, the fixed square size of every portal framebuffer (GameHeader.h:30). The
+// portal framebuffers are now sized to the drawable (`Engine::portal_fbos`), so a door is
+// sampled pixel for pixel at any window size; this is the cap on either side, which a 6K
+// display would reach.
+pub const GH_FBO_SIZE: i32 = 4096;
 pub const GH_MAX_RECURSION: i32 = 4;
 
 //Gameplay

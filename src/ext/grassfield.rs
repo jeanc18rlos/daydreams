@@ -230,8 +230,8 @@ impl ObjectT for GrassField {
         &mut self.base
     }
 
-    /// Skip the blade field entirely in portal passes. A million triangles re-drawn into four
-    /// levels of 2048x2048 framebuffer is the single most expensive thing in the game, and the
+    /// Skip the blade field entirely in portal passes. A million triangles re-drawn into up to
+    /// three nested portal framebuffers is the single most expensive thing in the game, and the
     /// ground's grass texture already covers that view.
     fn draw(&self, ctx: &RenderCtx, cam: &Camera, _fbo: Option<glow::Framebuffer>) {
         if crate::ext::view::detail() < 0.5 {

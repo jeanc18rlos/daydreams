@@ -8,8 +8,10 @@
 //! # Behaviour
 //!
 //! * The leaf opens as the player approaches (with hysteresis so it never chatters at the
-//!   threshold) and swings **away** from whichever side they stand on, so walking up never
-//!   pushes you through a closed leaf. Frame posts carry colliders; the leaf does not need to.
+//!   threshold) and swings **toward** whichever side they stand on. That is deliberate: the
+//!   portal quad sits in the frame plane, so a leaf on the far side would be hidden behind the
+//!   portal image, and the one thing a door must visibly do is open. It cannot push the player:
+//!   it opens before they reach it, and the leaf carries no collider -- only the frame posts do.
 //! * While open, the door publishes a warm **light pool** (`view::set_glow`) that the grass
 //!   shader spills onto the ground in front of it -- the reference image's glowing patch.
 //! * [`set_hold_open`] overrides the proximity test and holds every door in the scene open;
@@ -273,8 +275,10 @@ impl ObjectT for Door {
         };
         let want_open = near || held || partner_wants;
         if !opening && want_open {
-            // Swing away from the player when they are the one approaching; a frame opened by
-            // its partner swings out of its own frame's +z side by convention.
+            // Swing toward the player when they are the one approaching: a positive angle
+            // about the hinge carries the leaf's free edge to local -z (Matrix4::rot_y maps +x
+            // to (cos a, 0, -sin a)), so a player on the -z side gets +1. A frame opened by its
+            // partner swings out of its own frame's +z side by convention.
             let p_local = self.base.world_to_local().mul_point(ctx.player_pos);
             self.swing_sign = if near && p_local.z < 0.0 { 1.0 } else { -1.0 };
         }
@@ -283,12 +287,15 @@ impl ObjectT for Door {
         self.place_leaf();
 
         if self.glows {
-            // Light pool just in front of the opening, strength following the swing.
+            // Light pool just in front of the opening, strength following the swing. At the
+            // door's FOOT height, not y = 0: the pool's radius in the grass shaders is 3.5, and
+            // the intro door stands on an 8-unit knoll, so a pool published at ground zero
+            // never reached the grass it was meant to light.
             let (centre, _, _) = self.portal_transform();
             let front = self.base.local_to_world().mul_direction(Vector3::new(0.0, 0.0, 1.0));
             let sign = if self.swing_sign < 0.0 { 1.0 } else { -1.0 }; // toward the player
             crate::ext::view::set_glow(
-                Vector3::new(centre.x, 0.0, centre.z) + front * (sign * 1.2),
+                Vector3::new(centre.x, self.base.pos.y, centre.z) + front * (sign * 1.2),
                 self.openness(),
             );
         }

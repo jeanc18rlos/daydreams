@@ -5,8 +5,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::camera::Camera;
-use crate::frame_buffer::FrameBuffer;
-use crate::game_header::{gh_clamp, gh_min, GH_FBO_SIZE, GH_MAX_RECURSION};
+use crate::game_header::{gh_clamp, gh_min};
 use crate::object::{Object, ObjectT, RenderCtx};
 use crate::resources::Resources;
 use crate::shader::Shader;
@@ -66,27 +65,19 @@ pub struct Portal {
     pub front: Warp,
     pub back: Warp,
     err_shader: Rc<Shader>,
-    // PORT: fixed-size C array -> Vec. The length expression is unchanged
-    // (was: FrameBuffer frameBuf[GH_MAX_RECURSION <= 1 ? 1 : GH_MAX_RECURSION - 1], Portal.h:43).
-    frame_buf: Vec<FrameBuffer>,
+    // EXT: `FrameBuffer frameBuf[GH_MAX_RECURSION <= 1 ? 1 : GH_MAX_RECURSION - 1]`
+    // (Portal.h:43) is not a member any more. The engine owns one framebuffer per recursion
+    // level for every portal (`Engine::portal_fbos`) and `draw` borrows it through the
+    // RenderCtx.
 }
 
 impl Portal {
     // PORT: the ctor takes `gl` and `res`. C++ reaches the resource caches through the
-    // file-scope AquireXxx() functions and constructs its FrameBuffers with the implicit
-    // current GL context (was: Portal::Portal() : front(this), back(this), Portal.cpp:6).
-    pub fn new(gl: &Rc<glow::Context>, res: &Resources) -> Portal {
+    // file-scope AquireXxx() functions (was: Portal::Portal() : front(this), back(this),
+    // Portal.cpp:6). `gl` is no longer read -- the FrameBuffers it constructed live on the
+    // engine now -- and is kept so the scene code's call sites stay as they were.
+    pub fn new(_gl: &Rc<glow::Context>, res: &Resources) -> Portal {
         let id = NEXT_PORTAL_ID.fetch_add(1, Ordering::Relaxed);
-
-        let n = if GH_MAX_RECURSION <= 1 {
-            1
-        } else {
-            GH_MAX_RECURSION - 1
-        };
-        let mut frame_buf = Vec::with_capacity(n as usize);
-        for _ in 0..n {
-            frame_buf.push(FrameBuffer::new(gl));
-        }
 
         let mut base = Object::new();
         base.mesh = Some(res.acquire_mesh("double_quad.obj"));
@@ -98,7 +89,6 @@ impl Portal {
             front: Warp::new(id),
             back: Warp::new(id),
             err_shader: res.acquire_shader("pink"),
-            frame_buf,
         }
     }
 
@@ -134,15 +124,28 @@ impl Portal {
         let extra_clip = gh_min(ctx.engine.nearest_portal_dist() * 0.5, 0.1);
 
         //Create new portal camera
+        // EXT: the engine's framebuffer for this recursion level (was: frameBuf[GH_REC_LEVEL - 1]
+        // on this portal, Portal.cpp:42), and its size in place of GH_FBO_SIZE square.
+        let rec_level = ctx.engine.rec_level();
+        let frame_buf = &ctx.portal_fbos[(rec_level - 1) as usize];
         let mut portal_cam = *cam;
         portal_cam.clip_oblique(self.base.pos - normal * extra_clip, -normal);
         portal_cam.world_view = portal_cam.world_view * warp.delta;
-        portal_cam.width = GH_FBO_SIZE;
-        portal_cam.height = GH_FBO_SIZE;
+        portal_cam.width = frame_buf.width;
+        portal_cam.height = frame_buf.height;
 
         //Render portal's view from new camera
-        let rec_level = ctx.engine.rec_level();
-        self.frame_buf[(rec_level - 1) as usize].render(ctx, &portal_cam, cur_fbo, warp.to_portal);
+        // EXT: only the quad's screen footprint of that framebuffer is ever sampled (see the
+        // projective lookup in Shaders/portal.frag), so the nested pass is scissored to it.
+        // The box is in the nested framebuffer's pixels: its viewport stretches this pass's
+        // projection over the whole texture, so NDC maps straight to it. See src/ext/scissor.rs.
+        let clip = crate::ext::scissor::quad_clip(&self.base.local_to_world(), &cam.matrix());
+        let scissor = crate::ext::scissor::ScissorGuard::begin(
+            ctx.gl,
+            crate::ext::scissor::footprint(&clip, frame_buf.width, frame_buf.height),
+        );
+        frame_buf.render(ctx, &portal_cam, cur_fbo, warp.to_portal);
+        scissor.end(ctx.gl);
         cam.use_viewport(ctx.gl);
 
         //Now we can render the portal texture to the screen
@@ -154,7 +157,7 @@ impl Portal {
         let shader = self.base.shader.as_ref().unwrap();
         let mesh = self.base.mesh.as_ref().unwrap();
         shader.use_program();
-        self.frame_buf[(rec_level - 1) as usize].use_texture();
+        frame_buf.use_texture();
         shader.set_mvp(Some(&mvp), Some(&mv));
         mesh.draw();
     }

@@ -18,6 +18,9 @@ pub struct RenderCtx<'a> {
     // object per pass), and nothing culled; see src/ext/cull.rs.
     pub frustum: crate::ext::cull::Frustum,
     pub eye: Vector3,
+    // EXT: the engine's portal framebuffers, one per recursion level; `Portal::draw` takes
+    // `[rec_level - 1]`. Shared rather than per-portal -- see `Engine::portal_fbos`.
+    pub portal_fbos: &'a [crate::frame_buffer::FrameBuffer],
 }
 
 pub struct UpdateCtx<'a> {

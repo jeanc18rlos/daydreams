@@ -20,8 +20,8 @@ use glow::HasContext;
 
 use crate::camera::Camera;
 use crate::game_header::{
-    gh_clamp, gh_min, GH_DT, GH_FAR, GH_MAX_PORTALS, GH_MAX_RECURSION, GH_MAX_STEPS, GH_NEAR_MAX,
-    GH_NEAR_MIN, GH_USE_SKY,
+    gh_clamp, gh_min, GH_DT, GH_FAR, GH_FBO_SIZE, GH_MAX_PORTALS, GH_MAX_RECURSION, GH_MAX_STEPS,
+    GH_NEAR_MAX, GH_NEAR_MIN, GH_USE_SKY,
 };
 use crate::input::Input;
 use crate::level1::Level1;
@@ -99,12 +99,23 @@ pub struct Engine {
     pad_events: Cell<crate::ext::gamepad::PadEvents>,
     // EXT: dev tooling -- wall time per rendered frame, reported on the `[shot]` line.
     frame_clock: RefCell<crate::ext::frametime::FrameClock>,
-    // EXT: occlusion query objects, created on first use and kept for the life of the engine
-    // (the C++ generates and deletes a set per pass, Engine.cpp:221/250). One set serves every
-    // recursion level: a pass begins, ends and reads all of its queries before it draws a single
-    // portal, and the nested passes happen inside those draws, so no two levels ever hold a
-    // query at the same time. Freed in `destroy_gl_objects`.
-    queries: RefCell<Vec<glow::Query>>,
+    // EXT: the portal occlusion queries, kept for the life of the engine (the C++ generates
+    // and deletes a set per pass, Engine.cpp:221/250) and read one frame late rather than
+    // synchronously; see src/ext/occlusion.rs. Freed in `destroy_gl_objects`.
+    occlusion: RefCell<crate::ext::occlusion::Occlusion>,
+    // EXT: the name of the render pass in flight -- the chain of portals it is seen through --
+    // which is what the occlusion slots are keyed on. ROOT for the main view; pushed and
+    // popped around each nested `Portal::draw` in `render`.
+    pass_path: Cell<crate::ext::occlusion::Path>,
+    // EXT: the portal framebuffers, one per recursion level, shared by every portal in the
+    // scene. The C++ gives each Portal its own three 2048-square FrameBuffers (Portal.h:43):
+    // ~20 MB apiece, 360 MB for the floorplan's six portals, a gigabyte for a twelve-portal
+    // scene -- and on a drawable wider than 2048 the door was under-sampled. One per level
+    // suffices because a portal renders its framebuffer and draws from it before any sibling
+    // at the same level renders, and the nested levels use the other indices. Sized to the
+    // drawable (capped at GH_FBO_SIZE a side) by `ensure_portal_fbos`, which recreates them on
+    // a resize; borrowed immutably through the RenderCtx, since `render` is re-entrant.
+    portal_fbos: RefCell<Vec<crate::frame_buffer::FrameBuffer>>,
 }
 
 impl Engine {
@@ -204,7 +215,9 @@ impl Engine {
             shot_after_frames: Cell::new(0),
             pad_events: Cell::new(crate::ext::gamepad::PadEvents::default()),
             frame_clock: RefCell::new(crate::ext::frametime::FrameClock::new()),
-            queries: RefCell::new(Vec::new()),
+            occlusion: RefCell::new(crate::ext::occlusion::Occlusion::new(gl)),
+            pass_path: Cell::new(crate::ext::occlusion::ROOT),
+            portal_fbos: RefCell::new(Vec::new()),
         };
 
         // EXT: the title screen draws the intro level behind it (`render_menu_frame`), so the
@@ -255,6 +268,8 @@ impl Engine {
         // EXT: and the dev frame-time record. Ticked here, at the top, so one interval spans a
         // whole frame including the swap main.rs does after run_frame returns.
         self.frame_clock.borrow_mut().tick();
+        // EXT: portal framebuffers at the drawable's size, before either render path below.
+        self.ensure_portal_fbos(i_width, i_height);
         // EXT: surface any error the streamed music has queued. Here rather than further down
         // because the menu branch below returns early, and music plays under the menus too.
         self.ext.borrow_mut().audio.tick();
@@ -305,6 +320,10 @@ impl Engine {
                 self.cur_ticks.set(self.timer.get_ticks());
             }
             self.input.borrow_mut().end_frame();
+            // EXT: the clouds evolve under the menus too (they only drifted before: this
+            // was gameplay-only, and the title can sit for minutes). Same rule as below --
+            // before the viewport is set, because a bake leaves it at the panorama's size.
+            self.ext.borrow().sky.maybe_rebake(crate::ext::view::time());
             self.render_menu_frame(i_width, i_height);
             // EXT: menu frames are screenshot-able too -- `--shot` with no `--scene` is how the
             // title screen and its backdrop get photographed, and this is the only path it runs.
@@ -673,11 +692,15 @@ impl Engine {
 
         // EXT: per-scene shader state starts clean; a scene that wants it sets it in load().
         crate::ext::view::set_mood_enabled(false);
+        crate::ext::view::set_far_mood(crate::ext::view::MOOD_SUNSET);
         crate::ext::view::set_glow(crate::vector::Vector3::zero(), 0.0);
         crate::ext::view::set_wrap(0.0);
         // EXT: and so does the title screen's hold on the doors -- `run_frame` sets it again
         // every frame the title is up, so clearing it here cannot strand a door open.
         crate::ext::door::set_hold_open(false);
+        // EXT: and the one-frame-late occlusion results, which are about to name different
+        // portals.
+        self.occlusion.borrow_mut().reset();
 
         //Create new scene
         let cur_scene = Rc::clone(&self.v_scenes[ix]);
@@ -884,12 +907,15 @@ impl Engine {
         crate::ext::view::set_detail(if self.rec_level.get() >= GH_MAX_RECURSION { 1.0 } else { 0.0 });
 
         let gl: &glow::Context = &self.gl;
-        // EXT: one frustum and one eye per pass, shared by every draw below.
+        // EXT: one frustum and one eye per pass, shared by every draw below; and the shared
+        // portal framebuffers (a nested `render` takes its own shared borrow of them).
+        let portal_fbos = self.portal_fbos.borrow();
         let ctx = RenderCtx {
             gl,
             engine: self,
             frustum: crate::ext::cull::Frustum::from_view_proj(&cam.matrix()),
             eye: cam.world_view.inverse().translation(),
+            portal_fbos: &portal_fbos,
         };
 
         //Clear buffers
@@ -897,7 +923,8 @@ impl Engine {
             unsafe {
                 gl.clear(glow::DEPTH_BUFFER_BIT);
             }
-            self.sky.draw(gl, cam);
+            // EXT: `sky->Draw(cam)` (Engine.cpp:211) moves below the object loop -- see
+            // `Sky::draw` for why.
         } else {
             unsafe {
                 gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
@@ -909,6 +936,8 @@ impl Engine {
         // PORT: `GLuint drawTest[GH_MAX_PORTALS]` is left uninitialized in C++ and is only ever
         // read on the path that also writes it; zeroing it here changes nothing
         // (was: Engine.cpp:218).
+        // EXT: it now holds 1/0 for "passed samples last frame" rather than this frame's
+        // sample count; the test below is `== 0` either way.
         let mut draw_test = [0u32; GH_MAX_PORTALS];
         debug_assert!(v_portals.len() <= GH_MAX_PORTALS);
         // PORT: `glGenQueriesARB((GLsizei)vPortals.size(), queries)` (Engine.cpp:220-222) sits
@@ -923,6 +952,12 @@ impl Engine {
             for i in 0..v_objects.len() {
                 v_objects[i].borrow().draw(&ctx, cam, cur_fbo);
             }
+        }
+
+        // EXT: the sky, last, into whatever the scene left uncovered (was first, Engine.cpp:211).
+        // Before the portals: their quads are drawn over it like any other surface.
+        if GH_USE_SKY {
+            self.sky.draw(gl, cam);
         }
 
         //Draw portals if possible
@@ -948,9 +983,14 @@ impl Engine {
             }
             if self.occlusion_supported && self.rec_level.get() > 0 && any_in_view {
                 // PORT: see above -- generated here instead of at Engine.cpp:221.
-                // EXT: from a pool rather than glGenQueries/glDeleteQueries per pass; see
-                // `queries`.
-                let queries = self.query_pool(v_portals.len());
+                // EXT: from a persistent set keyed on (pass, portal) rather than
+                // glGenQueries/glDeleteQueries per pass, and the readback loop that followed
+                // (was: glGetQueryObjectuivARB(queries[i], GL_QUERY_RESULT_ARB, &drawTest[i]),
+                // Engine.cpp:243-247) is gone: that was a CPU-GPU stall per pass. `drawTest[i]`
+                // is LAST frame's answer for this slot instead, read before this frame's query
+                // is issued; see src/ext/occlusion.rs for the rule and what it changes.
+                let mut occ = self.occlusion.borrow_mut();
+                let path = self.pass_path.get();
                 unsafe {
                     gl.color_mask(false, false, false, false);
                     gl.depth_mask(false);
@@ -958,34 +998,20 @@ impl Engine {
                 for i in 0..v_portals.len() {
                     let portal = v_portals[i].borrow();
                     if Some(portal.id) != skip_portal && in_view[i] {
+                        draw_test[i] = occ.visible(path, i, v_portals.len()) as u32;
                         // PORT: the *ARB query entry points and GL_SAMPLES_PASSED_ARB become
                         // their core equivalents (was: glBeginQueryARB(GL_SAMPLES_PASSED_ARB,
                         // queries[i]), Engine.cpp:238).
-                        unsafe {
-                            gl.begin_query(glow::SAMPLES_PASSED, queries[i]);
-                        }
+                        occ.begin(path, i);
                         portal.draw_pink(&ctx, cam);
-                        unsafe {
-                            gl.end_query(glow::SAMPLES_PASSED);
-                        }
-                    }
-                }
-                for i in 0..v_portals.len() {
-                    if Some(v_portals[i].borrow().id) != skip_portal && in_view[i] {
-                        // PORT: glGetQueryObjectuivARB -> get_query_parameter_u32, which returns
-                        // the value instead of writing through a pointer
-                        // (was: Engine.cpp:245).
-                        unsafe {
-                            draw_test[i] =
-                                gl.get_query_parameter_u32(queries[i], glow::QUERY_RESULT);
-                        }
+                        occ.end();
                     }
                 }
                 unsafe {
                     gl.color_mask(true, true, true, true);
                     gl.depth_mask(true);
                 }
-                // PORT: glDeleteQueriesARB(n, queries) (Engine.cpp:250) -- the pool keeps them.
+                // PORT: glDeleteQueriesARB(n, queries) (Engine.cpp:250) -- the set keeps them.
             }
             for i in 0..v_portals.len() {
                 let portal = v_portals[i].borrow();
@@ -998,7 +1024,12 @@ impl Engine {
                     {
                         continue;
                     } else {
+                        // EXT: name the nested pass by the portal it is seen through, for its
+                        // own occlusion slots; the outer name is put back when it returns.
+                        let outer = self.pass_path.get();
+                        self.pass_path.set(crate::ext::occlusion::push(outer, i));
                         portal.draw(&ctx, cam, cur_fbo);
+                        self.pass_path.set(outer);
                     }
                 }
             }
@@ -1019,12 +1050,10 @@ impl Engine {
         }
         self.v_objects.borrow_mut().clear();
         self.v_portals.borrow_mut().clear();
-        // EXT: the query pool goes with them, while the context is still current.
-        unsafe {
-            for q in self.queries.borrow_mut().drain(..) {
-                self.gl.delete_query(q);
-            }
-        }
+        // EXT: the occlusion queries and the portal framebuffers go with them, while the
+        // context is still current.
+        self.occlusion.borrow_mut().destroy();
+        self.portal_fbos.borrow_mut().clear();
     }
 
     // float Engine::NearestPortalDist() const   (Engine.cpp:477-483)
@@ -1136,16 +1165,23 @@ impl Engine {
         crate::ext::view::set_fov(ext.sprint.ease_fov(crate::ext::view::time(), sprinting));
     }
 
-    /// EXT: at least `n` occlusion queries from the pool (see the `queries` field). Returns a
-    /// copy of the handles so the borrow does not outlive the call; `glow::Query` is `Copy`.
-    fn query_pool(&self, n: usize) -> Vec<glow::Query> {
-        let mut pool = self.queries.borrow_mut();
-        while pool.len() < n {
-            unsafe {
-                pool.push(self.gl.create_query().expect("glGenQueries failed"));
-            }
+    /// EXT: (re)create the portal framebuffers at the drawable's size -- see `portal_fbos`.
+    /// A no-op on every frame the size has not changed. The old set is dropped before the new
+    /// one is built so the two never coexist.
+    fn ensure_portal_fbos(&self, width: i32, height: i32) {
+        let w = width.clamp(1, GH_FBO_SIZE);
+        let h = height.clamp(1, GH_FBO_SIZE);
+        let mut fbos = self.portal_fbos.borrow_mut();
+        if fbos.first().is_some_and(|f| f.width == w && f.height == h) {
+            return;
         }
-        pool[..n].to_vec()
+        fbos.clear();
+        // PORT: `GH_MAX_RECURSION <= 1 ? 1 : GH_MAX_RECURSION - 1` (Portal.h:43): level 1's
+        // portals draw pink and need no target.
+        let n = if GH_MAX_RECURSION <= 1 { 1 } else { GH_MAX_RECURSION - 1 };
+        for _ in 0..n {
+            fbos.push(crate::frame_buffer::FrameBuffer::new(&self.gl, w, h));
+        }
     }
 
     /// EXT: reach the ported `Input` so the platform layer can write gamepad axes into it.
