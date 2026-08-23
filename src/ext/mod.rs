@@ -33,6 +33,8 @@
 //! | `grassgen` | The blade patch itself, generated in-process and bucketed for culling |
 //! | `trimesh`  | Triangle-mesh collision (parry3d) beside the ported rectangles   |
 //! | `backrooms` | The scanned, light-baked Backrooms as solid scenery             |
+//! | `gltf_prop` | Any glTF model as a scene object, with collision and its own clips |
+//! | `glbview`  | `--view-glb`: a scene of one model, for looking at a file          |
 //! | `sprint`   | Running: Shift to hold, L3 to toggle, with an FOV kick and footsteps |
 //! | `scenes`   | The scene registry: key, name and constructor, one table in key order |
 //! | `scissor`  | Portal passes scissored to the quad's screen footprint           |
@@ -46,7 +48,9 @@ pub mod cull;
 pub mod door;
 pub mod frametime;
 pub mod gamepad;
+pub mod glbview;
 pub mod gltf_model;
+pub mod gltf_prop;
 pub mod grab;
 pub mod grassfield;
 pub mod grassgen;

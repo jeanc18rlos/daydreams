@@ -43,6 +43,10 @@ pub const MOOD_INTERIOR: f32 = 2.0;
 thread_local! {
     static MOOD_ENABLED: Cell<bool> = const { Cell::new(false) };
     static FAR_MOOD: Cell<f32> = const { Cell::new(MOOD_SUNSET) };
+    /// One mood for every eye, split or no split: a scene that is all one world -- a level
+    /// that IS an interior, with no meadow on the near side of anything -- sets it, and
+    /// `mood_for` answers it without looking at the eye. `None` is the split logic below.
+    static SCENE_MOOD: Cell<Option<f32>> = const { Cell::new(None) };
     static GLOW: Cell<[f32; 4]> = const { Cell::new([0.0; 4]) };
     /// 1.0 while drawing the main view, 0.0 inside a portal's framebuffer.
     static DETAIL: Cell<f32> = const { Cell::new(1.0) };
@@ -75,11 +79,27 @@ pub fn set_far_mood(mood: f32) {
     FAR_MOOD.with(|m| m.set(mood));
 }
 
+/// Grade the whole scene as `mood`, wherever a pass's eye is: for a scene without the meadow
+/// split -- one that is an interior from the first step (`MOOD_INTERIOR`), say. Overrides the
+/// split while set; `set_mood_enabled` / `set_far_mood` keep working for the split levels, which
+/// never call this. Reset on every scene load, like the rest.
+pub fn set_scene_mood(mood: f32) {
+    SCENE_MOOD.with(|m| m.set(Some(mood)));
+}
+
+/// Back to the split logic (or plain daylight): what `load_scene` calls.
+pub fn clear_scene_mood() {
+    SCENE_MOOD.with(|m| m.set(None));
+}
+
 /// Mood for a render pass whose camera eye is at `eye`:
 ///   -1 = plain daylight (scenes without the split),
-///    0 = storm (intro meadow), 1 = sunset / 2 = interior (the world behind the door).
+///    0 = storm (intro meadow), 1 = sunset / 2 = interior (the world behind the door);
+/// or the scene's one mood, if it set one (`set_scene_mood`).
 pub fn mood_for(eye: crate::vector::Vector3) -> f32 {
-    if !MOOD_ENABLED.with(|m| m.get()) {
+    if let Some(scene) = SCENE_MOOD.with(|m| m.get()) {
+        scene
+    } else if !MOOD_ENABLED.with(|m| m.get()) {
         -1.0
     } else if eye.x > MOOD_SPLIT_X {
         FAR_MOOD.with(|m| m.get())
@@ -167,6 +187,27 @@ mod tests {
         set_far_mood(MOOD_SUNSET);
         set_mood_enabled(false);
         assert_eq!(mood_for(far), -1.0);
+    }
+
+    /// A whole-scene mood answers for every eye and steps aside when cleared, leaving the
+    /// split logic as it was.
+    #[test]
+    fn scene_mood_overrides_the_split_for_every_eye() {
+        use crate::vector::Vector3;
+        let near = Vector3::new(0.0, 1.0, 0.0);
+        let far = Vector3::new(MOOD_SPLIT_X + 10.0, 1.0, 0.0);
+        set_mood_enabled(true);
+        set_scene_mood(MOOD_INTERIOR);
+        assert_eq!(mood_for(near), MOOD_INTERIOR);
+        assert_eq!(mood_for(far), MOOD_INTERIOR);
+        clear_scene_mood();
+        assert_eq!(mood_for(near), 0.0, "the split is back");
+        assert_eq!(mood_for(far), MOOD_SUNSET);
+        set_mood_enabled(false);
+        set_scene_mood(MOOD_INTERIOR);
+        assert_eq!(mood_for(near), MOOD_INTERIOR, "with no split at all it still answers");
+        clear_scene_mood();
+        assert_eq!(mood_for(near), -1.0);
     }
 
     #[test]

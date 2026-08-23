@@ -25,6 +25,7 @@ uniform vec4 base_color;  // glTF baseColorFactor
 uniform vec4 emissive;    // emissiveFactor x KHR_materials_emissive_strength, unclamped
 uniform vec4 fog_color;   // what the far end fades to; rgb used
 uniform vec4 cam_pos;
+uniform float alpha_cutoff; // discard below this map alpha; negative = no test
 
 in vec2 ex_uv;
 in vec3 ex_world;
@@ -32,9 +33,16 @@ in vec3 ex_world;
 out vec4 fragColor;
 
 void main(void) {
+	vec4 map = texture(tex, ex_uv);
+	// The alpha test (src/ext/gltf_model.rs, "Alpha"): the map's alpha as shipped times the
+	// factor's, against the material's cutoff.
+	float a = map.a * base_color.a;
+	if (a < alpha_cutoff) {
+		discard;
+	}
 	// There is no HDR target here, so a strength of 10 means "saturate": the red exit lamps and
 	// the white diffusers clip to pure colour, which is what they look like in the reference.
-	vec3 col = clamp(texture(tex, ex_uv).rgb * base_color.rgb + emissive.rgb, 0.0, 1.0);
+	vec3 col = clamp(map.rgb * base_color.rgb + emissive.rgb, 0.0, 1.0);
 
 	// Squared-distance falloff rather than linear: nothing within arm's reach is touched
 	// (1% at 5 units), the 23-unit hall end is softened (19%), and the far end of the maze
@@ -43,5 +51,6 @@ void main(void) {
 	float fog = 1.0 - exp(-d * d);
 	col = mix(col, fog_color.rgb, fog);
 
-	fragColor = vec4(col, 1.0);
+	// The alpha only matters in the translucent pass, where blending is on.
+	fragColor = vec4(col, a);
 }

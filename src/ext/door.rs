@@ -23,7 +23,7 @@
 //! portal at `portal_transform()` themselves.
 
 use crate::camera::Camera;
-use crate::ext::gltf_model::{Anchor, Fit, GltfModel, Load, PartSpec};
+use crate::ext::gltf_model::{Anchor, Fit, Frame, GltfModel, Load, PartSpec};
 use crate::object::{Object, ObjectT, RenderCtx, UpdateCtx};
 use crate::resources::Resources;
 use crate::shader::Shader;
@@ -157,9 +157,10 @@ impl Door {
                     PartSpec {
                         name: "leaf",
                         roots: &["MatrixTransform_37", "Door4_Handle"],
+                        skip: &[],
                         // ...but keep that node's TRANSLATION, or the leaf loses its position
                         // in the assembly and the frame has to be re-aligned to it by hand.
-                        pre: Some("Door"),
+                        frame: Frame::Translated("Door"),
                         // Origin ON THE HINGE: Object rotates about its own origin, so the
                         // leaf's local x=0 must be its hinge edge or it would orbit instead of
                         // swing.
@@ -168,12 +169,14 @@ impl Door {
                     PartSpec {
                         name: "frame",
                         roots: &["Door4_Frame"],
-                        pre: None,
+                        skip: &[],
+                        frame: Frame::Local,
                         anchor: Anchor::Around("leaf"),
                     },
                 ],
                 fit: Fit::Part { part: "leaf", height: HALF_H * 2.0 },
                 max_map: MAP,
+                translucent: &[],
             },
         );
 

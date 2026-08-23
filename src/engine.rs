@@ -474,7 +474,7 @@ impl Engine {
     /// print how far they travelled.
     pub fn start_direct(
         &self,
-        scene: Option<usize>,
+        scene: Option<crate::app::cli::DirectScene>,
         shot: Option<std::path::PathBuf>,
         frames: i32,
         yaw: f32,
@@ -482,12 +482,21 @@ impl Engine {
         pos: Option<[f32; 3]>,
         hold: &[usize],
     ) {
+        use crate::app::cli::DirectScene;
         *self.dev_hold.borrow_mut() = hold.to_vec();
         if let Some(scene) = scene {
             self.ext.borrow_mut().menu.close();
-            // In range: the command line checks the index against the registry, and
-            // `v_scenes` is built from the same table.
-            self.load_scene(scene);
+            match scene {
+                // In range: the command line checks the index against the registry, and
+                // `v_scenes` is built from the same table.
+                DirectScene::Index(ix) => self.load_scene(ix),
+                // Not a registry scene: loaded in its place, and `cur_scene_ix` stays on the
+                // intro, so RESTART LEVEL and the level list lead back to registered scenes.
+                DirectScene::Glb { path, translucent } => self.load_scene_from(
+                    self.cur_scene_ix.get(),
+                    Rc::new(crate::ext::glbview::GlbViewer::new(path, translucent)),
+                ),
+            }
             self.player.borrow_mut().set_look(yaw.to_radians(), pitch.to_radians());
             if let Some(p) = pos {
                 self.player
@@ -654,6 +663,12 @@ impl Engine {
 
     // void Engine::LoadScene(int ix)   (Engine.cpp:133-144)
     pub fn load_scene(&self, ix: usize) {
+        self.load_scene_from(ix, Rc::clone(&self.v_scenes[ix]));
+    }
+
+    /// EXT: the body of `load_scene`, for a scene that is not in the registry (`--view-glb`):
+    /// `ix` is what `cur_scene_ix` records, `scene` what is loaded.
+    fn load_scene_from(&self, ix: usize, cur_scene: Rc<dyn Scene>) {
         // EXT: timed, because the title -> NEW GAME transition reloads this same scene and the
         // stall it costs is the number the resource caches are measured by.
         let t0 = std::time::Instant::now();
@@ -682,6 +697,7 @@ impl Engine {
         // EXT: per-scene shader state starts clean; a scene that wants it sets it in load().
         crate::ext::view::set_mood_enabled(false);
         crate::ext::view::set_far_mood(crate::ext::view::MOOD_SUNSET);
+        crate::ext::view::clear_scene_mood();
         crate::ext::view::set_glow(crate::vector::Vector3::zero(), 0.0);
         crate::ext::view::set_wrap(0.0);
         // EXT: and so does the title screen's hold on the doors -- `run_frame` sets it again
@@ -692,7 +708,6 @@ impl Engine {
         self.occlusion.borrow_mut().reset();
 
         //Create new scene
-        let cur_scene = Rc::clone(&self.v_scenes[ix]);
         *self.cur_scene.borrow_mut() = Some(Rc::clone(&cur_scene));
         // PORT: the level code cannot reach the GL context or the resource caches through
         // globals, so both are passed to Load (was: curScene->Load(vObjects, vPortals, *player),

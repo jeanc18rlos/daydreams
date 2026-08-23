@@ -34,7 +34,7 @@
 //! left the player standing in the dark under the floor for ever.
 
 use crate::camera::Camera;
-use crate::ext::gltf_model::{Anchor, Fit, GltfModel, Load, PartSpec};
+use crate::ext::gltf_model::{Anchor, Fit, Frame, GltfModel, Load, PartSpec};
 use crate::ext::trimesh::TriMeshCollider;
 use crate::object::{Object, ObjectT, RenderCtx};
 use crate::resources::Resources;
@@ -78,13 +78,14 @@ pub const FALL_DEPTH: f32 = 0.5;
 const PARTS: [PartSpec<'static>; 1] = [PartSpec {
     name: PART,
     roots: &["Sketchfab_model"],
-    pre: None,
+    skip: &[],
+    frame: Frame::Local,
     // Irrelevant under Fit::Identity, which is the point of it.
     anchor: Anchor::Hinge,
 }];
 
 fn load_spec() -> Load<'static> {
-    Load { path: MODEL, parts: &PARTS, fit: Fit::Identity, max_map: MAP }
+    Load { path: MODEL, parts: &PARTS, fit: Fit::Identity, max_map: MAP, translucent: &[] }
 }
 
 /// Whether a player whose position (eye height, as `Player` keeps it) is `pos` has fallen
@@ -175,7 +176,7 @@ const CAP_DROP: f32 = 0.05;
 /// brown as the fog target there was a 1-3 px band of it along the whole horizon.
 const CAP_COLOR: [f32; 4] = [0.030, 0.024, 0.016, 1.0];
 
-/// A dark, unlit plane under the whole building and far past it.
+/// A dark, unlit plane under a whole interior and far past it.
 ///
 /// The scan's walls are single-sided and not every outer doorway leads anywhere, so from some
 /// spots the player can see out of the model -- and without this they saw the meadow's sky
@@ -196,12 +197,17 @@ pub struct GroundCap {
 }
 
 impl GroundCap {
+    /// Under the building: its world bounds and its carpet level.
     pub fn new(res: &Resources, rooms: &Backrooms) -> GroundCap {
-        let (lo, hi) = rooms.world_bounds();
+        GroundCap::under(res, rooms.world_bounds(), rooms.carpet_y())
+    }
+
+    /// Under any interior whose world-space bounds are `(lo, hi)` and whose floor is at world
+    /// `floor_y` -- what `--view-glb` puts beneath a model it knows nothing else about.
+    pub fn under(res: &Resources, (lo, hi): (Vector3, Vector3), floor_y: f32) -> GroundCap {
         let mut base = Object::new();
         base.mesh = Some(res.acquire_mesh("double_quad.obj"));
-        base.pos =
-            Vector3::new(0.5 * (lo.x + hi.x), rooms.carpet_y() - CAP_DROP, 0.5 * (lo.z + hi.z));
+        base.pos = Vector3::new(0.5 * (lo.x + hi.x), floor_y - CAP_DROP, 0.5 * (lo.z + hi.z));
         // The quad is in its own xy plane; a quarter turn about x lays it flat, and then its
         // local y is world z.
         base.euler.x = -std::f32::consts::FRAC_PI_2;
@@ -241,6 +247,7 @@ impl ObjectT for GroundCap {
         self.shader.set_vec4("base_color", CAP_COLOR);
         self.shader.set_vec4("fog_color", CAP_COLOR);
         self.shader.set_vec4("emissive", [0.0; 4]);
+        self.shader.set_f32("alpha_cutoff", -1.0);
         self.shader.set_i32("tex", 0);
         self.white.use_texture();
         self.base.mesh.as_ref().expect("set in new").draw();

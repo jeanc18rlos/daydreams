@@ -385,9 +385,10 @@ impl ApplicationHandler for App {
             let engine = Engine::new(self.gl.as_ref().unwrap());
             engine.start_run();
             // EXT: dev flags -- direct scene start and/or screenshot-and-quit.
-            if self.args.scene.is_some() || self.args.shot.is_some() {
+            let direct = self.args.direct_scene();
+            if direct.is_some() || self.args.shot.is_some() {
                 engine.start_direct(
-                    self.args.scene,
+                    direct,
                     self.args.shot.clone(),
                     // `u32` on the command line (a negative count is a parse error there);
                     // the engine counts down in an `i32`.

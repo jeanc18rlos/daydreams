@@ -76,6 +76,18 @@ pub struct Args {
     #[arg(long, hide = true)]
     pub panic_test: bool,
 
+    /// Skip the title and open a scene holding only this glTF model, at its own scale, under
+    /// interior lighting (src/ext/glbview.rs): a screenshot of any file is one command. The
+    /// path is taken relative to the working directory when it exists there, else relative
+    /// to the asset root. Hidden: a loader tool, not a feature. Excludes `--scene`.
+    #[arg(long, hide = true, value_name = "PATH", conflicts_with = "scene", value_parser = parse_glb)]
+    pub view_glb: Option<String>,
+
+    /// With `--view-glb`: material names, comma-separated, to draw translucent rather than
+    /// alpha-tested (`gltf_model::Load::translucent`).
+    #[arg(long, hide = true, value_name = "NAMES", requires = "view_glb", value_delimiter = ',')]
+    pub view_translucent: Vec<String>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -84,6 +96,15 @@ pub struct Args {
 pub enum Command {
     /// Regenerate Meshes/meadow_tile.obj from ext::terrain::height and exit.
     GenTerrain,
+}
+
+/// What the game starts on instead of the title, when a dev flag says so.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DirectScene {
+    /// `--scene N`: the registry's scene N.
+    Index(usize),
+    /// `--view-glb PATH [--view-translucent A,B]`: a scene of that one model.
+    Glb { path: String, translucent: Vec<String> },
 }
 
 /// A scene index, checked against the registry at parse time so that `--scene 99` is a usage
@@ -97,6 +118,18 @@ fn parse_scene(s: &str) -> Result<usize, String> {
         return Err(format!("{n} is not a scene; the registry has 0..={last}"));
     }
     Ok(n)
+}
+
+/// A model path for `--view-glb`: made absolute when it names a file under the working
+/// directory, so that `--view-glb ~/Downloads/x.glb` and `--view-glb Meshes/x.glb` both work
+/// -- the loader joins a relative path onto the asset root, which a download is not under.
+fn parse_glb(s: &str) -> Result<String, String> {
+    let p = std::path::Path::new(s);
+    if p.is_relative() && p.is_file() {
+        let abs = std::path::absolute(p).map_err(|e| format!("'{s}': {e}"))?;
+        return abs.into_os_string().into_string().map_err(|_| format!("'{s}': not UTF-8"));
+    }
+    Ok(s.to_string())
 }
 
 /// `x,y,z`, each an f32. The old parser kept whichever components parsed and then dropped
@@ -136,6 +169,17 @@ impl Args {
                 .map(OsString::from)
                 .filter(|a| !is_process_serial(a)),
         )
+    }
+
+    /// The scene to start on instead of the title, if a dev flag asked for one.
+    pub fn direct_scene(&self) -> Option<DirectScene> {
+        if let Some(n) = self.scene {
+            return Some(DirectScene::Index(n));
+        }
+        self.view_glb.as_ref().map(|path| DirectScene::Glb {
+            path: path.clone(),
+            translucent: self.view_translucent.clone(),
+        })
     }
 
     /// The key slots `--forward` / `--strafe` / `--sprint` hold down every frame
@@ -213,6 +257,37 @@ mod tests {
         assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
         assert!(err.to_string().contains(&format!("0..={last}")), "{err}");
         assert!(Args::try_from_tokens(&["--scene", "99"]).is_err());
+    }
+
+    #[test]
+    fn view_glb_is_a_direct_scene_and_excludes_scene() {
+        let a = Args::try_from_tokens(&["--view-glb", "/x/y.glb"]).unwrap();
+        assert_eq!(
+            a.direct_scene(),
+            Some(DirectScene::Glb { path: "/x/y.glb".into(), translucent: vec![] })
+        );
+        let a = Args::try_from_tokens(&[
+            "--view-glb",
+            "/x/y.glb",
+            "--view-translucent",
+            "Water.002,Glass",
+        ])
+        .unwrap();
+        assert_eq!(a.view_translucent, vec!["Water.002", "Glass"]);
+        assert!(matches!(a.direct_scene(), Some(DirectScene::Glb { .. })));
+        // A path that exists under the working directory is made absolute; one that does
+        // not is passed through for the asset root to resolve.
+        let a = Args::try_from_tokens(&["--view-glb", "Cargo.toml"]).unwrap();
+        assert!(std::path::Path::new(a.view_glb.as_deref().unwrap()).is_absolute());
+        let a = Args::try_from_tokens(&["--view-glb", "Meshes/nope.glb"]).unwrap();
+        assert_eq!(a.view_glb.as_deref(), Some("Meshes/nope.glb"));
+        assert!(Args::try_from_tokens(&["--view-glb", "/x.glb", "--scene", "1"]).is_err());
+        assert!(Args::try_from_tokens(&["--view-translucent", "Water"]).is_err());
+        assert_eq!(
+            Args::try_from_tokens(&["--scene", "3"]).unwrap().direct_scene(),
+            Some(DirectScene::Index(3))
+        );
+        assert_eq!(Args::try_from_tokens(&[]).unwrap().direct_scene(), None);
     }
 
     #[test]

@@ -7,17 +7,31 @@ precision highp float;
 // shader -- and no ambient term, no specular and no sRGB anywhere. This shader stays inside that
 // world rather than importing a real PBR pipeline: it adds only what the ported `texture` shader
 // cannot express and the model actually carries, namely tangent-space normals, per-material
-// metalness, and occlusion. Then it applies the SAME weather grade and light pool as the ground
-// and grass, so glTF geometry sits in the scene instead of on top of it.
+// metalness, occlusion and emission. Then it applies the SAME weather grade and light pool as
+// the ground and grass, so glTF geometry sits in the scene instead of on top of it.
+//
+// INTERIORS (mood > 1.5) are the exception: a Sketchfab room was authored for a lit scene, not
+// baked, and the outdoor sun would light its ceiling from below and its far wall at noon. Inside,
+// the sun is replaced by a hemisphere -- warm white from above, a dim brown bounce from the
+// floor -- a small constant ambient, a damped overhead specular, and the material's own
+// emission, which is what the ceiling lights and exit signs are made of.
 
 #define LIGHT vec3(0.36, 0.80, 0.48)
+// The interior hemisphere: what faces up is lit by the room's lamps, what faces down by the
+// floor's bounce. Plus a floor of light nothing falls below, so a cupboard's underside is dim
+// rather than black.
+#define HEMI_UP vec3(0.90, 0.864, 0.792)
+#define HEMI_DOWN vec3(0.25, 0.22, 0.18)
+#define AMBIENT vec3(0.06)
 
-uniform sampler2D tex;    // RGB = base colour, A = ambient occlusion
+uniform sampler2D tex;    // RGB = base colour, A = base alpha (1 for an OPAQUE material)
 uniform sampler2D tex2;   // RG = tangent-space normal xy, B = roughness, A = metalness
+uniform sampler2D tex3;   // RGB = emissive (factor and strength applied), A = ambient occlusion
 uniform vec4 cam_pos;
 uniform float mood;       // -1 daylight, 0 storm, 1 sunset, 2 interior (src/ext/view.rs)
 uniform vec4 glow;        // intro door light pool (xyz, strength)
 uniform float detail;     // 1 in the main view, 0 inside a portal framebuffer
+uniform float alpha_cutoff; // discard below this base alpha; negative = no test
 
 in vec2 ex_uv;
 in vec3 ex_normal;
@@ -29,9 +43,15 @@ out vec4 fragColor;
 
 void main(void) {
 	vec4 alb = texture(tex, ex_uv);
+	// The alpha test, before any lighting is paid for. A BLEND material not named translucent
+	// and a MASK material both come through here (src/ext/gltf_model.rs, "Alpha").
+	if (alb.a < alpha_cutoff) {
+		discard;
+	}
 	vec4 srf = texture(tex2, ex_uv);
+	vec4 light = texture(tex3, ex_uv);
 	vec3 base = alb.rgb;
-	float ao = alb.a;
+	float ao = light.a;
 	float rough = clamp(srf.b, 0.06, 1.0);
 	float metal = srf.a;
 
@@ -60,39 +80,63 @@ void main(void) {
 		n = -n;
 	}
 
-	vec3 L = normalize(LIGHT);
-	// Wrap lighting, matching Shaders/texture.frag:15 -- a hard terminator would make this the
-	// only object in the game with one.
-	float ndl = dot(n, L) * 0.5 + 0.5;
-	vec3 sky = vec3(0.42, 0.52, 0.62);
+	// Blinn-Phong standing in for a GGX lobe: same shape where it matters, a fraction of the
+	// cost, and there is no environment map here for a real one to sample anyway. Grazing
+	// angles reflect more, whatever the material -- this is what stops painted surfaces
+	// reading as matte cardboard.
+	float gloss = exp2(mix(4.0, 11.0, 1.0 - rough));
+	float f = 0.04 + 0.96 * pow(clamp(1.0 - max(dot(n, V), 0.0), 0.0, 1.0), 5.0);
+	vec3 tint = mix(vec3(1.0), base, metal);
+	vec3 R = reflect(-V, n);
 
-	// Metals have no diffuse; dielectrics keep their colour. Painted joinery is a dielectric,
-	// the lever handle is not, and that difference is the whole reason for carrying metalness.
-	vec3 diffuse = base * (1.0 - metal) * (ndl * 0.95 + 0.20);
-	diffuse += base * (1.0 - metal) * sky * 0.18;
+	vec3 col;
+	if (mood > 1.5) {
+		// INTERIOR: hemisphere plus ambient on the diffuse; metals have no diffuse and
+		// reflect the same hemisphere instead. The specular comes from straight overhead
+		// -- the ceiling's lamps -- and is damped, because a room's light is broad and its
+		// highlights soft.
+		vec3 hemi = mix(HEMI_DOWN, HEMI_UP, n.y * 0.5 + 0.5) + AMBIENT;
+		col = base * (1.0 - metal) * hemi * ao;
+		if (detail > 0.5) {
+			vec3 H = normalize(vec3(0.0, 1.0, 0.0) + V);
+			float spec = pow(max(dot(n, H), 0.0), gloss);
+			col += tint * spec * mix(f, 1.0, metal) * (1.0 - rough * 0.7) * 0.35;
+			vec3 env = mix(HEMI_DOWN, HEMI_UP, clamp(R.y * 0.5 + 0.5, 0.0, 1.0));
+			col += base * env * metal * mix(0.35, 1.0, 1.0 - rough) * ao;
+		}
+	} else {
+		vec3 L = normalize(LIGHT);
+		// Wrap lighting, matching Shaders/texture.frag:15 -- a hard terminator would make
+		// this the only object in the game with one.
+		float ndl = dot(n, L) * 0.5 + 0.5;
+		vec3 sky = vec3(0.42, 0.52, 0.62);
 
-	vec3 col = diffuse * ao;
+		// Metals have no diffuse; dielectrics keep their colour. Painted joinery is a
+		// dielectric, the lever handle is not, and that difference is the whole reason for
+		// carrying metalness.
+		vec3 diffuse = base * (1.0 - metal) * (ndl * 0.95 + 0.20);
+		diffuse += base * (1.0 - metal) * sky * 0.18;
 
-	if (detail > 0.5) {
-		// Blinn-Phong standing in for a GGX lobe: same shape where it matters, a fraction of
-		// the cost, and there is no environment map here for a real one to sample anyway.
-		vec3 H = normalize(L + V);
-		float gloss = exp2(mix(4.0, 11.0, 1.0 - rough));
-		float spec = pow(max(dot(n, H), 0.0), gloss);
-		// Grazing angles reflect more, whatever the material -- this is what stops painted
-		// surfaces reading as matte cardboard.
-		float f = 0.04 + 0.96 * pow(clamp(1.0 - max(dot(n, V), 0.0), 0.0, 1.0), 5.0);
-		vec3 tint = mix(vec3(1.0), base, metal);
-		col += tint * spec * mix(f, 1.0, metal) * (1.0 - rough * 0.7);
-		// A metal has NO diffuse, so with nothing to reflect it renders black -- which is what
-		// happened to the lever handle. There is no environment map in this engine, so fake one:
-		// a ground colour below, sky above, picked by the reflected ray's height. Rough metal
-		// still reflects, just blurrily, so the falloff must not go to zero with roughness --
-		// that alone was most of why the handle was a black smudge.
-		vec3 R = reflect(-V, n);
-		vec3 env = mix(vec3(0.26, 0.28, 0.30), sky * 1.7, clamp(R.y * 0.5 + 0.5, 0.0, 1.0));
-		col += base * env * metal * mix(0.35, 1.0, 1.0 - rough) * 1.5 * ao;
+		col = diffuse * ao;
+
+		if (detail > 0.5) {
+			vec3 H = normalize(L + V);
+			float spec = pow(max(dot(n, H), 0.0), gloss);
+			col += tint * spec * mix(f, 1.0, metal) * (1.0 - rough * 0.7);
+			// A metal has NO diffuse, so with nothing to reflect it renders black -- which
+			// is what happened to the lever handle. There is no environment map in this
+			// engine, so fake one: a ground colour below, sky above, picked by the
+			// reflected ray's height. Rough metal still reflects, just blurrily, so the
+			// falloff must not go to zero with roughness -- that alone was most of why the
+			// handle was a black smudge.
+			vec3 env = mix(vec3(0.26, 0.28, 0.30), sky * 1.7, clamp(R.y * 0.5 + 0.5, 0.0, 1.0));
+			col += base * env * metal * mix(0.35, 1.0, 1.0 - rough) * 1.5 * ao;
+		}
 	}
+
+	// Emission: factor and strength were applied and clamped at load, so a strength of 10
+	// simply saturates -- there is no HDR target for it to mean more than that.
+	col += light.rgb;
 
 	// The open door spills warm light around itself. Applied BEFORE the weather grade and
 	// multiplied into the existing colour, so it reads as light in the scene rather than yellow
@@ -111,9 +155,9 @@ void main(void) {
 	vec3 haze = vec3(0.74, 0.82, 0.90);
 	if (mood > 1.5) {
 		// INTERIOR: no grade at all -- the Backrooms' return door is lit by the building's own
-		// painted-in lamps, and the only thing a sunset grade did to it was turn its white
-		// paint pink. The haze goes toward the dark warm tone the unlit walls fade to
-		// (Shaders/gltfunlit.frag), so the door sits in the same air as the hall around it.
+		// lamps (the hemisphere above), and the only thing a sunset grade did to it was turn
+		// its white paint pink. The haze goes toward the dark warm tone the unlit walls fade
+		// to (Shaders/gltfunlit.frag), so the door sits in the same air as the hall around it.
 		haze = vec3(0.10, 0.08, 0.05);
 	} else if (mood > 0.5) {
 		col *= vec3(1.02, 0.80, 0.68);
@@ -127,5 +171,7 @@ void main(void) {
 	float fog = 1.0 - exp(-dist * 0.0080);
 	col = mix(col, haze, fog * 0.9);
 
-	fragColor = vec4(col, 1.0);
+	// The alpha only matters in the translucent pass, where blending is on; everywhere else
+	// the framebuffer ignores it.
+	fragColor = vec4(col, alb.a);
 }

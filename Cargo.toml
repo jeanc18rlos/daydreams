@@ -37,8 +37,11 @@ kira = "0.12.3"
 # Decodes the PNGs embedded in a GLB. Already pulled in by gltf's "import" feature; named here
 # because src/ext/gltf_model.rs resizes and repacks the maps itself rather than taking gltf's
 # decoded images wholesale (six 4096-square RGBA maps would be 400 MB resident).
-image = { version = "0.25.10", default-features = false, features = ["png"] }
-gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "KHR_materials_unlit", "KHR_materials_emissive_strength"] }
+# "jpeg" beside "png": the Sketchfab levels ship their larger colour maps as JPEG.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+# KHR_texture_transform: the pool's marble and the overgrown room's moss tile their maps
+# through it; the loader bakes it into the UVs.
+gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "KHR_materials_unlit", "KHR_materials_emissive_strength", "KHR_texture_transform"] }
 # Triangle-mesh collision for scanned scenery (src/ext/trimesh.rs): `TriMesh`, its BVH, point
 # projection and ray casts. Those live behind "alloc"; "required-features" is the crate's own
 # dim3 + f32 pair, which it refuses to build without; "std" for the allocator-backed BVH. What
