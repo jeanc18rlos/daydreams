@@ -34,7 +34,6 @@ use std::rc::Rc;
 use crate::ext::backrooms::{fell_out, Backrooms, GroundCap, DOOR_FACING};
 use crate::ext::bounds::bounds_box;
 use crate::ext::meadow::{door_with_portal, load_meadow, FAR};
-use crate::ext::painting::{Painting, Watch};
 use crate::ext::room::{request_respawn, Respawn, RoomLogic};
 use crate::ext::view;
 use crate::game_header::GH_PLAYER_HEIGHT;
@@ -55,16 +54,6 @@ const FENCE_MARGIN: f32 = 1.0;
 /// door, at standing height on the carpet, which is where walking through it lands them. They
 /// face down the hall, away from the door, as they would have on arrival.
 const ARRIVAL: Vector3 = Vector3 { x: FAR.x - 1.0, y: FAR.y + GH_PLAYER_HEIGHT, z: FAR.z };
-
-/// The hall's wall faces in world z (`backrooms::DOOR_SPOT` puts model z = 3.48 and 7.07 here),
-/// and the clearance a painting's back keeps from the scan so the two never z-fight.
-const HALL_SOUTH_Z: f32 = -1.52;
-const HALL_NORTH_Z: f32 = 2.07;
-const WALL_GAP: f32 = 0.02;
-/// Portraits: centre height, and width x height. Eye level for a standing player is 1.5, so
-/// the sitter's eyes -- a little above the canvas centre -- are just above the viewer's.
-const PAINTING_HEIGHT: f32 = 1.6;
-const PAINTING_SIZE: (f32, f32) = (0.8, 1.0);
 
 impl Scene for Level16 {
     fn load(
@@ -124,22 +113,37 @@ impl Scene for Level16 {
         // Walk in here, walk out there -- and back.
         connect(&meadow.here, &there);
 
-        // ── Portraits along the hall, watching. Five on the north wall, three on the south,
-        // each a hair off its wall face (`WALL_Z`) so nothing is coplanar with the scan. The
-        // watch is taken now, after both doors exist, so a painting knows it is being looked
-        // at through the meadow door as well as from the carpet.
-        let watch = Watch::new(objs, portals);
-        let hang = |x: f32, wall_z: f32, facing_z: f32, seed: u32| {
-            let centre = Vector3::new(x, PAINTING_HEIGHT, wall_z + facing_z * WALL_GAP);
-            let facing = Vector3::new(0.0, 0.0, facing_z);
-            Painting::new(res, centre, facing, PAINTING_SIZE, seed, watch.clone())
-        };
-        let north =
-            [981.0, 985.0, 989.0, 993.0, 997.0].into_iter().map(|x| (x, HALL_NORTH_Z, -1.0));
-        let south = [983.0, 991.0, 999.0].into_iter().map(|x| (x, HALL_SOUTH_Z, 1.0));
-        for (seed, (x, wall_z, facing_z)) in north.chain(south).enumerate() {
-            objs.push(Rc::new(RefCell::new(hang(x, wall_z, facing_z, seed as u32)))
-                as Rc<RefCell<dyn ObjectT>>);
+        // ── Portraits along the hall, watching (`ext/painting.rs`). Five on the north wall,
+        // three on the south, each a hair off its wall face so nothing is coplanar with the
+        // scan. The watch is taken now, after both doors exist, so a painting knows it is
+        // being looked at through the meadow door as well as from the carpet.
+        {
+            use crate::ext::painting::{Painting, Watch};
+            /// The hall's wall faces in world z: `backrooms::DOOR_SPOT` puts model z = 3.48 and
+            /// 7.07 here (the scan's walls are planes; a ray probe along the hall finds them
+            /// at -1.5214 and 2.0721 at every x).
+            const HALL_SOUTH_Z: f32 = -1.52;
+            const HALL_NORTH_Z: f32 = 2.07;
+            /// Clearance a painting's back keeps from the wall, so the two never z-fight.
+            const WALL_GAP: f32 = 0.02;
+            /// Centre height, and width x height. Eye level for a standing player is 1.5, so
+            /// the sitter's eyes -- a little above the canvas centre -- are just above theirs.
+            const HEIGHT: f32 = 1.6;
+            const SIZE: (f32, f32) = (0.8, 1.0);
+
+            let watch = Watch::new(objs, portals);
+            let hang = |x: f32, wall_z: f32, facing_z: f32, seed: u32| {
+                let centre = Vector3::new(x, HEIGHT, wall_z + facing_z * WALL_GAP);
+                let facing = Vector3::new(0.0, 0.0, facing_z);
+                Painting::new(res, centre, facing, SIZE, seed, watch.clone())
+            };
+            let north =
+                [981.0, 985.0, 989.0, 993.0, 997.0].into_iter().map(|x| (x, HALL_NORTH_Z, -1.0));
+            let south = [983.0, 991.0, 999.0].into_iter().map(|x| (x, HALL_SOUTH_Z, 1.0));
+            for (seed, (x, wall_z, facing_z)) in north.chain(south).enumerate() {
+                objs.push(Rc::new(RefCell::new(hang(x, wall_z, facing_z, seed as u32)))
+                    as Rc<RefCell<dyn ObjectT>>);
+            }
         }
     }
 }
