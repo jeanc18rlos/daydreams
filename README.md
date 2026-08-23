@@ -38,25 +38,167 @@ grep -rn '// PORT:' src
 
 ## Building and running
 
-Requires a Rust toolchain (2021 edition) and a GPU/driver offering **OpenGL 3.3 Core** or better.
-macOS grants 4.1 Core, which is sufficient. Only core-profile entry points are used — no `EXT`/`ARB`
-suffixed calls, no immediate mode.
+Requires a Rust toolchain — stable, **1.82 or newer** (`rust-version` in `Cargo.toml`;
+`rust-toolchain.toml` selects stable with `rustfmt` and `clippy`) — and a GPU/driver offering
+**OpenGL 3.3 Core** or better. macOS grants 4.1 Core, which is sufficient. Only core-profile entry
+points are used — no `EXT`/`ARB` suffixed calls, no immediate mode.
+
+On Linux the native libraries gilrs, cpal and winit link against must be installed first; on
+Debian/Ubuntu that is
 
 ```sh
-cargo run --release
+sudo apt-get install libudev-dev libasound2-dev libdbus-1-dev libwayland-dev libxkbcommon-dev \
+    libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libx11-dev libgl1-mesa-dev
+```
+
+(the same list `.github/workflows/ci.yml` installs). macOS and Windows need nothing beyond Rust.
+
+```sh
+cargo run --release                 # fullscreen
+cargo run --release -- --windowed   # a 1280x720 window; what to use while developing
 ```
 
 > **Run it from the project root.** All assets are loaded through *relative* paths
-> (`Meshes/`, `Shaders/`, `Textures/`), matching the original's `Resources.cpp`. Launching the binary
-> from `target/release/` directly will panic on the first missing shader.
+> (`Meshes/`, `Shaders/`, `Textures/`, `assets/`), matching the original's `Resources.cpp`. Launching
+> the binary from `target/release/` directly will panic on the first missing shader.
 
 A debug build is playable but not free: the fixed-step loop runs at 500 Hz (`GH_DT = 0.002`) and the
 collision pass is `O(objects² × hitSpheres × colliders)`, so `Cargo.toml` sets `opt-level = 2` on the
-dev profile to keep it real-time. Release is still recommended.
+dev profile to keep it real-time, and builds dependencies at `opt-level = 3` so they are compiled
+once and cached. Release is still recommended.
 
 ```sh
-cargo test        # 150 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, and the extensions' pure logic
+cargo test --release   # 165 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, and the extensions' pure logic
 ```
+
+The mesh tests read `Meshes/`, so a checkout without the assets fails them.
+
+### Profiles
+
+| Profile | What it is for | Output |
+|---|---|---|
+| `dev` | Editing. The crate at `opt-level = 2`, dependencies at 3. | `target/debug/daydreams` |
+| `release` | Playing and profiling. `opt-level = 3`, fat LTO, one codegen unit, `panic = "unwind"` (the crash dialog needs the stack to unwind past it), `debug = 1` so a crash log carries line numbers. | `target/release/daydreams` (3.4 MB on macOS arm64) |
+| `dist` | Shipping. `release` with the symbol table stripped (`strip = "symbols"`, `debug = false`). | `target/dist/daydreams` (2.8 MB) |
+
+```sh
+cargo build --profile dist
+```
+
+### `just` targets
+
+A [`Justfile`](Justfile) wraps the commands above so nobody has to remember the flags
+(`cargo install just`; `just` alone lists them):
+
+| Target | Does |
+|---|---|
+| `just run` / `just run-windowed` | `cargo run --release`, fullscreen or in a window. Extra arguments pass through. |
+| `just test` | `cargo test --release`. |
+| `just lint` | `cargo fmt --check` and `cargo clippy --release --all-targets -- -D warnings` — what CI runs. |
+| `just deny` | `cargo deny check`: licences, advisories, duplicate crates (`deny.toml`; needs `cargo install cargo-deny`). |
+| `just shot SCENE OUT` | Screenshot scene `SCENE` to `OUT` after 120 frames, windowed. See [Dev tooling](#dev-tooling). |
+| `just bench [SCENE]` | 600 frames of a scene with vsync off, fullscreen; prints the frame-cost line. |
+| `just gen-terrain` | Regenerate `Meshes/meadow_tile.obj` from `ext::terrain::height`. |
+| `just dist` | `cargo build --profile dist`. |
+| `just bundle` | `cargo bundle --profile dist`: `DayDreams.app` under `target/dist/bundle/osx/` (needs `cargo install cargo-bundle`). |
+
+### Where the game writes
+
+Settings go to the per-user config directory, `settings.toml` — the exact path per OS is under
+[Settings](#settings--extsettingsrs) — and nowhere else. The log file location is printed at
+startup. Nothing is written next to the binary or into the working directory, so the game runs
+from a read-only `.app` and from a Finder launch whose working directory is `/`.
+
+### Lints and formatting
+
+`Cargo.toml`'s `[lints.clippy]` allows, with a reason on each, the lints that would ask for
+idiomatic rewrites of transcribed C++ — `approx_constant` for the original's `GH_PI` literal,
+`manual_strip` for `Mesh.cpp`'s line parser, `needless_range_loop`, `assign_op_pattern` over the
+`Vector.h` types, and so on — plus `assertions_on_constants` for the level tests that deliberately
+check tuned layout constants against each other. Everything else is on. `rustfmt.toml` sets the
+100-column, small-heuristics-off style the source was written in; `clippy.toml` lifts
+`too_many_arguments` to nine for `ui.rs`'s `draw_quad`.
+
+## Shipping
+
+What is needed to hand the game to someone who does not have the repository.
+
+### Layout
+
+The binary reads `Meshes/`, `Textures/`, `Shaders/` and `assets/` by relative path, so a
+distributable is the `dist` binary with those four directories beside it, plus the licences:
+
+```
+DayDreams/
+  daydreams            (daydreams.exe on Windows)
+  Meshes/  Textures/  Shaders/  assets/
+  LICENSE-ORIGINAL-MIT
+  THIRD_PARTY.md
+```
+
+That is the zip layout for Windows and Linux, and what the CI `dist` job uploads. `tools/`,
+`examples/` and the Cargo files are not part of it.
+
+### macOS `.app`
+
+[`cargo-bundle`](https://github.com/burtonageo/cargo-bundle) reads `[package.metadata.bundle]`
+in `Cargo.toml` and builds the bundle:
+
+```sh
+cargo install cargo-bundle
+just bundle            # = cargo bundle --profile dist
+open target/dist/bundle/osx/DayDreams.app
+```
+
+The four resource directories land in `Contents/Resources/` and the binary in
+`Contents/MacOS/`; the asset-root resolution looks in `Contents/Resources/` when the binary is
+inside a bundle, so nothing needs a working directory. The bundle identifier
+`com.daydreams.game` is a placeholder, and `icon = []` because no icon exists yet — add an
+`.icns` and list it there when one does.
+
+A `.app` that is not signed and notarized is quarantined by Gatekeeper on every machine but the
+one that built it. The outline, each step needing an Apple Developer account:
+
+1. `codesign --force --deep --options runtime --sign "Developer ID Application: <name> (<team>)" DayDreams.app`
+2. `ditto -c -k --keepParent DayDreams.app DayDreams.zip`
+3. `xcrun notarytool submit DayDreams.zip --keychain-profile <profile> --wait`
+4. `xcrun stapler staple DayDreams.app`, then zip it again for distribution.
+
+The `release` profile keeps line tables (`debug = 1`); on macOS they live in the object files
+that `cargo` leaves in `target/`, not in the binary, so keep a `dsymutil target/release/daydreams`
+of each tagged build if crash logs are to be symbolicated later. `dist` strips symbols and is
+what ships.
+
+### Git LFS
+
+`Meshes/`, `assets/` and `Textures/` hold about 150 MB of binaries (the two GLBs, the
+47 MB Escher mesh, the soundtrack, the font), and the history holds more: the door GLB was
+committed at 79 MB before its textures were shrunk. `.gitattributes` already routes `*.glb`,
+`*.mp3`, `*.ttf` and `Meshes/*.obj` through Git LFS for files added from now on, but the files
+already in history are ordinary blobs until they are rewritten. There is no remote yet, so the
+rewrite is cheap; run it once, before the first push:
+
+```sh
+git lfs install
+git lfs migrate import --everything --include="*.glb,*.mp3,*.ttf,Meshes/*.obj"
+git lfs ls-files      # should list every one of them
+```
+
+`--everything` rewrites all branches, so do it when none are mid-merge. After it, clones need
+`git lfs` installed, and CI checks out with `lfs: true`.
+
+### CI
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request:
+
+- **check**, on `macos-14`, `ubuntu-latest` and `windows-latest`: `cargo fmt --check`,
+  `cargo clippy --release --all-targets -- -D warnings`, `cargo test --release`.
+- **deny**: `cargo deny check` against `deny.toml`.
+- **dist**, on tags `v*` only, after the other two: `cargo build --profile dist` on each OS and
+  an artifact per platform in the layout above.
+
+Until the formatting and clippy passes land, `fmt --check` (145 hunks in 48 files) and the three
+remaining clippy warnings keep **check** red; the other jobs are green.
 
 ## Controls
 
@@ -784,12 +926,39 @@ notch, 0.41× to 3.05×), so each stop changes the feel by the same *proportion*
 carry separate notches — a stick is a rate control and a mouse a displacement one, and a player
 who uses both wants two numbers rather than one compromise.
 
-Values live in `settings.cfg` beside the other asset directories, written at most once a frame
-and only when something changed (the menu marks a flag; the engine flushes it), so a held D-pad
-direction never puts a filesystem write between the player and the value they are aiming for.
-The file is generated, not an asset — worth a `.gitignore` line. Everything degrades to a no-op:
-an unreadable file leaves the defaults, a corrupt line is skipped, an unwritable one loses the
-preference rather than interrupting the game about it.
+Values live in `settings.toml` in the per-user config directory, resolved by the `directories`
+crate (`ProjectDirs::from("", "", "DayDreams").config_dir()`):
+
+| OS | Path |
+|---|---|
+| macOS | `~/Library/Application Support/DayDreams/settings.toml` |
+| Linux | `$XDG_CONFIG_HOME/daydreams/settings.toml`, normally `~/.config/daydreams/settings.toml` |
+| Windows | `%APPDATA%\DayDreams\config\settings.toml` |
+
+Not beside the binary and not in the working directory, because neither is writable from a
+signed `.app` or a Finder launch. The directory is created on the first write. The format is
+three TOML keys, with a comment on top:
+
+```toml
+# DayDreams settings. Sensitivity is a notch from 1 to 10; 5 is the default.
+mouse_sensitivity = 5
+pad_sensitivity = 5
+muted = false
+```
+
+A `serde` struct with `#[serde(default)]` reads it, so any key may be missing; a wrong-typed value
+keeps that one field's default (each field deserialises through `toml::Value`, so one bad line does
+not reject the file), an out-of-range notch clamps, unknown keys are ignored — an older build reads a
+newer build's file — and a file that is not TOML at all gives the defaults plus one line on stderr.
+The previous format, `settings.cfg` in the working directory with `muted = 1`, is valid TOML and
+still loads; if the new file does not exist and `./settings.cfg` does, it is read once and the new
+file written from it, after which the old one is ignored.
+
+The file is written at most once a frame and only when something changed (the menu marks a flag;
+the engine flushes it), so a held D-pad direction never puts a filesystem write between the player
+and the value they are aiming for. Everything degrades to a no-op: an unreadable file leaves the
+defaults, an unwritable one loses the preference rather than interrupting the game about it, and a
+machine with no home directory runs on defaults and says so once.
 
 `GH_MOUSE_SENSITIVITY` is a compile-time constant read straight out of `Player::Look`
 (`Player.cpp:74,82`), so the runtime multiplier is a thread-local read at the two call sites —
