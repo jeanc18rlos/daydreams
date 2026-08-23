@@ -72,6 +72,12 @@ pub struct Portal {
     // (Portal.h:43) is not a member any more. The engine owns one framebuffer per recursion
     // level for every portal (`Engine::portal_fbos`) and `draw` borrows it through the
     // RenderCtx.
+    /// EXT: whether `Physical::try_portal` warps through it. A window that is locked still
+    /// shows the far side and is walked into like a pane of glass. True is the port.
+    pub passable: bool,
+    /// EXT: a colour mixed over the far side by its alpha (`Shaders/portal.frag`): a locked
+    /// window's dimming, a tinted pane. Zero alpha is the port, pixel for pixel.
+    pub tint: [f32; 4],
 }
 
 impl Portal {
@@ -92,6 +98,8 @@ impl Portal {
             front: Warp::new(id),
             back: Warp::new(id),
             err_shader: Some(res.acquire_shader("pink")),
+            passable: true,
+            tint: [0.0; 4],
         }
     }
 
@@ -107,6 +115,8 @@ impl Portal {
             front: Warp::new(id),
             back: Warp::new(id),
             err_shader: None,
+            passable: true,
+            tint: [0.0; 4],
         }
     }
 
@@ -173,6 +183,8 @@ impl Portal {
         shader.use_program();
         frame_buf.use_texture();
         shader.set_mvp(Some(&mvp), Some(&mv));
+        // EXT: the tint over the far side (see `tint`).
+        shader.set_vec4("tint", self.tint);
         mesh.draw();
     }
 

@@ -93,6 +93,10 @@ impl Physical {
     }
 
     pub fn try_portal(&mut self, portal: &Portal) -> bool {
+        // EXT: a portal that is shut to travel (a locked window) is a picture, not a door.
+        if !portal.passable {
+            return false;
+        }
         let bump = portal.get_bump(self.prev_pos) * (2.0 * GH_NEAR_MIN * self.base.p_scale);
         // PORT: `const Portal::Warp*` (nullable pointer) -> Option<&Warp>
         // (was: const Warp* warp = portal.Intersects(...), Physical.cpp:49).
@@ -210,6 +214,20 @@ mod tests {
         assert!((p.base.euler.y - GH_PI / 2.0).abs() < 1e-5, "{}", p.base.euler.y);
         // And the traveller is twice the size.
         assert!((p.base.p_scale - 2.0).abs() < 1e-5);
+    }
+
+    /// EXT: a portal shut to travel leaves the traveller exactly where the step put them.
+    #[test]
+    fn an_impassable_portal_warps_nothing() {
+        let (mut a, _) = portals();
+        a.passable = false;
+        let mut p = stepped(Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, 0.0, -1.0));
+        let (pos, prev, vel) = (p.base.pos, p.prev_pos, p.velocity);
+        assert!(!p.try_portal(&a));
+        assert!(approx(p.base.pos, pos) && approx(p.prev_pos, prev) && approx(p.velocity, vel));
+        assert!(p.base.p_scale == 1.0 && p.base.euler.y == 0.0);
+        a.passable = true;
+        assert!(p.try_portal(&a), "and open again it is a door");
     }
 
     #[test]
