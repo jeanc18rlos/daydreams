@@ -184,6 +184,39 @@ impl Scene for Level16 {
                 request_remove_portals(&portal_ids);
             }
         }))) as Rc<RefCell<dyn ObjectT>>);
+
+        // ── Portraits along the hall, watching (`ext/painting.rs`). Five on the north wall,
+        // three on the south, each a hair off its wall face so nothing is coplanar with the
+        // scan. The watch is taken now, after both doors exist, so a painting knows it is
+        // being looked at through the meadow door as well as from the carpet.
+        {
+            use crate::ext::painting::{Painting, Watch};
+            /// The hall's wall faces in world z: `backrooms::DOOR_SPOT` puts model z = 3.48 and
+            /// 7.07 here (the scan's walls are planes; a ray probe along the hall finds them
+            /// at -1.5214 and 2.0721 at every x).
+            const HALL_SOUTH_Z: f32 = -1.52;
+            const HALL_NORTH_Z: f32 = 2.07;
+            /// Clearance a painting's back keeps from the wall, so the two never z-fight.
+            const WALL_GAP: f32 = 0.02;
+            /// Centre height, and width x height. Eye level for a standing player is 1.5, so
+            /// the sitter's eyes -- a little above the canvas centre -- are just above theirs.
+            const HEIGHT: f32 = 1.6;
+            const SIZE: (f32, f32) = (0.8, 1.0);
+
+            let watch = Watch::new(objs, portals);
+            let hang = |x: f32, wall_z: f32, facing_z: f32, seed: u32| {
+                let centre = Vector3::new(x, HEIGHT, wall_z + facing_z * WALL_GAP);
+                let facing = Vector3::new(0.0, 0.0, facing_z);
+                Painting::new(res, centre, facing, SIZE, seed, watch.clone())
+            };
+            let north =
+                [981.0, 985.0, 989.0, 993.0, 997.0].into_iter().map(|x| (x, HALL_NORTH_Z, -1.0));
+            let south = [983.0, 991.0, 999.0].into_iter().map(|x| (x, HALL_SOUTH_Z, 1.0));
+            for (seed, (x, wall_z, facing_z)) in north.chain(south).enumerate() {
+                objs.push(Rc::new(RefCell::new(hang(x, wall_z, facing_z, seed as u32)))
+                    as Rc<RefCell<dyn ObjectT>>);
+            }
+        }
     }
 }
 
