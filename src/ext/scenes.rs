@@ -92,6 +92,7 @@ mod tests {
     /// more than the registry uses and is where any new scene key would come from.
     #[test]
     fn every_key_is_typeable() {
+        #[rustfmt::skip]
         let candidates = [
             KeyCode::Digit0, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4,
             KeyCode::Digit5, KeyCode::Digit6, KeyCode::Digit7, KeyCode::Digit8, KeyCode::Digit9,

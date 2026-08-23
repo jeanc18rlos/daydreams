@@ -54,14 +54,7 @@ fn main() {
                 );
                 // Whether the SDL database actually bound each control. An unmapped pad reports
                 // None here and every is_pressed(Button::X) below is dead.
-                for b in [
-                    gilrs::Button::South, gilrs::Button::East, gilrs::Button::North,
-                    gilrs::Button::West, gilrs::Button::LeftTrigger, gilrs::Button::RightTrigger,
-                    gilrs::Button::LeftTrigger2, gilrs::Button::RightTrigger2,
-                    gilrs::Button::Select, gilrs::Button::Start, gilrs::Button::Mode,
-                    gilrs::Button::DPadUp, gilrs::Button::DPadDown,
-                    gilrs::Button::DPadLeft, gilrs::Button::DPadRight,
-                ] {
+                for b in ALL_BUTTONS {
                     println!("      button {b:?} -> {:?}", pad.button_code(b));
                 }
                 for a in [
@@ -105,6 +98,8 @@ fn main() {
     }
 }
 
+// Grouped by kind -- face, triggers, meta, d-pad -- which is how the probe's output reads.
+#[rustfmt::skip]
 const ALL_BUTTONS: [gilrs::Button; 15] = [
     gilrs::Button::South, gilrs::Button::East, gilrs::Button::North, gilrs::Button::West,
     gilrs::Button::LeftTrigger, gilrs::Button::RightTrigger,
