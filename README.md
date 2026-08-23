@@ -929,7 +929,12 @@ the return door and the placement follows. An invisible fence one metre outside 
 extent, and a net at its lowest point, keep the player inside whatever the scan's seams allow.
 The backrooms shader ignores the weather grade every other surface takes -- its lighting is
 painted in -- and adds a squared-distance fog toward dark yellow-brown so the far end of the
-maze fades rather than popping at the 100-unit far plane.
+maze fades rather than popping at the 100-unit far plane. What does take the grade past the
+split -- the return door's paint, the sky through a window pane or a gap in the scan's
+single-sided walls -- is told the far world is an **interior** (`view::set_far_mood`,
+`MOOD_INTERIOR`): the door stays white instead of sunset-pink, the sky is the near-black of an
+unlit building going on past its walls, and a dark ground cap under the whole footprint
+(`backrooms::GroundCap`) makes the void below the horizon the same darkness.
 
 Frame cost, measured with `glFinish` after each frame on a shared M3 Max at 2560x1440 (so
 absolute numbers are pessimistic; the comparison is what matters): meadow spawn in the intro

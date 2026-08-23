@@ -15,7 +15,7 @@ precision highp float;
 uniform sampler2D tex;    // RGB = base colour, A = ambient occlusion
 uniform sampler2D tex2;   // RG = tangent-space normal xy, B = roughness, A = metalness
 uniform vec4 cam_pos;
-uniform float mood;       // -1 daylight, 0 storm, 1 sunset (src/ext/view.rs)
+uniform float mood;       // -1 daylight, 0 storm, 1 sunset, 2 interior (src/ext/view.rs)
 uniform vec4 glow;        // intro door light pool (xyz, strength)
 uniform float detail;     // 1 in the main view, 0 inside a portal framebuffer
 
@@ -109,7 +109,13 @@ void main(void) {
 	// On white paint it is not -- it turned the door sage. Storm light is cool and grey, so this
 	// dims toward blue instead, which is the same weather read correctly on a neutral surface.
 	vec3 haze = vec3(0.74, 0.82, 0.90);
-	if (mood > 0.5) {
+	if (mood > 1.5) {
+		// INTERIOR: no grade at all -- the Backrooms' return door is lit by the building's own
+		// painted-in lamps, and the only thing a sunset grade did to it was turn its white
+		// paint pink. The haze goes toward the dark warm tone the unlit walls fade to
+		// (Shaders/gltfunlit.frag), so the door sits in the same air as the hall around it.
+		haze = vec3(0.10, 0.08, 0.05);
+	} else if (mood > 0.5) {
 		col *= vec3(1.02, 0.80, 0.68);
 		haze = vec3(0.95, 0.62, 0.52);
 	} else if (mood > -0.5) {

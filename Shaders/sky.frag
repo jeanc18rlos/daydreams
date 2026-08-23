@@ -17,7 +17,8 @@ uniform sampler2D tex;
 uniform sampler2D tex2;
 uniform float blend;
 uniform float time;
-// -1 daylight, 0 storm, 1 sunset (src/ext/view.rs). Colour grades of the same baked clouds.
+// -1 daylight, 0 storm, 1 sunset, 2 interior (src/ext/view.rs). Colour grades of the same
+// baked clouds -- except interior, which has none.
 uniform float mood;
 in vec3 ex_normal;
 out vec4 fragColor;
@@ -33,7 +34,15 @@ void main(void) {
 	float s = dot(n, LIGHT) - 1.0 + SUN_SIZE;
 	float sun = min(exp(s * SUN_SHARPNESS / SUN_SIZE), 1.0);
 
-	if (mood > 0.5) {
+	if (mood > 1.5) {
+		// INTERIOR: the Backrooms' outside is no sky at all. Near-black with the faintest warm
+		// cast at the horizon -- the wall maps' own colour leaking into the dark -- so a gap in
+		// the single-sided walls reads as the building going on into darkness. No sun, no
+		// clouds: the panorama taps above are simply not used.
+		float h = clamp(n.y * 2.0, 0.0, 1.0);
+		sky = mix(vec3(0.030, 0.024, 0.016), vec3(0.008, 0.007, 0.006), h);
+		sun = 0.0;
+	} else if (mood > 0.5) {
 		// SUNSET: warm horizon, violet zenith, clouds lit pink from below.
 		float lum = dot(sky, vec3(0.3, 0.59, 0.11));
 		float cloud = smoothstep(0.62, 0.95, lum);          // bright = cloud

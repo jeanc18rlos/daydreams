@@ -29,6 +29,7 @@ use crate::ext::trimesh::TriMeshCollider;
 use crate::object::{Object, ObjectT, RenderCtx};
 use crate::resources::Resources;
 use crate::shader::Shader;
+use crate::texture::Texture;
 use crate::vector::Vector3;
 use std::rc::Rc;
 
@@ -105,6 +106,11 @@ impl Backrooms {
         }
     }
 
+    /// World height of the carpet: the model's floor level, where the door's foot lands.
+    pub fn carpet_y(&self) -> f32 {
+        self.base.pos.y + FLOOR_Y
+    }
+
     /// World-space bounds of the placed model, `(min, max)`, for a scene to fence in.
     pub fn world_bounds(&self) -> (Vector3, Vector3) {
         let b = self.model.bounds(PART);
@@ -130,6 +136,89 @@ impl ObjectT for Backrooms {
 
     fn trimesh(&self) -> Option<Rc<TriMeshCollider>> {
         Some(self.collider.clone())
+    }
+}
+
+/// How far past the building's footprint the ground cap reaches. Its edge must lie beyond the
+/// far plane (`GH_FAR` = 100) from anywhere the player can stand, or the sky would show as a
+/// bright line along it; the fence keeps them within `FENCE_MARGIN` of the footprint.
+const CAP_MARGIN: f32 = 120.0;
+/// How far below the carpet the cap sits, so it never z-fights the floor quads yet reads as
+/// the floor continuing through any gap in an outer wall.
+const CAP_DROP: f32 = 0.05;
+/// The cap's colour: near-black, a touch warm, like the walls' own fog tone gone dark.
+const CAP_COLOR: [f32; 4] = [0.030, 0.024, 0.018, 1.0];
+
+/// A dark, unlit plane under the whole building and far past it.
+///
+/// The scan's walls are single-sided and not every outer doorway leads anywhere, so from some
+/// spots the player can see out of the model -- and without this they saw the meadow's sky
+/// under the horizon as well as above it. The sky above is dealt with by the interior mood
+/// (`view::MOOD_INTERIOR`); this is the ground below, in the same dark. Purely cosmetic: it
+/// uses `double_quad.obj`, which carries no collider (the level's invisible net is what
+/// catches a player who falls out), and is visible from either side because that quad has
+/// both windings.
+///
+/// Drawn with the unlit glTF shader rather than `Object::draw_impl` because that shader wants
+/// `model`, `base_color` and `emissive` set, which `draw_impl` does not do; the white texture
+/// turns its base map term into the flat colour, and its squared-distance fog then fades the
+/// cap toward the same brown the walls fade to.
+pub struct GroundCap {
+    base: Object,
+    shader: Rc<Shader>,
+    white: Rc<Texture>,
+}
+
+impl GroundCap {
+    pub fn new(res: &Resources, rooms: &Backrooms) -> GroundCap {
+        let (lo, hi) = rooms.world_bounds();
+        let mut base = Object::new();
+        base.mesh = Some(res.acquire_mesh("double_quad.obj"));
+        base.pos = Vector3::new(0.5 * (lo.x + hi.x), rooms.carpet_y() - CAP_DROP, 0.5 * (lo.z + hi.z));
+        // The quad is in its own xy plane; a quarter turn about x lays it flat, and then its
+        // local y is world z.
+        base.euler.x = -std::f32::consts::FRAC_PI_2;
+        base.scale = Vector3::new(
+            0.5 * (hi.x - lo.x) + CAP_MARGIN,
+            0.5 * (hi.z - lo.z) + CAP_MARGIN,
+            1.0,
+        );
+        GroundCap {
+            base,
+            shader: res.acquire_shader("gltfunlit"),
+            white: res.acquire_texture("white.bmp", 1, 1),
+        }
+    }
+}
+
+impl ObjectT for GroundCap {
+    fn base(&self) -> &Object {
+        &self.base
+    }
+    fn base_mut(&mut self) -> &mut Object {
+        &mut self.base
+    }
+
+    fn draw(&self, ctx: &RenderCtx, cam: &Camera, _fbo: Option<glow::Framebuffer>) {
+        // The same sphere cull draw_impl applies: from the meadow, a thousand units off, this
+        // is behind the far plane and costs nothing.
+        if let Some((c, r)) = crate::ext::cull::object_sphere(&self.base) {
+            if !ctx.frustum.sphere(c, r) {
+                return;
+            }
+        }
+        let local_to_world = self.base.local_to_world();
+        let mvp = cam.matrix() * local_to_world;
+        let eye = ctx.eye;
+        self.shader.use_program();
+        self.shader.set_mvp(Some(&mvp), None);
+        self.shader.set_mat4("model", &local_to_world);
+        self.shader.set_vec4("cam_pos", [eye.x, eye.y, eye.z, 1.0]);
+        self.shader.set_vec4("base_color", CAP_COLOR);
+        self.shader.set_vec4("emissive", [0.0; 4]);
+        self.shader.set_i32("tex", 0);
+        self.white.use_texture();
+        self.base.mesh.as_ref().expect("set in new").draw();
     }
 }
 

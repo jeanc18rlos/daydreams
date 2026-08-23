@@ -688,6 +688,7 @@ impl Engine {
 
         // EXT: per-scene shader state starts clean; a scene that wants it sets it in load().
         crate::ext::view::set_mood_enabled(false);
+        crate::ext::view::set_far_mood(crate::ext::view::MOOD_SUNSET);
         crate::ext::view::set_glow(crate::vector::Vector3::zero(), 0.0);
         crate::ext::view::set_wrap(0.0);
         // EXT: and so does the title screen's hold on the doors -- `run_frame` sets it again

@@ -12,9 +12,12 @@
 //!   and armchairs -- so the whole model is a triangle-mesh collider (`ext/trimesh.rs`),
 //!   consulted by the engine beside the rectangle colliders it was born with.
 //! * **It is its own weather.** Every other surface takes the `mood` grade of the pass camera;
-//!   the backrooms' lighting is painted into its maps and its shader ignores the grade.
-//!   `mood_for` still answers "sunset" there, which is what the return door's white paint and
-//!   the sky glimpsed through it take -- warm, and right for the place.
+//!   the backrooms' lighting is painted into its maps and its shader ignores the grade. What
+//!   does take it -- the return door's paint, and the sky through any gap in the scan's
+//!   single-sided walls -- is told the far world is an *interior* (`view::MOOD_INTERIOR`):
+//!   the door stays the white it is, and the sky is the near-black of an unlit building going
+//!   on past its walls. A dark ground cap (`backrooms::GroundCap`) does the same for the
+//!   ground below the horizon. The intro's sunset grade would have turned the door pink.
 //! * **It is placed by its door.** The level says where the return door stands (`FAR`) and
 //!   `Backrooms::new` puts the model's own door spot on that point, carpet at world y = 0.
 //!
@@ -23,7 +26,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::ext::backrooms::{Backrooms, DOOR_FACING};
+use crate::ext::backrooms::{Backrooms, GroundCap, DOOR_FACING};
 use crate::ext::bounds::bounds_box;
 use crate::ext::door::{yaw_facing, Door, DoorLink};
 use crate::ext::grassfield::GrassField;
@@ -96,6 +99,8 @@ impl Scene for Level16 {
         player: &mut Player,
     ) {
         view::set_mood_enabled(true);
+        // Past the split is a building, not a sunset: see the module docs.
+        view::set_far_mood(view::MOOD_INTERIOR);
 
         // ── The meadow: identical to the intro's. See level15.rs for why each piece is here.
         view::set_wrap(terrain::PERIOD);
@@ -120,6 +125,8 @@ impl Scene for Level16 {
         // ── The backrooms: the model, placed so its door spot is FAR with the carpet at y = 0.
         let rooms = Backrooms::new(gl, res, FAR);
         let (lo, hi) = rooms.world_bounds();
+        // Darkness under and around the building, for wherever its walls let the outside show.
+        objs.push(Rc::new(RefCell::new(GroundCap::new(res, &rooms))) as Rc<RefCell<dyn ObjectT>>);
         objs.push(Rc::new(RefCell::new(rooms)) as Rc<RefCell<dyn ObjectT>>);
 
         // An invisible fence round the model's full extent, so nothing leaves through a
