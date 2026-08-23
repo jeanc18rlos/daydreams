@@ -320,6 +320,10 @@ impl Engine {
                 self.cur_ticks.set(self.timer.get_ticks());
             }
             self.input.borrow_mut().end_frame();
+            // EXT: the clouds evolve under the menus too (they only drifted before: this
+            // was gameplay-only, and the title can sit for minutes). Same rule as below --
+            // before the viewport is set, because a bake leaves it at the panorama's size.
+            self.ext.borrow().sky.maybe_rebake(crate::ext::view::time());
             self.render_menu_frame(i_width, i_height);
             // EXT: menu frames are screenshot-able too -- `--shot` with no `--scene` is how the
             // title screen and its backdrop get photographed, and this is the only path it runs.

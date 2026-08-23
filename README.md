@@ -893,7 +893,7 @@ the original demo's portal-recursive first level. Every expensive thing happens 
 
 | What | Where the cost went |
 |------|---------------------|
-| Cloud shapes (6-octave domain-warped FBM, single-scatter lighting, cirrus layer) | Baked **once** into a 1536x768 panorama by a GLSL pass (`src/ext/skybake.rs`, `Shaders/cloudbake.*`), re-baked every 5 s with advanced noise time so the field evolves. The runtime sky (`Shaders/sky.frag`) is one texture fetch + the original sun term -- which matters because the ported renderer draws the sky inside every portal pass. |
+| Cloud shapes (6-octave domain-warped FBM, single-scatter lighting, cirrus layer) | Baked **once** into a 1536x768 panorama by a GLSL pass (`src/ext/skybake.rs`, `Shaders/cloudbake.*`), re-baked every 6 s with advanced noise time so the field evolves, on the title screen as well as in play. The runtime sky (`Shaders/sky.frag`) is one texture fetch + the original sun term -- which matters because the ported renderer draws the sky inside every portal pass. |
 | Grass detail | Baked offline into a tileable noise atlas (`tools/gen_meadow.py` -> `Textures/grass_noise.bmp`). The shader does two or three taps and zero noise math. |
 | Rolling hills | One heightfield mesh with smooth normals smuggled through the engine's 3-component `vt` channel (the parser discards `vn`), plus a gradient-tilted collider shell -- same scheme as the Relativity walk shell. |
 | "Realism" | Three illusions in `Shaders/grass.frag`: drifting **cloud shadows** (a scrolled low-frequency tap), **valley occlusion** (world height as free AO), and **atmospheric perspective** toward the sky's horizon colour. Plus a backlit sun sheen and a wind ripple that moves no vertices. |

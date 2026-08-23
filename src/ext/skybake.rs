@@ -161,8 +161,9 @@ impl SkyBake {
         });
     }
 
-    /// Call once per rendered frame (main pass only, before the scene is drawn). Advances the
-    /// cross-fade; when it completes, the faded-out panorama becomes the next bake target.
+    /// Call once per rendered frame, menu frames included, before the viewport is set (a bake
+    /// leaves it at the panorama's size). Advances the cross-fade; when it completes, the
+    /// faded-out panorama becomes the next bake target.
     pub fn maybe_rebake(&self, now: f32) {
         let mut blend = (now - self.fade_start.get()) / REBAKE_SECS;
         if blend >= 1.0 {
