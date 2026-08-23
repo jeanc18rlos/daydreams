@@ -95,6 +95,12 @@ pub struct Args {
     #[arg(long, hide = true)]
     pub panic_test: bool,
 
+    /// With `--scene`: lift every rigid-body prop by H metres once the scene has loaded, so
+    /// the `[prop]` lines at shot time show where they landed and the screenshot how they
+    /// lie (src/ext/physics.rs). Hidden: dev tooling.
+    #[arg(long, hide = true, requires = "scene", value_name = "H")]
+    pub drop_props: Option<f32>,
+
     /// Skip the title and open a scene holding only this glTF model, at its own scale, under
     /// interior lighting (src/ext/glbview.rs): a screenshot of any file is one command. The
     /// path is taken relative to the working directory when it exists there, else relative
@@ -135,6 +141,8 @@ pub struct DirectRun {
     pub arrive: bool,
     /// The rendered frame on which E is pressed once (`--ride-at`).
     pub ride_at: Option<i32>,
+    /// Metres to lift the rigid-body props by at the start (`--drop-props`).
+    pub drop_props: Option<f32>,
 }
 
 /// What the game starts on instead of the title, when a dev flag says so.
@@ -240,6 +248,7 @@ impl Args {
             hold: self.held_keys(),
             arrive: self.arrive,
             ride_at: self.ride_at.map(count),
+            drop_props: self.drop_props,
         })
     }
 
@@ -374,6 +383,16 @@ mod tests {
         assert_eq!(a.ride_at, Some(30));
         assert_eq!(a.direct_run().unwrap().ride_at, Some(30));
         assert!(Args::try_from_tokens(&["--scene", "16", "--ride-at", "-1"]).is_err());
+    }
+
+    #[test]
+    fn drop_props_needs_a_scene_and_a_height() {
+        assert!(Args::try_from_tokens(&["--drop-props", "1"]).is_err());
+        assert!(Args::try_from_tokens(&["--scene", "16", "--drop-props", "x"]).is_err());
+        let a = Args::try_from_tokens(&["--scene", "16", "--drop-props", "1.5"]).unwrap();
+        assert_eq!(a.drop_props, Some(1.5));
+        assert_eq!(a.direct_run().unwrap().drop_props, Some(1.5));
+        assert!(Args::try_from_tokens(&["--scene", "16"]).unwrap().drop_props.is_none());
     }
 
     #[test]

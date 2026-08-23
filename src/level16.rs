@@ -184,6 +184,48 @@ impl Scene for Level16 {
                     as Rc<RefCell<dyn ObjectT>>);
             }
         }
+
+        // ── Three things on the carpet a few steps in from the door, each a rigid body
+        // (`ext/rigid.rs`, `ext/physics.rs`): an apple, a die and a chess king. Grab them,
+        // throw them, knock them over. Placed a hair above their resting height so the first
+        // steps settle them onto the carpet rather than start them inside it; the king
+        // stands on its origin and is placed ON the carpet.
+        {
+            use crate::ext::physics::{Material, Shape};
+            use crate::ext::rigid::RigidProp;
+            let props = [
+                RigidProp::new(
+                    res,
+                    "apple",
+                    "apple.obj",
+                    "apple.bmp",
+                    Shape::Ball { radius: 0.045 },
+                    Material { friction: 0.7, restitution: 0.25, density: 800.0 },
+                    Vector3::new(997.4, 0.06, 0.6),
+                ),
+                RigidProp::new(
+                    res,
+                    "dice",
+                    "dice.obj",
+                    "dice.bmp",
+                    Shape::RoundCuboid { half: Vector3::splat(0.03), radius: 0.004 },
+                    Material { friction: 0.5, restitution: 0.35, density: 1200.0 },
+                    Vector3::new(996.7, 0.04, -0.5),
+                ),
+                RigidProp::new(
+                    res,
+                    "king",
+                    "chess_king.obj",
+                    "chess_wood.bmp",
+                    Shape::Cylinder { radius: 0.03, height: 0.14 },
+                    Material { friction: 0.6, restitution: 0.1, density: 700.0 },
+                    Vector3::new(998.3, 0.0, -0.9),
+                ),
+            ];
+            for prop in props {
+                objs.push(Rc::new(RefCell::new(prop)) as Rc<RefCell<dyn ObjectT>>);
+            }
+        }
     }
 }
 
