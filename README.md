@@ -943,17 +943,21 @@ distance field, so the key that comes out is the key that was painted -- and its
 sets a flag the painting shares, and the painting's key is gone for good. The
 emergence and the arm test are unit tested with scripted positions.
 
-Using it: each fixed step the held key looks down the crosshair for the nearest object that
-answers `ObjectT::accepts_key` within 2.5 m, by bounding sphere as the grab picks, and offers
-E  USE THE KEY; the press raises `room::request_unlock_window`, which the window takes. That
-E is also the grab's release, and a used key asks to be removed from its `on_release`, so
-the removal lands on the next frame rather than in the step that used it -- a key removed
-mid-frame would leave the grab holding nothing by the time it sees the press, and the release
-would become a pickup of whatever is under the crosshair. The key's prompt has to beat the
-window's own LOCKED, which the grab sets once per frame after the fixed steps, so it goes
-through `hint::insist`, the one line that outranks a `set`. Objects see the scene through
-`UpdateCtx::scene` for this; the window is built after the paintings, so a snapshot taken at
-the painting's load could not have held it.
+Using it: once per rendered frame the held key looks down the crosshair for the nearest
+object that answers `ObjectT::accepts_key` within 2.5 m, by bounding sphere as the grab
+picks, and with one there offers E  USE THE KEY and asks for the frame's E press
+(`key::take_wants_use`). The press itself goes through the one latch every E goes through --
+the keyboard's key, the gamepad's button and `--e-at` all set it -- and `Engine::ext_update`
+hands it out in order of claim: the elevator's when the player stands in its cabin, then the
+held key's (`key::press`), and only otherwise the grab's, as a pickup or a release. So a
+press with a lock in reach uses the key and does not drop it, on a pad as on a keyboard. The
+key sees the press on its next step, raises `room::request_unlock_window`, which the window
+takes, and asks for its own removal; the grab is told (`GrabState::on_removed`) and is simply
+holding nothing, with no press left over that could pick up the window instead. The key's
+prompt has to beat the window's own LOCKED, which the grab sets once per frame after the
+fixed steps, so it goes through `hint::insist`, the one line that outranks a `set`. Objects
+see the scene through `UpdateCtx::scene` for this; the window is built after the paintings,
+so a snapshot taken at the painting's load could not have held it.
 
 The 3D key is drawn with the rigid-body props' `prop` shader -- in the hall, the cabin's
 hemisphere light and the walls' fog ([Real physics](#real-physics--extphysicsrs-extrigidrs));
@@ -1318,7 +1322,7 @@ Small additions, each tagged `// EXT:`:
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
 | `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look, and the scene's object vector (`scene`), for an object that reads the others during its step (the held key); `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery; `Object::rot`, a rotation matrix that stands in for `euler` in `local_to_world`/`world_to_local`/`forward` when set (a rigid body's orientation does not round-trip through Euler angles); the prop hooks on `ObjectT`, all defaulted: `engine_collision()` (false: the collision pass never pushes it and the portal pass never warps it -- something else owns its motion), `on_grab()`, `on_release(velocity)`, `on_rescale(p_scale)` (called by `ext/grab.rs`), `place_flat()` (the grab lays it on the surface it hits instead of standing it off by its sphere), `pick_hint()` (a HUD line while the crosshair is on it) and `accepts_key()` (the held key can be used on it: the window, while locked) |
 | `frame_buffer.rs` | sized attachments instead of `GH_FBO_SIZE` square |
-| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn, portal-removal, spawn and remove requests applied after the portal pass (a removal's freed indices handed to the grab), its scene-load request applied after the fixed-step loop; the collision pass skipping an `engine_collision() == false` object as its subject and the portal pass skipping it outright; E offered to the elevator before the grab, the frame's hint (`ext/hint.rs`) and the elevator's black-out in the overlay block (the black-out under the pause menu too); the `--forward`/`--strafe`/`--sprint` held keys, `--arrive`, `--ride-at`, `--hold-key` and `--e-at`, handed over as one `cli::DirectRun`; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`); the rigid-body world's static rebuild once a load's object list is complete, its step between the collision and portal passes, its `[phys]`/`[prop]` report at shot time and `--drop-props` (`ext/physics.rs`) |
+| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn, portal-removal, spawn and remove requests applied after the portal pass (a removal's freed indices handed to the grab), its scene-load request applied after the fixed-step loop; the collision pass skipping an `engine_collision() == false` object as its subject and the portal pass skipping it outright; E offered to the elevator, then to the held key, before the grab, the frame's hint (`ext/hint.rs`) and the elevator's black-out in the overlay block (the black-out under the pause menu too); the `--forward`/`--strafe`/`--sprint` held keys, `--arrive`, `--ride-at`, `--hold-key` and `--e-at`, handed over as one `cli::DirectRun`; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`); the rigid-body world's static rebuild once a load's object list is complete, its step between the collision and portal passes, its `[phys]`/`[prop]` report at shot time and `--drop-props` (`ext/physics.rs`) |
 | `portal.rs` | the nested pass scissored to the quad's screen footprint; `passable` (default true) and `tint` (default clear), the second uploaded to `portal.frag` as `uniform vec4 tint` and mixed over the far side by its alpha |
 | `physical.rs` | `try_portal` returns false without warping through a portal that is not `passable` |
 | `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4`; `new` returns `Result<_, AssetError>` and the attribute scan is a pure, tested `scrape_attribs` |
