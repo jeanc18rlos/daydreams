@@ -28,10 +28,12 @@
 //! | `skybake`  | Clouds baked once into a panorama; the sky is one texture tap     |
 //! | `door`     | A freestanding door with a swinging leaf (the intro level)       |
 //! | `grassfield` | Real grass blades, in a patch that follows the player          |
+//! | `frametime` | Frame-time statistics for the `--shot` dev path                  |
 
 pub mod audio;
 pub mod bounds;
 pub mod door;
+pub mod frametime;
 pub mod gamepad;
 pub mod gltf_model;
 pub mod grab;

@@ -97,6 +97,8 @@ pub struct Engine {
     shot_after_frames: Cell<i32>,
     // EXT: this frame's gamepad edges, handed in by main.rs before run_frame.
     pad_events: Cell<crate::ext::gamepad::PadEvents>,
+    // EXT: dev tooling -- wall time per rendered frame, reported on the `[shot]` line.
+    frame_clock: RefCell<crate::ext::frametime::FrameClock>,
 }
 
 impl Engine {
@@ -194,6 +196,7 @@ impl Engine {
             shot_path: RefCell::new(None),
             shot_after_frames: Cell::new(0),
             pad_events: Cell::new(crate::ext::gamepad::PadEvents::default()),
+            frame_clock: RefCell::new(crate::ext::frametime::FrameClock::new()),
         };
 
         // EXT: the title screen draws the intro level behind it (`render_menu_frame`), so the
@@ -241,6 +244,9 @@ impl Engine {
     pub fn run_frame(&self, i_width: i32, i_height: i32) {
         // EXT: frame clock for shaders.
         crate::ext::view::set_time(self.timer.get_ticks() as f32 * 1e-9);
+        // EXT: and the dev frame-time record. Ticked here, at the top, so one interval spans a
+        // whole frame including the swap main.rs does after run_frame returns.
+        self.frame_clock.borrow_mut().tick();
         // EXT: surface any error the streamed music has queued. Here rather than further down
         // because the menu branch below returns early, and music plays under the menus too.
         self.ext.borrow_mut().audio.tick();
@@ -498,6 +504,11 @@ impl Engine {
             Ok(()) => {
                 let p = self.player.borrow().obj().pos;
                 println!("[shot] wrote {path} ({width}x{height}) player at ({:.2}, {:.2}, {:.2})", p.x, p.y, p.z);
+                // EXT: frame cost over the frames after the scene settled. Only meaningful with
+                // `--no-vsync`; under the display cap every frame measures the refresh period.
+                if let Some((avg, p95, n)) = self.frame_clock.borrow().stats() {
+                    println!("[shot] avg frame {avg:.2} ms, p95 {p95:.2} ms over {n} frames");
+                }
             }
             Err(e) => eprintln!("[shot] could not write {path}: {e}"),
         }
@@ -615,6 +626,9 @@ impl Engine {
 
     // void Engine::LoadScene(int ix)   (Engine.cpp:133-144)
     pub fn load_scene(&self, ix: usize) {
+        // EXT: timed, because the title -> NEW GAME transition reloads this same scene and the
+        // stall it costs is the number the resource caches are measured by.
+        let t0 = std::time::Instant::now();
         //Clear out old scene
         {
             let cur_scene = self.cur_scene.borrow();
@@ -658,6 +672,7 @@ impl Engine {
         // would dangle) and cross-fade to this scene's music.
         self.cur_scene_ix.set(ix);
         self.ext.borrow_mut().on_scene_loaded(ix);
+        println!("[load] scene {ix} in {:.0} ms", t0.elapsed().as_secs_f32() * 1e3);
     }
 
     // void Engine::Update()   (Engine.cpp:146-205)
