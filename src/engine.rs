@@ -813,7 +813,9 @@ impl Engine {
                 // (was: Engine.cpp:156-158).
                 let physical_state = {
                     let obj = v_objects[i].borrow();
-                    obj.as_physical().map(|p| {
+                    // EXT: an object whose motion something else owns is never the subject
+                    // (`ObjectT::engine_collision`); it still blocks others below, as `j`.
+                    obj.as_physical().filter(|_| obj.engine_collision()).map(|p| {
                         hit_spheres.clear();
                         hit_spheres.extend_from_slice(&p.hit_spheres);
                         p.world_to_local()
@@ -908,6 +910,10 @@ impl Engine {
             let v_portals = self.v_portals.borrow();
             for i in 0..v_objects.len() {
                 let mut obj = v_objects[i].borrow_mut();
+                // EXT: nor is such an object warped (`ObjectT::engine_collision`).
+                if !obj.engine_collision() {
+                    continue;
+                }
                 if let Some(physical) = obj.as_physical_mut() {
                     for j in 0..v_portals.len() {
                         if physical.try_portal(&v_portals[j].borrow()) {

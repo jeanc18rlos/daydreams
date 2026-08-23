@@ -73,6 +73,21 @@
 //! mesh a second time through `Shaders/ghost.*` with blending on and depth writes off. The real
 //! object's `p_scale` eases toward the fitted value ([`SCALE_EASE`] per frame) so the shrink reads
 //! as a motion rather than a pop; its position snaps, which is what keeps it out of the wall.
+//!
+//! # Flat placement, and what the object is told
+//!
+//! An object that answers `ObjectT::place_flat` -- a window, a picture -- is not a ball, and
+//! standing it off the wall by its bounding sphere would leave it floating. It is placed ON
+//! the hit point instead, a hair along the normal ([`FLAT_OFFSET`]) so it does not fight the
+//! wall for pixels, and turned by [`flat_euler`] to face out of the surface; the sphere fit
+//! is skipped, since its sphere penetrates the wall by construction. Its `p_scale` still
+//! follows the ray, so it is resized by perspective like anything else.
+//!
+//! The held object hears about its life through the `ObjectT` hooks: `on_grab` at pickup,
+//! `on_rescale` whenever the carry changes its `p_scale`, `on_release` at the drop with the
+//! hand's velocity over the last rendered frame -- the carried position's displacement over
+//! the frame's length -- so a thrown thing can keep going. And whatever grabbable sits under
+//! the crosshair, other than the held one, may offer a line for the HUD (`pick_hint`).
 
 use crate::ext::raycast::{ray_sphere, raycast};
 use crate::object::{Object, ObjectT, RenderCtx, UpdateCtx};
@@ -107,6 +122,13 @@ pub const FIT_ITERS: u32 = 14;
 pub const SCALE_EASE: f32 = 0.25;
 /// Below this ratio of fitted/unconstrained scale the shrink is shown with a ghost.
 pub const GHOST_THRESHOLD: f32 = 0.85;
+/// How far out from the surface a flat-placed object sits, in world units: enough to win the
+/// depth test against the wall at any distance the near plane allows, too little to see.
+pub const FLAT_OFFSET: f32 = 0.01;
+/// A surface whose normal is steeper than this (|n.y|) is a floor or a ceiling for flat
+/// placement; anything shallower is a wall. Half way: a 30-degree ramp is walked on, a
+/// 60-degree one is leant against.
+pub const FLAT_FLOOR_NY: f32 = 0.5;
 
 /// A prop that can be picked up and resized by perspective.
 ///
@@ -199,6 +221,11 @@ pub struct GrabState {
     pub ghost_pos: Vector3,
     /// The `p_scale` actually applied last frame; the eased value that chases the fitted one.
     pub eased_scale: f32,
+    /// Where the carry put the object last frame, and when (`view::time`), so the next frame
+    /// can measure the hand's velocity; and that velocity, handed to `on_release`.
+    pub hand_pos: Vector3,
+    pub hand_time: f32,
+    pub hand_vel: Vector3,
 }
 
 impl Default for GrabState {
@@ -215,6 +242,9 @@ impl Default for GrabState {
             fit_shrunk: false,
             ghost_pos: Vector3::zero(),
             eased_scale: 1.0,
+            hand_pos: Vector3::zero(),
+            hand_time: 0.0,
+            hand_vel: Vector3::zero(),
         }
     }
 }
@@ -442,8 +472,16 @@ pub fn update(
         }
     }
 
-    // Crosshair feedback: is something grabbable under the reticle right now?
-    state.hover = if state.held.is_some() { true } else { pick(objects, origin, dir).is_some() };
+    // Crosshair feedback: is something grabbable under the reticle right now? The held
+    // object is skipped -- it sits on the ray by construction -- so the prompt that shows is
+    // the one from whatever lies beyond it (a window's, with the key in hand).
+    let picked = pick(objects, origin, dir, state.held);
+    state.hover = state.held.is_some() || picked.is_some();
+    if let Some((i, _, _)) = picked {
+        if let Some(text) = objects[i].try_borrow().ok().and_then(|o| o.pick_hint()) {
+            crate::ext::hint::set(text);
+        }
+    }
 
     // ── Carry: reposition and rescale whatever is held. ──────────────────────────────────────
     let Some(idx) = state.held else { return };
@@ -455,43 +493,56 @@ pub fn update(
         return;
     };
 
-    // Where would the object come to rest if pushed straight down the crosshair?
-    let hit_dist = raycast(objects, origin, dir, MAX_PLACE_DIST, Some(idx))
-        .map(|h| h.dist)
-        .unwrap_or(MAX_PLACE_DIST);
+    // Where would the object come to rest if pushed straight down the crosshair? With no hit
+    // it hangs at the reach limit, facing the player.
+    let hit = raycast(objects, origin, dir, MAX_PLACE_DIST, Some(idx));
+    let hit_dist = hit.map_or(MAX_PLACE_DIST, |h| h.dist);
+    let hit_normal = hit.map_or(-dir, |h| h.normal);
 
-    // Closed-form solve from the module docs: d = hit_dist / (1 + r*k).
     let k = state.ratio;
-    let denom = 1.0 + state.radius * k;
-    let mut dist = if denom > 1e-6 { hit_dist / denom } else { hit_dist };
-    dist = dist.max(0.15);
+    let flat = held.place_flat();
+    let (fit_dist, fit_scale) = if flat {
+        // Flat placement (module docs): on the surface, no sphere to stand off by, no fit.
+        let dist = (hit_dist - FLAT_OFFSET).max(FIT_D_MIN);
+        state.target_dist = dist;
+        state.target_scale = scale_at(k, dist);
+        state.ghost_pos = origin + dir * dist;
+        state.fit_shrunk = false;
+        (dist, state.target_scale)
+    } else {
+        // Closed-form solve from the module docs: d = hit_dist / (1 + r*k).
+        let denom = 1.0 + state.radius * k;
+        let mut dist = if denom > 1e-6 { hit_dist / denom } else { hit_dist };
+        dist = dist.max(0.15);
 
-    let mut p_scale = k * dist;
-    // Clamp scale, then re-derive the distance so the object still rests on the surface
-    // rather than floating or intersecting once the clamp bites.
-    if p_scale < MIN_P_SCALE {
-        p_scale = MIN_P_SCALE;
-        dist = (hit_dist - state.radius * p_scale).max(0.15);
-    } else if p_scale > MAX_P_SCALE {
-        p_scale = MAX_P_SCALE;
-        dist = (hit_dist - state.radius * p_scale).max(0.15);
-    }
+        let mut p_scale = k * dist;
+        // Clamp scale, then re-derive the distance so the object still rests on the surface
+        // rather than floating or intersecting once the clamp bites.
+        if p_scale < MIN_P_SCALE {
+            p_scale = MIN_P_SCALE;
+            dist = (hit_dist - state.radius * p_scale).max(0.15);
+        } else if p_scale > MAX_P_SCALE {
+            p_scale = MAX_P_SCALE;
+            dist = (hit_dist - state.radius * p_scale).max(0.15);
+        }
 
-    // Record what the ray alone asked for; this is where the ghost goes.
-    state.target_dist = dist;
-    state.target_scale = p_scale;
-    state.ghost_pos = origin + dir * dist;
+        // Record what the ray alone asked for; this is where the ghost goes.
+        state.target_dist = dist;
+        state.target_scale = p_scale;
+        state.ghost_pos = origin + dir * dist;
 
-    // Fit it against the room and the player (module docs, "Fitting").
-    let (fit_dist, fit_scale) = fit_distance(
-        dist,
-        k,
-        state.radius,
-        |c, r| sphere_penetrates(objects, idx, c, r),
-        origin,
-        dir,
-    );
-    state.fit_shrunk = fit_scale < GHOST_THRESHOLD * p_scale;
+        // Fit it against the room and the player (module docs, "Fitting").
+        let (fit_dist, fit_scale) = fit_distance(
+            dist,
+            k,
+            state.radius,
+            |c, r| sphere_penetrates(objects, idx, c, r),
+            origin,
+            dir,
+        );
+        state.fit_shrunk = fit_scale < GHOST_THRESHOLD * p_scale;
+        (fit_dist, fit_scale)
+    };
 
     // Ease the scale toward the fitted value so a forced shrink reads as motion, not a pop.
     // The frame of pickup starts the ease from the object's current size.
@@ -503,8 +554,30 @@ pub fn update(
     if (state.eased_scale - fit_scale).abs() < 1e-4 {
         state.eased_scale = fit_scale;
     }
-    base.pos = origin + dir * fit_dist;
+    let pos = origin + dir * fit_dist;
+    base.pos = pos;
+    if flat {
+        base.euler = flat_euler(hit_normal, dir);
+    }
+    let rescaled = base.p_scale != state.eased_scale;
     base.p_scale = state.eased_scale;
+    if rescaled {
+        held.on_rescale(state.eased_scale);
+    }
+
+    // The hand's velocity over this frame, for `on_release`. The pickup frame has no previous
+    // carried position and measures nothing.
+    let now = crate::ext::view::time();
+    if state.just_grabbed {
+        state.hand_vel = Vector3::zero();
+    } else {
+        let dt = now - state.hand_time;
+        if dt > 0.0 {
+            state.hand_vel = (pos - state.hand_pos) / dt;
+        }
+    }
+    state.hand_pos = pos;
+    state.hand_time = now;
 
     // A carried object is not falling. Suspend gravity and zero the velocity, otherwise the
     // 500 Hz physics loop accumulates fall speed between frames and the object rockets away the
@@ -516,6 +589,30 @@ pub fn update(
     }
 }
 
+/// Euler angles that lay an object flat on a surface of normal `n`, looked at along `view`.
+///
+/// The object's local -Z (its face, `Object::forward` for a yaw-only object) points out of
+/// the surface along `n`. On a wall that is all there is to choose: the yaw that turns -Z onto
+/// `n`, by `door::yaw_facing`'s convention. On a floor or a ceiling (|n.y| past
+/// [`FLAT_FLOOR_NY`]) the face is turned up or down by a quarter turn about X, and the yaw is
+/// spent on the object's top (local +Y) instead: it points away from the viewer along the
+/// horizontal view direction, so a picture on the floor reads the right way up to whoever
+/// put it there, and one on the ceiling too (looking up, "away" is the top of the view).
+pub fn flat_euler(n: Vector3, view: Vector3) -> Vector3 {
+    if n.y.abs() < FLAT_FLOOR_NY {
+        return Vector3::new(0.0, crate::ext::door::yaw_facing(-n), 0.0);
+    }
+    let away = Vector3::new(view.x, 0.0, view.z);
+    // Straight down or up there is no horizontal view direction; any yaw will do.
+    let away = if away.mag_sq() > 1e-8 { away.normalized() } else { Vector3::new(0.0, 0.0, -1.0) };
+    let pitch = std::f32::consts::FRAC_PI_2 * n.y.signum();
+    // rot_y(yaw) * rot_x(pitch) carries local +Y to (0, 0, sin pitch) turned by yaw, so the
+    // floor's top (+Z before the yaw) wants `yaw_facing(away)` and the ceiling's (-Z) the
+    // opposite heading.
+    let yaw = crate::ext::door::yaw_facing(if n.y > 0.0 { away } else { -away });
+    Vector3::new(pitch, yaw, 0.0)
+}
+
 /// Nearest grabbable under the crosshair, as (index, hit distance, bounding radius).
 /// Shared by the hover test and the actual pick so the crosshair can never disagree with what
 /// pressing E will do.
@@ -523,9 +620,13 @@ fn pick(
     objects: &[Rc<RefCell<dyn ObjectT>>],
     origin: Vector3,
     dir: Vector3,
+    skip: Option<usize>,
 ) -> Option<(usize, f32, f32)> {
     let mut best: Option<(usize, f32, f32)> = None;
     for (i, handle) in objects.iter().enumerate() {
+        if Some(i) == skip {
+            continue;
+        }
         let Ok(obj) = handle.try_borrow() else { continue };
         let Some(g) = as_grabbable(&*obj) else { continue };
         let base = obj.base();
@@ -552,7 +653,7 @@ fn try_grab(
 ) {
     // Sphere-picked rather than collider-picked, because several display meshes carry no
     // colliders at all (bunny/teapot/suzanne all have zero).
-    let Some((idx, dist, radius)) = pick(objects, origin, dir) else {
+    let Some((idx, dist, radius)) = pick(objects, origin, dir, None) else {
         // EXT: tell the player why nothing happened -- otherwise a missed grab is
         // indistinguishable from a broken key binding.
         let n = objects
@@ -562,8 +663,9 @@ fn try_grab(
         log::debug!("[grab] nothing in reach (crosshair missed; {n} grabbable object(s) in scene, reach {GRAB_REACH})");
         return;
     };
-    let Ok(obj) = objects[idx].try_borrow() else { return };
+    let Ok(mut obj) = objects[idx].try_borrow_mut() else { return };
     let p_scale = obj.base().p_scale;
+    obj.on_grab();
     drop(obj);
 
     // Pin the apparent size: k = p_scale / distance, held constant from here on.
@@ -588,6 +690,8 @@ fn release(objects: &[Rc<RefCell<dyn ObjectT>>], state: &mut GrabState) {
                     phys.velocity.set_zero();
                     phys.prev_pos = phys.base.pos;
                 }
+                // The object itself may want the throw (`ObjectT::on_release`).
+                obj.on_release(state.hand_vel);
             }
         }
     }
@@ -657,6 +761,7 @@ pub fn draw_ghost(
         mesh: None,
         texture: None,
         shader: None,
+        rot: base.rot,
     };
     let mv = ghost.world_to_local().transposed();
     let mvp = cam.matrix() * ghost.local_to_world();
@@ -831,6 +936,60 @@ mod tests {
         let (k, r) = (0.5f32, 0.5f32);
         let (d, _) = fit_distance(10.0, k, r, |_, _| true, eye(), dir);
         assert!((d - player_floor(k, r)).abs() < 1e-6);
+    }
+
+    /// The object's face (local -Z) in world, through the real transform chain.
+    fn face(euler: Vector3) -> Vector3 {
+        let o = Object { euler, ..Object::new() };
+        o.local_to_world().mul_direction(Vector3::new(0.0, 0.0, -1.0))
+    }
+
+    /// And its top (local +Y).
+    fn top(euler: Vector3) -> Vector3 {
+        let o = Object { euler, ..Object::new() };
+        o.local_to_world().mul_direction(Vector3::new(0.0, 1.0, 0.0))
+    }
+
+    fn near(a: Vector3, b: Vector3) -> bool {
+        (a - b).mag() < 1e-5
+    }
+
+    #[test]
+    fn flat_on_a_wall_faces_out_of_it_and_stays_upright() {
+        let view = Vector3::new(0.3, -0.1, -0.9).normalized();
+        for n in [
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::new(-1.0, 0.0, 0.0),
+            Vector3::new(0.6, 0.0, 0.8),
+            // A lean short of FLAT_FLOOR_NY is still a wall: its horizontal heading is used.
+            Vector3::new(0.0, 0.4, 1.0).normalized(),
+        ] {
+            let e = flat_euler(n, view);
+            assert_eq!(e.x, 0.0);
+            assert_eq!(e.z, 0.0);
+            let horizontal = Vector3::new(n.x, 0.0, n.z).normalized();
+            assert!(near(face(e), horizontal), "n={n:?}: face {:?}", face(e));
+            assert!(near(top(e), Vector3::new(0.0, 1.0, 0.0)));
+            // What `Object::forward` reports, for a yaw-only object, is the same face.
+            let o = Object { euler: e, ..Object::new() };
+            assert!(near(o.forward(), horizontal));
+        }
+    }
+
+    #[test]
+    fn flat_on_a_floor_or_ceiling_faces_it_with_the_top_away_from_the_viewer() {
+        let view = Vector3::new(0.6, -0.7, 0.4).normalized();
+        let away = Vector3::new(view.x, 0.0, view.z).normalized();
+        let floor = flat_euler(Vector3::new(0.0, 1.0, 0.0), view);
+        assert!(near(face(floor), Vector3::new(0.0, 1.0, 0.0)), "{:?}", face(floor));
+        assert!(near(top(floor), away), "{:?} vs {away:?}", top(floor));
+        let ceiling = flat_euler(Vector3::new(0.0, -1.0, 0.0), view);
+        assert!(near(face(ceiling), Vector3::new(0.0, -1.0, 0.0)), "{:?}", face(ceiling));
+        assert!(near(top(ceiling), away), "{:?} vs {away:?}", top(ceiling));
+        // Looking straight down there is no "away"; the result is still a flat, finite pose.
+        let e = flat_euler(Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, -1.0, 0.0));
+        assert!(near(face(e), Vector3::new(0.0, 1.0, 0.0)));
+        assert!(e.x.is_finite() && e.y.is_finite());
     }
 
     #[test]

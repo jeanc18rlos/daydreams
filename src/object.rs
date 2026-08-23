@@ -49,6 +49,15 @@ pub struct Object {
     pub mesh: Option<Rc<Mesh>>,
     pub texture: Option<Rc<Texture>>,
     pub shader: Option<Rc<Shader>>,
+
+    // EXT: a rotation that stands in for `euler` when set. A rigid body under a physics
+    // engine turns freely, and a general orientation does not round-trip through the
+    // Y-X-Z Euler product below without gimbal trouble, so such an object hands its rotation
+    // over whole (a pure rotation matrix: orthonormal axes, no translation, no scale) and
+    // `local_to_world` / `world_to_local` / `forward` use it INSTEAD of `euler`. `None` is the
+    // ported path, bit for bit; `Physical::try_portal` still rewrites `euler.y` and so only
+    // reorients objects on that path.
+    pub rot: Option<Matrix4>,
 }
 
 // PORT: written by hand, NOT derived -- the C++ default ctor sets scale to 1 and
@@ -70,6 +79,7 @@ impl Object {
             mesh: None,
             texture: None,
             shader: None,
+            rot: None,
         }
     }
 
@@ -78,6 +88,8 @@ impl Object {
         self.euler.set_zero();
         self.scale.set_ones();
         self.p_scale = 1.0;
+        // EXT: back to the Euler path, as a reset orientation should be.
+        self.rot = None;
     }
 
     // PORT: this is the body of `Object::Draw` (Object.cpp:20-31), split out under a
@@ -120,6 +132,10 @@ impl Object {
     }
 
     pub fn forward(&self) -> Vector3 {
+        // EXT: the override's -Z axis; the Euler product below otherwise (see `rot`).
+        if let Some(rot) = &self.rot {
+            return -rot.z_axis();
+        }
         -(Matrix4::rot_z(self.euler.z)
             * Matrix4::rot_x(self.euler.x)
             * Matrix4::rot_y(self.euler.y))
@@ -127,6 +143,10 @@ impl Object {
     }
 
     pub fn local_to_world(&self) -> Matrix4 {
+        // EXT: see `rot`.
+        if let Some(rot) = &self.rot {
+            return Matrix4::trans(self.pos) * *rot * Matrix4::scale(self.scale * self.p_scale);
+        }
         Matrix4::trans(self.pos)
             * Matrix4::rot_y(self.euler.y)
             * Matrix4::rot_x(self.euler.x)
@@ -135,6 +155,12 @@ impl Object {
     }
 
     pub fn world_to_local(&self) -> Matrix4 {
+        // EXT: a pure rotation's inverse is its transpose (see `rot`).
+        if let Some(rot) = &self.rot {
+            return Matrix4::scale(1.0 / (self.scale * self.p_scale))
+                * rot.transposed()
+                * Matrix4::trans(-self.pos);
+        }
         Matrix4::scale(1.0 / (self.scale * self.p_scale))
             * Matrix4::rot_z(-self.euler.z)
             * Matrix4::rot_x(-self.euler.x)
@@ -192,6 +218,37 @@ pub trait ObjectT {
         None
     }
 
+    // EXT: whether the engine moves this object. When false, `Engine::update`'s collision
+    // pass skips it as the SUBJECT (its hit spheres are never pushed; it still blocks others
+    // through its mesh and trimesh) and the portal pass never warps it -- something else,
+    // a rigid-body simulation, owns its motion and writes `pos`/`rot` itself.
+    fn engine_collision(&self) -> bool {
+        true
+    }
+
+    // EXT: the grab's hooks (src/ext/grab.rs). `on_grab` at the moment of pickup;
+    // `on_release` at the drop, with the hand's velocity -- the held object's displacement
+    // over the last rendered frame divided by that frame's length, so a thrown object can
+    // keep its momentum; `on_rescale` whenever the carry changes `p_scale`, with the new
+    // value, after it has been written. All three default to nothing.
+    fn on_grab(&mut self) {}
+    fn on_release(&mut self, _velocity: Vector3) {}
+    fn on_rescale(&mut self, _p_scale: f32) {}
+
+    // EXT: how the grab places this object against what the crosshair hits. False (the
+    // default) stands it off the surface by its bounding radius, as a ball would rest; true
+    // lays it flush -- a picture or a window on a wall, a mat on a floor -- and turns it to
+    // face out of the surface (`grab::flat_euler`).
+    fn place_flat(&self) -> bool {
+        false
+    }
+
+    // EXT: a prompt for the HUD while the crosshair is on this object (`ext::hint`): what
+    // E would do, or why it will not ("LOCKED", "TOO SMALL", "E  USE KEY"). None is silent.
+    fn pick_hint(&self) -> Option<&'static str> {
+        None
+    }
+
     //Casts
     fn as_physical(&self) -> Option<&crate::physical::Physical> {
         None
@@ -215,5 +272,41 @@ impl ObjectT for Object {
     }
     fn base_mut(&mut self) -> &mut Object {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game_header::GH_PI;
+
+    fn approx_m(a: &Matrix4, b: &Matrix4) -> bool {
+        a.m.iter().zip(b.m.iter()).all(|(x, y)| (x - y).abs() < 1e-5)
+    }
+
+    /// EXT: the rotation override reproduces the Euler path for the one rotation both can
+    /// express, and its inverse really is the inverse.
+    #[test]
+    fn rot_override_matches_the_euler_path_for_a_yaw() {
+        let mut euler = Object::new();
+        euler.pos = Vector3::new(1.0, 2.0, 3.0);
+        euler.scale = Vector3::new(2.0, 3.0, 4.0);
+        euler.p_scale = 0.5;
+        euler.euler.y = 0.7 * GH_PI;
+        let mut over = Object { rot: Some(Matrix4::rot_y(0.7 * GH_PI)), ..Object::new() };
+        over.pos = euler.pos;
+        over.scale = euler.scale;
+        over.p_scale = euler.p_scale;
+        // A different yaw in `euler`, to prove it is ignored.
+        over.euler.y = -1.0;
+        assert!(approx_m(&over.local_to_world(), &euler.local_to_world()));
+        assert!(approx_m(&over.world_to_local(), &euler.world_to_local()));
+        assert!((over.forward() - euler.forward()).mag() < 1e-5);
+        assert!(approx_m(&(over.local_to_world() * over.world_to_local()), &Matrix4::identity()));
+        // And a rotation the Euler path cannot name still round-trips.
+        over.rot = Some(Matrix4::rot_x(0.3) * Matrix4::rot_y(1.1) * Matrix4::rot_z(-2.0));
+        assert!(approx_m(&(over.local_to_world() * over.world_to_local()), &Matrix4::identity()));
+        over.reset();
+        assert!(over.rot.is_none(), "reset returns to the Euler path");
     }
 }
