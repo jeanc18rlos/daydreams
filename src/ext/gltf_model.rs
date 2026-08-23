@@ -1604,13 +1604,18 @@ fn build_material(
 
     // Normal xy; z is reconstructed in the shader, so the blue channel is free for roughness.
     // glTF metallic-roughness: G = roughness, B = metalness, each scaled by its factor.
+    // The normal map's `scale` is baked into xy here (the spec: scale the xy components,
+    // then renormalise -- which the shader's reconstruction of z does). A file can wear a
+    // normal map at scale 0, which is how the overgrown room turns the moss's bumps off on
+    // the wallpaper that shares them; ignoring it grained every wall.
     let (sw, sh) = pack_size(&[nrm, mr]);
+    let nscale = m.normal_texture().map_or(1.0, |t| t.scale());
     let surface = pack(sw, sh, |px| {
         let nv = px(nrm);
         let mrv = px(mr);
         let rough = mrv.map(|p| p[1] as f32 / 255.0).unwrap_or(1.0) * rough_f;
         let metal = mrv.map(|p| p[2] as f32 / 255.0).unwrap_or(1.0) * metal_f;
-        [nv.map(|p| p[0]).unwrap_or(128), nv.map(|p| p[1]).unwrap_or(128), unit(rough), unit(metal)]
+        [normal_xy(nv, 0, nscale), normal_xy(nv, 1, nscale), unit(rough), unit(metal)]
     });
 
     // Emissive, factor and strength applied and saturated here -- there is no HDR target for
@@ -1638,6 +1643,18 @@ fn build_material(
         alpha_cutoff,
         translucent,
     })
+}
+
+/// One of a normal map texel's xy components, its `scale` applied about the flat value 128:
+/// the byte untouched at scale 1, so an unscaled map packs bit for bit, and flat at 0. A
+/// missing map is flat.
+fn normal_xy(texel: Option<image::Rgba<u8>>, c: usize, scale: f32) -> u8 {
+    let Some(p) = texel else { return 128 };
+    if scale == 1.0 {
+        return p[c];
+    }
+    let v = (p[c] as f32 / 255.0 * 2.0 - 1.0) * scale;
+    ((v * 0.5 + 0.5).clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 fn tex2d(
@@ -1852,6 +1869,23 @@ mod tests {
         assert_eq!(ramp(Interp::Step).sample(f32::NAN), [0.0, 0.0, 0.0]);
         // A clip whose keys start late is as long as its last key: no first-key subtraction.
         assert_eq!(a.duration(), 4.0);
+    }
+
+    #[test]
+    fn normal_scale_is_baked_about_flat() {
+        let px = |r: u8, g: u8| Some(image::Rgba([r, g, 255, 255]));
+        // Scale 1: bit for bit.
+        assert_eq!(normal_xy(px(37, 200), 0, 1.0), 37);
+        assert_eq!(normal_xy(px(37, 200), 1, 1.0), 200);
+        // Scale 0: flat, whatever the map says.
+        assert_eq!(normal_xy(px(37, 200), 0, 0.0), 128);
+        assert_eq!(normal_xy(px(0, 255), 1, 0.0), 128);
+        // Scale 0.5 halves the tilt; 2 doubles it and saturates.
+        assert_eq!(normal_xy(px(255, 0), 0, 0.5), 191);
+        assert_eq!(normal_xy(px(255, 0), 1, 0.5), 64);
+        assert_eq!(normal_xy(px(200, 0), 0, 2.0), 255);
+        // No map: flat.
+        assert_eq!(normal_xy(None, 0, 1.0), 128);
     }
 
     #[test]
