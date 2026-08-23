@@ -702,7 +702,10 @@ def write_rust(results):
         f.write("    pub name: &'static str,\n    pub base: &'static str,\n    pub parts_texture: &'static str,\n")
         f.write("    pub base_size: (u32, u32),\n    pub parts_size: (u32, u32),\n")
         f.write("    pub parts: [Part; 7],\n    pub eyes: [[f32; 4]; 2],\n}\n\n")
-        f.write("pub const PART_ORDER: [&str; 7] = [" + ", ".join(f'"{n}"' for n in PART_ORDER) + "];\n\n")
+        f.write("pub const PART_ORDER: [&str; 7] = [\n")
+        for n in PART_ORDER:
+            f.write(f'    "{n}",\n')
+        f.write("];\n\n")
         f.write(f"pub const PORTRAITS: [Portrait; {len(results)}] = [\n")
         for r in results:
             f.write(f"    // {r['title']}\n")
@@ -715,7 +718,10 @@ def write_rust(results):
             f.write("        parts: [\n")
             for n in PART_ORDER:
                 f.write(f"            // {n} (ncc {r['scores'][n]:.2f})\n")
-                f.write(f"            Part {{ atlas: {v4(r['atlas'][n])}, place: {v4(r['place'][n])} }},\n")
+                f.write("            Part {\n")
+                f.write(f"                atlas: {v4(r['atlas'][n])},\n")
+                f.write(f"                place: {v4(r['place'][n])},\n")
+                f.write("            },\n")
             f.write("        ],\n")
             f.write(f"        eyes: [{v4(r['eyes']['eyes_center_l'])}, {v4(r['eyes']['eyes_center_r'])}],\n")
             f.write("    },\n")
