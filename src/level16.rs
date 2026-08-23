@@ -166,7 +166,7 @@ impl Scene for Level16 {
         // being looked at through the meadow door as well as from the carpet -- and only
         // while the doors stand: once they have gone, so have their portals.
         {
-            use crate::ext::painting::{Painting, Watch};
+            use crate::ext::painting::{KeySpec, Painting, Watch};
             /// The hall's wall faces in world z: `backrooms::DOOR_SPOT` puts model z = 3.48 and
             /// 7.07 here (the scan's walls are planes; a ray probe along the hall finds them
             /// at -1.5214 and 2.0721 at every x).
@@ -178,12 +178,24 @@ impl Scene for Level16 {
             /// the sitter's eyes -- a little above the canvas centre -- are just above theirs.
             const HEIGHT: f32 = 1.6;
             const SIZE: (f32, f32) = (0.8, 1.0);
+            /// The key (`painting.rs`, "The key in the painting") is in the last portrait on
+            /// the north wall, the one by the bare end wall, and is seen from 2.6 m west of it
+            /// along the wall and half a metre out -- a grazing look along the wall, at eye
+            /// height: the spot, how near to it the eye must be, and how near to the canvas
+            /// centre the look.
+            const KEY_SEED: u32 = 4;
+            const KEY_SPEC: KeySpec = KeySpec {
+                view: Vector3 { x: 994.4, y: GH_PLAYER_HEIGHT, z: 1.55 },
+                radius: 0.45,
+                cone: 25.0 * std::f32::consts::PI / 180.0,
+            };
 
             let watch = Watch::new(objs, portals).while_doors_stand(doors);
             let hang = |x: f32, wall_z: f32, facing_z: f32, seed: u32| {
                 let centre = Vector3::new(x, HEIGHT, wall_z + facing_z * WALL_GAP);
                 let facing = Vector3::new(0.0, 0.0, facing_z);
-                Painting::new(res, centre, facing, SIZE, seed, watch.clone())
+                let key = (seed == KEY_SEED).then_some(KEY_SPEC);
+                Painting::new(res, centre, facing, SIZE, seed, watch.clone(), key)
             };
             let north =
                 [981.0, 985.0, 989.0, 993.0, 997.0].into_iter().map(|x| (x, HALL_NORTH_Z, -1.0));

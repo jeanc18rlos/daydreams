@@ -27,6 +27,17 @@ precision highp float;
 // Lighting is flat plus the same squared-distance fog as gltfunlit.frag toward `fog_color`,
 // which the caller sets to the walls' own fog tone, so a painting at the far end of the hall
 // fades with the wall it hangs on.
+//
+// THE KEY (painting.rs, "The key in the painting"): one portrait carries a key painted in
+// anamorphosis. The undistorted key lives on a virtual picture plane through the canvas
+// centre, perpendicular to the line from a sweet spot `key_view` (in canvas metres, the
+// canvas itself being z = 0) to that centre. For each canvas fragment the ray from the sweet
+// spot through it is intersected with that plane, the hit is expressed in the plane's own
+// (u, v) basis, and the key's signed distance is sampled THERE. Painted on the canvas the
+// result is a long smear that only closes into a key from the sweet spot -- the classic
+// construction (Holbein's skull). `key_view.w` is 0 on a portrait without a key. `key_state`
+// fades the painted key out as the real one comes off the canvas (0 painted .. 1 gone) and
+// `key_glint` is 1 while the player stands in the sweet spot: the paint catches the light.
 
 uniform vec4 cam_pos;       // this pass's eye, world space
 uniform vec4 fog_color;     // what the far end fades to; rgb used
@@ -34,6 +45,10 @@ uniform vec4 viewer_local;  // the gaze target in canvas metres; see above
 uniform vec4 size;          // canvas width and height in metres (x, y)
 uniform float seed;         // which sitter
 uniform float expression;   // 0 neutral .. 1 changed
+uniform vec4 key_view;      // the sweet spot in canvas metres (xyz); w = 1 if there is a key
+uniform float key_state;    // 0 painted .. 1 gone
+uniform float key_glint;    // 1 while the player stands in the sweet spot
+uniform float time;         // seconds, for the glint's sweep
 
 in vec2 ex_uv;
 in vec3 ex_world;
@@ -49,6 +64,26 @@ out vec4 fragColor;
 // a viewer level with the canvas (or behind it) gets the iris pinned at GAZE_LIMIT toward
 // their side rather than a divide by zero.
 #define GAZE_MIN_Z 0.05
+
+// ── The key ──────────────────────────────────────────────────────────────────────────────────
+// The silhouette's numbers, in metres, in the key's own frame (x along its length, bow at -x,
+// teeth hanging toward -y): THE SAME NUMBERS AS tools/gen_key.py, which builds the 3D key
+// that comes out of the canvas. Change them together.
+#define KEY_LENGTH 0.09
+#define KEY_BOW_R 0.019
+#define KEY_BOW_HOLE 0.010
+#define KEY_BOW_CX (-KEY_LENGTH * 0.5 + KEY_BOW_R)
+#define KEY_SHAFT_HW 0.004
+#define KEY_SHAFT_X0 (KEY_BOW_CX + KEY_BOW_R * 0.7)
+#define KEY_SHAFT_X1 (KEY_LENGTH * 0.5)
+// The teeth as (x0, x1, depth): a rectangle from the centreline down to y = -depth.
+#define KEY_TOOTH1 vec3(0.034, 0.045, 0.013)
+#define KEY_TOOTH2 vec3(0.020, 0.028, 0.010)
+// Where the key sits on the picture plane, in its (u, v) metres from the canvas centre: over
+// the sitter's collar, like a pendant, and a little toward the far end of the canvas, because
+// the near end is behind the frame's upright from the sweet spot. Mirrored in painting.rs
+// (`KEY_ON_PLANE`), which puts the 3D key at the same spot.
+#define KEY_ON_PLANE vec2(-0.010, -0.27)
 
 // ── Hashes and noise ─────────────────────────────────────────────────────────────────────────
 float hash1(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
@@ -98,6 +133,39 @@ float sdSegment(vec2 p, vec2 a, vec2 b) {
 	vec2 ba = b - a;
 	float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
 	return length(pa - ba * h);
+}
+
+float sdBox(vec2 p, vec2 half_size) {
+	vec2 d = abs(p) - half_size;
+	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+}
+
+float sdTooth(vec2 q, vec3 tooth) {
+	vec2 half_size = vec2(0.5 * (tooth.y - tooth.x), 0.5 * tooth.z);
+	return sdBox(q - vec2(0.5 * (tooth.x + tooth.y), -0.5 * tooth.z), half_size);
+}
+
+// The key's silhouette in its own frame (see the defines): a ring, a shaft, two teeth.
+float sdKey(vec2 q) {
+	float ring = abs(length(q - vec2(KEY_BOW_CX, 0.0)) - 0.5 * (KEY_BOW_R + KEY_BOW_HOLE))
+		- 0.5 * (KEY_BOW_R - KEY_BOW_HOLE);
+	float shaft = sdBox(q - vec2(0.5 * (KEY_SHAFT_X0 + KEY_SHAFT_X1), 0.0),
+		vec2(0.5 * (KEY_SHAFT_X1 - KEY_SHAFT_X0), KEY_SHAFT_HW));
+	return min(min(ring, shaft), min(sdTooth(q, KEY_TOOTH1), sdTooth(q, KEY_TOOTH2)));
+}
+
+// The anamorphosis (header): the canvas point `p` (z = 0) seen from `view`, carried onto the
+// picture plane through the origin perpendicular to `view`, in that plane's (u, v) basis --
+// u horizontal, v the nearest thing to up. Mirrored on the CPU by painting.rs `to_plane`,
+// which the unit tests exercise.
+vec2 anamorph(vec2 p, vec3 view) {
+	vec3 n = normalize(view);
+	vec3 u = normalize(cross(vec3(0.0, 1.0, 0.0), n));
+	vec3 v = cross(n, u);
+	vec3 P = vec3(p, 0.0);
+	float t = dot(n, view) / dot(n, view - P);
+	vec3 Q = view + t * (P - view);
+	return vec2(dot(Q, u), dot(Q, v));
 }
 
 // Anti-aliased coverage of a distance, one pixel wide.
@@ -267,6 +335,24 @@ void main(void) {
 		vec2 q = vec2(sgn * (p.x - e.x), p.y - e.y);
 		vec2 gq = vec2(sgn * g.x, g.y);
 		col = eye(col, q, gq, iris_col, brow, hw, expr, px);
+	}
+
+	// ── The key, in gold leaf over the coat, where a pendant would hang. Sampled through the
+	// anamorphosis, so the smear's anti-aliasing width is the distance field's own footprint
+	// per pixel, not the canvas's. Gone (key_state 1) once the real key has come off.
+	if (key_view.w > 0.5 && key_state < 1.0) {
+		vec2 q = anamorph(p, key_view.xyz) - KEY_ON_PLANE;
+		float qpx = max(fwidth(q.x), fwidth(q.y)) + 1e-5;
+		float dk = sdKey(q);
+		float m_key = fill(dk, qpx) * (1.0 - key_state);
+		// Leaf: a warm gold, darker toward the silhouette's edge as a painted outline, with
+		// a light from the upper left as the sitter has.
+		vec3 leaf = vec3(0.86, 0.68, 0.24) * (0.80 + 0.30 * smoothstep(-0.06, 0.06, q.y - q.x));
+		leaf *= 1.0 - 0.45 * (1.0 - smoothstep(0.0, 0.0025, -dk));
+		// In the sweet spot the leaf catches the light: a band of highlight sweeps along it.
+		float sweep = 0.5 + 0.5 * sin(time * 3.0 - q.x * 90.0);
+		leaf = mix(leaf, vec3(1.0, 0.96, 0.78), key_glint * 0.6 * sweep);
+		col = mix(col, leaf, m_key);
 	}
 
 	// ── Paint, canvas and varnish. Brush mottle everywhere; weave and craquelure fade out

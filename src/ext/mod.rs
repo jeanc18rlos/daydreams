@@ -47,6 +47,7 @@
 //! | `physics`  | A rapier3d world for props: the scene's scenery as static colliders, the player as a capsule |
 //! | `rigid`    | A prop that is a rigid body: falls, rolls, topples, is thrown, and is grabbed like any other |
 //! | `window`   | A grabbable, resizable, locked window-portal into a far copy of another level's room |
+//! | `key`      | The key painted into one portrait in anamorphosis, and what it opens          |
 
 pub mod audio;
 pub mod backrooms;
@@ -66,6 +67,7 @@ pub mod grassgen;
 pub mod hint;
 pub mod hud;
 pub mod interior;
+pub mod key;
 pub mod meadow;
 pub mod menu;
 pub mod occlusion;

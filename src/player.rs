@@ -368,6 +368,7 @@ mod tests {
                 input: &input,
                 cam_to_world: p.cam_to_world(),
                 player_pos: p.obj().pos,
+                scene: &[],
             };
             p.update_player(&ctx);
             // Undo the gravity the physics step added, so the walk stays level.
@@ -441,6 +442,7 @@ mod tests {
                 input: &input,
                 cam_to_world: p.cam_to_world(),
                 player_pos: p.obj().pos,
+                scene: &[],
             };
             p.update_player(&ctx);
             p.base.velocity.y = 0.0;

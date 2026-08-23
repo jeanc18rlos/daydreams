@@ -902,6 +902,55 @@ wall, where a flat slat facing away from that light was near black. Paintings co
 nothing. The expression state machine, the gaze memory and the through-the-door test are unit
 tested with a fake clock and detached portals.
 
+### The key in the painting — `ext/key.rs`, `ext/painting.rs`, `Shaders/painting.frag`
+
+The last portrait on the hall's north wall, the one by the bare end wall, has a key painted
+across the sitter's collar -- in anamorphosis, the way Holbein painted the skull. The key
+proper lives on a virtual picture plane through the canvas centre, perpendicular to the line
+from a **sweet spot** to that centre, and what is on the canvas is its central projection from
+the spot: for every canvas fragment the shader casts the ray from the spot through it, meets
+the plane, expresses the hit in the plane's own (u, v) metres and samples a key there (a ring,
+a shaft, two teeth, as signed distances). The spot is 2.6 m west along the wall and half a
+metre out, at eye height -- `V = (994.4, 1.5, 1.55)` against a canvas centred at
+`(997, 1.6, 2.05)`, an eleven-degree look along the wall -- so from anywhere else the key is
+a long gold smear, the far end stretched more than the near, and from the spot it closes into
+a 9 cm key lying sideways. (Nine centimetres because that grazing view sees only the part of
+the canvas between the far edge and the near upright of the frame; the key sits a centimetre
+toward the far end to fit.) `painting.rs` mirrors the sum on the CPU (`to_plane`,
+`to_canvas`) and the tests check a plane point comes back to itself through the canvas and
+that a circle on the plane paints as a smear more than four times wider than it is tall.
+
+Stand in the spot -- within 0.45 m of it, looking within 25 degrees of the canvas centre
+(`KeySpec`, `armed`) -- and the paint catches the light, the HUD says TAKE THE KEY, and a real
+key (`ext::key::Key`, built at load by the painting and kept) is spawned on the canvas at the
+painted key's spot (`room::request_spawn`) and comes out of it over half a second, growing
+from nothing as the painted one fades (`Emergence`; the `key_state` uniform is the same
+blend). It lies in the picture plane facing the spot, so from there it is the painted key
+stepped off the canvas, ten centimetres out along the wall. Step out of the spot before
+taking it and it sinks back and is painted again (`room::request_remove`); take it -- it is a
+grabbable, one hit sphere, the engine's own gravity and collision once it is loose; its mesh
+is `Meshes/key.obj`, extruded by `tools/gen_key.py` from the same numbers as the shader's
+distance field, so the key that comes out is the key that was painted -- and its `on_grab`
+sets a flag the painting shares, and the painting's key is gone for good. The
+emergence and the arm test are unit tested with scripted positions.
+
+Using it: each fixed step the held key looks down the crosshair for the nearest object that
+answers `ObjectT::accepts_key` within 2.5 m, by bounding sphere as the grab picks, and offers
+E  USE THE KEY; the press raises `room::request_unlock_window`, which the window takes. That
+E is also the grab's release, and a used key asks to be removed from its `on_release`, so
+the removal lands on the next frame rather than in the step that used it -- a key removed
+mid-frame would leave the grab holding nothing by the time it sees the press, and the release
+would become a pickup of whatever is under the crosshair. The key's prompt has to beat the
+window's own LOCKED, which the grab sets once per frame after the fixed steps, so it goes
+through `hint::insist`, the one line that outranks a `set`. Objects see the scene through
+`UpdateCtx::scene` for this; the window is built after the paintings, so a snapshot taken at
+the painting's load could not have held it.
+
+The 3D key is drawn with the ported `texture` shader, whose one light is fixed from above and
++z; facing the spot squarely it would come out of the canvas near black, so it is pitched a
+quarter of a right angle about its length toward the light. A prop look with a real light
+replaces that.
+
 ### Per-frame room logic — `ext/room.rs`
 
 The ported `Scene` trait has exactly one method, `Load` (`Scene.h:7-9`) — scenes build objects
@@ -931,7 +980,9 @@ it -- a key that has been used, a prop a puzzle conjures -- applied by `Engine::
 the portal pass, never while a pass is walking the vector; removal is by `Rc::ptr_eq`, and the
 indices it frees go to `grab::GrabState::on_removed`, since the grab holds one across frames.
 **The unlock** (`room::request_unlock_window`, `room::take_unlock_window`) is a one-shot flag
-the key raises and the window consumes, in either order within a step.
+the key raises and the window consumes, in either order within a step. The hint has a second
+slot, `hint::insist`, that the take prefers over a `set` whichever was written first: the
+held key's E  USE THE KEY over the window's LOCKED, which the grab writes later in the frame.
 
 ### Real physics — `ext/physics.rs`, `ext/rigid.rs`
 
@@ -1255,9 +1306,9 @@ Small additions, each tagged `// EXT:`:
 | `collider.rs` | read-only `mat()` accessor, so rays can transform the rectangle to world space; `Collider::rect(centre, half_u, half_v)`, the three-corner constructor with the sorting already done |
 | `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`R` and the scene keys `8`–`.` (`8` `9` `0` `-` `=` `[` `]` `\` `;` `'` `,` `.`); `Shift` into the `VK_SHIFT` slot and the resolved sprint multipliers |
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
-| `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery; `Object::rot`, a rotation matrix that stands in for `euler` in `local_to_world`/`world_to_local`/`forward` when set (a rigid body's orientation does not round-trip through Euler angles); the prop hooks on `ObjectT`, all defaulted: `engine_collision()` (false: the collision pass never pushes it and the portal pass never warps it -- something else owns its motion), `on_grab()`, `on_release(velocity)`, `on_rescale(p_scale)` (called by `ext/grab.rs`), `place_flat()` (the grab lays it on the surface it hits instead of standing it off by its sphere) and `pick_hint()` (a HUD line while the crosshair is on it) |
+| `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look, and the scene's object vector (`scene`), for an object that reads the others during its step (the held key); `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery; `Object::rot`, a rotation matrix that stands in for `euler` in `local_to_world`/`world_to_local`/`forward` when set (a rigid body's orientation does not round-trip through Euler angles); the prop hooks on `ObjectT`, all defaulted: `engine_collision()` (false: the collision pass never pushes it and the portal pass never warps it -- something else owns its motion), `on_grab()`, `on_release(velocity)`, `on_rescale(p_scale)` (called by `ext/grab.rs`), `place_flat()` (the grab lays it on the surface it hits instead of standing it off by its sphere), `pick_hint()` (a HUD line while the crosshair is on it) and `accepts_key()` (the held key can be used on it: the window, while locked) |
 | `frame_buffer.rs` | sized attachments instead of `GH_FBO_SIZE` square |
-| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn, portal-removal, spawn and remove requests applied after the portal pass (a removal's freed indices handed to the grab), its scene-load request applied after the fixed-step loop; the collision pass skipping an `engine_collision() == false` object as its subject and the portal pass skipping it outright; E offered to the elevator before the grab, the frame's hint (`ext/hint.rs`) and the elevator's black-out in the overlay block (the black-out under the pause menu too); the `--forward`/`--strafe`/`--sprint` held keys, `--arrive` and `--ride-at`, handed over as one `cli::DirectRun`; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`); the rigid-body world's static rebuild once a load's object list is complete, its step between the collision and portal passes, its `[phys]`/`[prop]` report at shot time and `--drop-props` (`ext/physics.rs`) |
+| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn, portal-removal, spawn and remove requests applied after the portal pass (a removal's freed indices handed to the grab), its scene-load request applied after the fixed-step loop; the collision pass skipping an `engine_collision() == false` object as its subject and the portal pass skipping it outright; E offered to the elevator before the grab, the frame's hint (`ext/hint.rs`) and the elevator's black-out in the overlay block (the black-out under the pause menu too); the `--forward`/`--strafe`/`--sprint` held keys, `--arrive`, `--ride-at`, `--hold-key` and `--e-at`, handed over as one `cli::DirectRun`; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`); the rigid-body world's static rebuild once a load's object list is complete, its step between the collision and portal passes, its `[phys]`/`[prop]` report at shot time and `--drop-props` (`ext/physics.rs`) |
 | `portal.rs` | the nested pass scissored to the quad's screen footprint; `passable` (default true) and `tint` (default clear), the second uploaded to `portal.frag` as `uniform vec4 tint` and mixed over the far side by its alpha |
 | `physical.rs` | `try_portal` returns false without warping through a portal that is not `passable` |
 | `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4`; `new` returns `Result<_, AssetError>` and the attribute scan is a pure, tested `scrape_attribs` |
@@ -1360,7 +1411,8 @@ back two centimetres off the scan's wall face so the two never z-fight. Their ey
 whichever camera is drawing them, door included, and their faces change only while nobody is
 looking. Eight of them add nothing measurable to the frame: with vsync off the hall views stay
 at 1.0 ms and the meadow spawn (the door drawing the hall) within noise of its 2.2 ms. Between
-the second and third of the north wall's portraits hangs [the window](#the-window).
+the second and third of the north wall's portraits hangs [the window](#the-window). The last
+one on the north wall wears [the key](#the-key-in-the-painting--extkeyrs-extpaintingrs-shaderspaintingfrag).
 
 Frame cost, measured with `glFinish` after each frame on a shared M3 Max at 2560x1440 (so
 absolute numbers are pessimistic; the comparison is what matters): meadow spawn in the intro
@@ -1751,16 +1803,37 @@ parsing, so a double-clicked bundle starts clean.
 `daydreams gen-terrain` is the one subcommand: it rewrites `Meshes/meadow_tile.obj` under the
 asset root from `ext::terrain::height` and exits (see [Meadow](#meadow-grass-and-clouds-scene-)).
 
-Seven flags are hidden from `--help` because they are tools rather than features: `--panic-test`
+Nine flags are hidden from `--help` because they are tools rather than features: `--panic-test`
 (the crash dialog, below), `--view-glb PATH` with `--view-translucent NAMES` (a scene of one
 model, see [glTF loader](#gltf-loader)), `--arrive` and `--ride-at FRAME` (with `--scene`:
 load it as an elevator ride would, and press E once on that frame; see
 [Elevator](#elevator)), `--window-scale S` and `--unlock-window` (with `--scene`: how the
-Backrooms' window is built; see [The window](#the-window)), and `--drop-props H` (with
+Backrooms' window is built; see [The window](#the-window)), `--drop-props H` (with
 `--scene`: lift the rigid-body props by `H` metres at the start; see
-[Real physics](#real-physics--extphysicsrs-extrigidrs)). `--view-glb` excludes `--scene`; its
-path is taken under the working directory when a file is there, under the asset root
-otherwise.
+[Real physics](#real-physics--extphysicsrs-extrigidrs)), and `--hold-key` and `--e-at FRAME`
+(with `--scene`: start with the painting's key in hand, and press E on that frame as the
+keyboard would -- the press slot, seen by the frame's first fixed step and latched for the
+grab; see
+[The key in the painting](#the-key-in-the-painting--extkeyrs-extpaintingrs-shaderspaintingfrag)).
+`--view-glb` excludes `--scene`; its path is taken under the working directory when a file is
+there, under the asset root otherwise.
+
+The key's runs, from the Backrooms (scene 16):
+
+```bash
+# From the sweet spot, looking at the canvas centre: the painted key reads as a key on the
+# first frame, TAKE THE KEY shows, and by frame 60 the real key floats in front of the canvas
+cargo run --release -- --windowed --mute --scene 16 --pos 994.4,1.5,1.55 --yaw -100.9 --pitch 2.2 --shot out.bmp --frames 1
+cargo run --release -- --windowed --mute --scene 16 --pos 994.4,1.5,1.55 --yaw -100.9 --pitch 2.2 --shot out.bmp --frames 60
+# Square on to the portrait: the smear
+cargo run --release -- --windowed --mute --scene 16 --pos 997,1.5,0.3 --yaw 180 --pitch 3 --shot out.bmp --frames 60
+# A metre off the spot: nothing emerges
+cargo run --release -- --windowed --mute --scene 16 --pos 993.4,1.5,1.55 --yaw -100.9 --pitch 2.2 --shot out.bmp --frames 60
+# The use: key in hand, aimed at the north wall, E on frame 30. Expect
+# "[key] used on the window: unlock requested", then the key gone by frame 60. Without a
+# window in the scene a stand-in lock is planted a metre ahead, and says so.
+cargo run --release -- --windowed --mute --scene 16 --hold-key --pos 987,1.5,1.2 --yaw 180 --e-at 30 --shot out.bmp --frames 60
+```
 
 ### Logging
 

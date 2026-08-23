@@ -21,6 +21,20 @@
 //!   last seen from, and when looked at again they slide from there to the viewer over
 //!   [`REACQUIRE`] seconds -- so turning back finds them on the spot you left.
 //!
+//! # The key in the painting
+//!
+//! One portrait carries a key, painted in anamorphosis: the key proper lives on a virtual
+//! picture plane through the canvas centre, perpendicular to the line from a sweet spot `V`
+//! to that centre, and what is on the canvas is that key's central projection from `V` --
+//! a smear along the canvas that only closes into a key seen from `V`, a grazing view along
+//! the wall ([`to_plane`], [`to_canvas`]; the shader does the same sum per fragment). Stand
+//! in the sweet spot and look at the canvas ([`KeySpec`], [`armed`]) and the paint catches
+//! the light, the HUD says so, and a real key -- `ext::key::Key`, built at load and kept --
+//! is spawned on the canvas at the painted key's spot and comes out of it over [`EMERGE`]
+//! seconds, growing as the painted one fades ([`Emergence`]). Step out of the spot before
+//! taking it and it sinks back and is unpainted again; take it (the key's `on_grab` sets a
+//! flag both share) and the painting's key is gone for good.
+//!
 //! # Seeing through a door
 //!
 //! From the meadow the hall is a thousand units off along +x and the direct cone test says
@@ -33,14 +47,16 @@
 //! consulted only for paintings on its far side: a painting nearer this end of it than the
 //! other is in this world and is seen directly or not at all.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::camera::Camera;
 use crate::ext::backrooms::WALL_FOG;
 use crate::ext::cull::object_sphere;
 use crate::ext::door::{yaw_facing, DoorLink};
+use crate::ext::key::Key;
 use crate::ext::visibility::{has_line_of_sight, in_view_cone, WATCH_HALF_ANGLE};
+use crate::ext::{hint, room};
 use crate::game_header::GH_DT;
 use crate::object::{Object, ObjectT, RenderCtx, UpdateCtx};
 use crate::portal::{Portal, Warp};
@@ -246,6 +262,187 @@ fn beyond(here: Vector3, warp: &Warp, point: Vector3) -> bool {
     (point - far_end).mag_sq() < (point - here).mag_sq()
 }
 
+/// Seconds the key takes to come out of the canvas, and to sink back.
+pub const EMERGE: f32 = 0.5;
+/// How far in front of the canvas the key floats once it is out, along the wall's normal.
+pub const KEY_OUT: f32 = 0.10;
+/// Where the key sits on the picture plane, in its (u, v) metres from the canvas centre:
+/// over the sitter's collar, and a little toward the far end of the canvas. The sweet spot's
+/// view is grazing enough that the frame's near upright hides the canvas past x = 0.18 of
+/// its 0.4 half-width, and the far end stretches more than the near one, so a 9 cm key
+/// centred a centimetre toward the far end is what fits (`tools/gen_key.py`). THE SAME
+/// NUMBERS AS `KEY_ON_PLANE` in `Shaders/painting.frag`.
+pub const KEY_ON_PLANE: (f32, f32) = (-0.010, -0.27);
+/// The 3D key is pitched this far about its length, its face turned up toward the ported
+/// `texture` shader's fixed light (from above and +z): facing the sweet spot squarely it
+/// would be lit from behind and come out of the canvas near black. A quarter of a right
+/// angle costs a tenth of its apparent breadth from the sweet spot and doubles its light.
+pub const KEY_PITCH: f32 = 25.0 * std::f32::consts::PI / 180.0;
+/// What the HUD says while the player stands in the sweet spot and the key is still there.
+pub const TAKE_HINT: &str = "TAKE THE KEY";
+
+/// A painting's key: where it is seen from, and how exactly the player has to stand there.
+#[derive(Clone, Copy, Debug)]
+pub struct KeySpec {
+    /// The sweet spot, world space: where the eye must be.
+    pub view: Vector3,
+    /// How far from it the eye may be, in metres.
+    pub radius: f32,
+    /// How far off the canvas centre the look may be, in radians (a half-angle).
+    pub cone: f32,
+}
+
+/// Whether the player is in the sweet spot: eye within `radius` of the view point and the
+/// canvas centre within `cone` of the look direction.
+pub fn armed(cam_to_world: &Matrix4, spec: &KeySpec, centre: Vector3) -> bool {
+    (cam_to_world.translation() - spec.view).mag() <= spec.radius
+        && in_view_cone(cam_to_world, centre, spec.cone)
+}
+
+/// The picture plane's frame for a sweet spot `view` in canvas-plane metres (the canvas is
+/// z = 0, z toward the room): `n` from the canvas centre to the eye, `u` horizontal across
+/// it, `v` the nearest thing to up. Mirrors `anamorph` in `Shaders/painting.frag`.
+pub fn plane_basis(view: Vector3) -> (Vector3, Vector3, Vector3) {
+    let n = view.normalized();
+    let u = Vector3::unit_y().cross(n).normalized();
+    let v = n.cross(u);
+    (u, v, n)
+}
+
+/// Where the ray from `view` through the canvas point `p` meets the picture plane, in the
+/// plane's (u, v) metres: the sum `anamorph` in the shader does per fragment, here so the
+/// tests can check it against `to_canvas`, which is the one the scene code needs.
+#[cfg(test)]
+pub fn to_plane(view: Vector3, p: (f32, f32)) -> (f32, f32) {
+    let (u, v, n) = plane_basis(view);
+    let p = Vector3::new(p.0, p.1, 0.0);
+    let t = n.dot(view) / n.dot(view - p);
+    let q = view + (p - view) * t;
+    (q.dot(u), q.dot(v))
+}
+
+/// The inverse: where the picture-plane point `q` is painted on the canvas -- the ray from
+/// `view` through it, carried on to z = 0.
+pub fn to_canvas(view: Vector3, q: (f32, f32)) -> (f32, f32) {
+    let (u, v, _) = plane_basis(view);
+    let q = u * q.0 + v * q.1;
+    let d = q - view;
+    let t = -view.z / d.z;
+    let p = view + d * t;
+    (p.x, p.y)
+}
+
+/// What the key is doing, as a state machine over the sweet spot and the grab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyPhase {
+    /// On the canvas, paint only.
+    Painted,
+    /// The real key coming out, the paint fading.
+    Emerging,
+    /// Out, floating in front of the canvas, waiting to be taken.
+    Out,
+    /// The player left the spot: going back in, the paint returning.
+    Sinking,
+    /// In the player's hand, or wherever it went from there: nothing left on the canvas.
+    Taken,
+}
+
+/// What the painting must do about a step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyEvent {
+    /// Put the key object in the scene.
+    Spawn,
+    /// Take it out again.
+    Remove,
+}
+
+/// The emergence: a phase and how far out the key is, `0..=EMERGE` seconds.
+#[derive(Clone, Copy, Debug)]
+pub struct Emergence {
+    phase: KeyPhase,
+    t: f32,
+}
+
+impl Default for Emergence {
+    fn default() -> Emergence {
+        Emergence { phase: KeyPhase::Painted, t: 0.0 }
+    }
+}
+
+impl Emergence {
+    /// One fixed step: `armed` is whether the player is in the sweet spot, `taken` whether
+    /// the key has been grabbed. A take wins over everything and is final; otherwise arming
+    /// drives the key out and disarming lets it sink, reversible at any point, and the key
+    /// object is in the scene from the first step out to the last step back.
+    pub fn step(&mut self, armed: bool, taken: bool, dt: f32) -> Option<KeyEvent> {
+        use KeyPhase::*;
+        if taken {
+            self.phase = Taken;
+            self.t = EMERGE;
+            return None;
+        }
+        match self.phase {
+            Painted if armed => {
+                self.phase = Emerging;
+                self.t = 0.0;
+                return Some(KeyEvent::Spawn);
+            }
+            Painted | Taken => {}
+            Emerging | Out if !armed => self.phase = Sinking,
+            Emerging => {
+                self.t += dt;
+                if self.t >= EMERGE {
+                    self.t = EMERGE;
+                    self.phase = Out;
+                }
+            }
+            Out => {}
+            Sinking if armed => self.phase = Emerging,
+            Sinking => {
+                self.t -= dt;
+                if self.t <= 0.0 {
+                    self.t = 0.0;
+                    self.phase = Painted;
+                    return Some(KeyEvent::Remove);
+                }
+            }
+        }
+        None
+    }
+
+    pub fn phase(&self) -> KeyPhase {
+        self.phase
+    }
+
+    /// How far out the key is, 0 (painted) to 1 (out, or taken): the real key's scale and
+    /// the painted one's fade.
+    pub fn blend(&self) -> f32 {
+        self.t / EMERGE
+    }
+
+    /// Whether the key object is in the scene and the painting's to move.
+    pub fn floating(&self) -> bool {
+        matches!(self.phase, KeyPhase::Emerging | KeyPhase::Out | KeyPhase::Sinking)
+    }
+}
+
+/// A painting's key, built at load and kept: the spec, the key object and where it goes.
+struct KeyRig {
+    spec: KeySpec,
+    /// The sweet spot in canvas-plane metres: the shader's `key_view`.
+    view_local: Vector3,
+    /// Where the painted key is, on the canvas, in the world; and how far the real one comes
+    /// out from there when fully emerged (along the wall's normal).
+    rest: Vector3,
+    out: Vector3,
+    key: Rc<RefCell<Key>>,
+    /// Set by the key's `on_grab`.
+    taken: Rc<Cell<bool>>,
+    emergence: Emergence,
+    /// Armed and not yet taken, as of the last step: the paint catches the light.
+    glint: bool,
+}
+
 pub struct Painting {
     canvas: Object,
     bars: [Object; 4],
@@ -262,12 +459,14 @@ pub struct Painting {
     seen_from: Option<Vector3>,
     expression: Expression,
     gaze: Gaze,
+    centre: Vector3,
+    key: Option<KeyRig>,
 }
 
 impl Painting {
     /// A `size.0` x `size.1` metre portrait centred at `centre`, hanging on a wall whose
     /// normal (toward the room) is `facing`; `seed` picks the sitter and `watch` is what it
-    /// decides "being looked at" through.
+    /// decides "being looked at" through. With a `key`, the sitter wears one (module docs).
     pub fn new(
         res: &Resources,
         centre: Vector3,
@@ -275,12 +474,46 @@ impl Painting {
         size: (f32, f32),
         seed: u32,
         watch: Watch,
+        key: Option<KeySpec>,
     ) -> Painting {
         let yaw = yaw_facing(facing);
         // The painting's own frame: x along the wall, y up, z off the wall toward the room.
         let rigid = Matrix4::trans(centre) * Matrix4::rot_y(yaw);
         let rigid_w2l = Matrix4::rot_y(-yaw) * Matrix4::trans(-centre);
         let (w, h) = size;
+
+        let key = key.map(|spec| {
+            // The sweet spot in the canvas plane's own metres (the quad is CANVAS_DEPTH off
+            // the frame's origin), and the picture plane's frame through it.
+            let view_local = rigid_w2l.mul_point(spec.view) - Vector3::new(0.0, 0.0, CANVAS_DEPTH);
+            let (u, v, n) = plane_basis(view_local);
+            // The key rests where it is painted: the picture-plane point's image on the
+            // canvas, which is where the smear is centred.
+            let (px, py) = to_canvas(view_local, KEY_ON_PLANE);
+            let rest = rigid.mul_point(Vector3::new(px, py, CANVAS_DEPTH));
+            let out = facing.normalized_safe() * KEY_OUT;
+            // The key lies in the picture plane -- its length along u, its breadth along v,
+            // facing the sweet spot -- so from there it is the painted key, stepped off the
+            // canvas; less the pitch about u that turns its face to the light (`KEY_PITCH`).
+            let (sin, cos) = KEY_PITCH.sin_cos();
+            let mut rot = Matrix4::identity();
+            rot.set_x_axis(rigid.mul_direction(u));
+            rot.set_y_axis(rigid.mul_direction(v * cos - n * sin));
+            rot.set_z_axis(rigid.mul_direction(n * cos + v * sin));
+            let taken = Rc::new(Cell::new(false));
+            let key = Key::new(res, taken.clone());
+            key.borrow_mut().place(rest, rot);
+            KeyRig {
+                spec,
+                view_local,
+                rest,
+                out,
+                key,
+                taken,
+                emergence: Emergence::default(),
+                glint: false,
+            }
+        });
 
         let mut canvas = Object::new();
         canvas.mesh = Some(res.acquire_mesh("quad.obj"));
@@ -327,6 +560,36 @@ impl Painting {
             seen_from: None,
             expression: Expression::default(),
             gaze: Gaze::default(),
+            centre,
+            key,
+        }
+    }
+
+    /// The key's step: the sweet spot test, the state machine, and what it asks of the scene
+    /// and of the key object -- which is a different cell from this painting's, so borrowing
+    /// it here is sound (`try_borrow_mut` all the same, as nothing is worth a panic).
+    fn step_key(&mut self, cam_to_world: &Matrix4) {
+        let Some(rig) = &mut self.key else { return };
+        let armed = armed(cam_to_world, &rig.spec, self.centre);
+        let taken = rig.taken.get();
+        match rig.emergence.step(armed, taken, GH_DT) {
+            Some(KeyEvent::Spawn) => {
+                room::request_spawn(rig.key.clone() as Rc<RefCell<dyn ObjectT>>);
+            }
+            Some(KeyEvent::Remove) => {
+                room::request_remove(&(rig.key.clone() as Rc<RefCell<dyn ObjectT>>));
+            }
+            None => {}
+        }
+        if rig.emergence.floating() {
+            if let Ok(mut key) = rig.key.try_borrow_mut() {
+                let blend = rig.emergence.blend();
+                key.float_at(rig.rest + rig.out * blend, blend);
+            }
+        }
+        rig.glint = armed && rig.emergence.phase() != KeyPhase::Taken;
+        if rig.glint {
+            hint::set(TAKE_HINT);
         }
     }
 }
@@ -346,6 +609,7 @@ impl ObjectT for Painting {
         self.steps = self.steps.wrapping_add(1);
         self.expression.step(self.seen_from.is_some(), GH_DT);
         self.gaze.step(self.seen_from, GH_DT);
+        self.step_key(&ctx.cam_to_world);
     }
 
     fn draw(&self, ctx: &RenderCtx, cam: &Camera, _fbo: Option<glow::Framebuffer>) {
@@ -374,6 +638,19 @@ impl ObjectT for Painting {
         shader.set_vec4("size", [self.size.0, self.size.1, 0.0, 0.0]);
         shader.set_f32("seed", self.seed as f32);
         shader.set_f32("expression", if self.expression.changed() { 1.0 } else { 0.0 });
+        // The key: its sweet spot, how far out it is, and whether the paint glints. A
+        // portrait without one says so in `key_view.w` and the shader draws nothing.
+        let (view, state, glint) = match &self.key {
+            Some(rig) => {
+                let v = rig.view_local;
+                ([v.x, v.y, v.z, 1.0], rig.emergence.blend(), if rig.glint { 1.0 } else { 0.0 })
+            }
+            None => ([0.0; 4], 1.0, 0.0),
+        };
+        shader.set_vec4("key_view", view);
+        shader.set_f32("key_state", state);
+        shader.set_f32("key_glint", glint);
+        shader.set_f32("time", crate::ext::view::time());
         mesh.draw();
     }
 }
@@ -602,6 +879,152 @@ mod tests {
         let across = slab(far + Vector3::new(-2.0, 1.5, 0.0), 1.5, 3.0);
         let watch = Watch::new(&vec![across], &vec![here, there]);
         assert!(watch.seen_from(&cam, painting).is_none(), "seen through a wall");
+    }
+
+    /// The sweet spot of the Backrooms' key in canvas-plane metres: 2.6 m along the wall,
+    /// a tenth below the centre, half a metre out (`level16.rs`, `KEY_SPEC`).
+    const VIEW: Vector3 = Vector3 { x: 2.6, y: -0.1, z: 0.488 };
+
+    #[test]
+    fn a_picture_plane_point_comes_back_to_itself_through_the_canvas() {
+        for q in [(0.0, 0.0), (0.045, 0.0), (-0.045, 0.0), (0.0, 0.03), (-0.01, -0.27)] {
+            let p = to_canvas(VIEW, q);
+            let back = to_plane(VIEW, p);
+            assert!(
+                (back.0 - q.0).abs() < 1e-5 && (back.1 - q.1).abs() < 1e-5,
+                "{q:?} -> {back:?}"
+            );
+        }
+        // The plane passes through the canvas centre: its origin is painted there.
+        assert!(to_canvas(VIEW, (0.0, 0.0)).0.abs() < 1e-6);
+        // Seen square on, the plane IS the canvas and nothing is distorted.
+        let square = Vector3::new(0.0, 0.0, 2.0);
+        let p = to_canvas(square, (0.03, -0.02));
+        assert!((p.0 - 0.03).abs() < 1e-6 && (p.1 + 0.02).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_smear_is_elongated_along_the_view_direction() {
+        // A circle on the plane, as painted: its extent along the canvas's x -- which is
+        // where the line from the sweet spot to the centre runs, the view being along the
+        // wall -- against its extent across it.
+        let r = 0.019;
+        let mut xs = (f32::MAX, f32::MIN);
+        let mut ys = (f32::MAX, f32::MIN);
+        for i in 0..64 {
+            let a = i as f32 / 64.0 * std::f32::consts::TAU;
+            let (x, y) = to_canvas(VIEW, (r * a.cos(), r * a.sin()));
+            xs = (xs.0.min(x), xs.1.max(x));
+            ys = (ys.0.min(y), ys.1.max(y));
+        }
+        let (wide, tall) = (xs.1 - xs.0, ys.1 - ys.0);
+        assert!(wide > 4.0 * tall, "stretched {wide} by {tall}");
+        assert!((tall - 2.0 * r).abs() < 0.003, "across the view it is its own size: {tall}");
+        // And the far end stretches more than the near one (the end toward the viewer, +x).
+        let near = to_canvas(VIEW, (r, 0.0)).0;
+        let far = -to_canvas(VIEW, (-r, 0.0)).0;
+        assert!(far > near * 1.05, "near {near} far {far}");
+        // The key as hung fits on the canvas, and short of the near upright (painting.rs,
+        // `KEY_ON_PLANE`).
+        let (u0, v0) = KEY_ON_PLANE;
+        let bow = to_canvas(VIEW, (u0 - 0.045, v0)).0;
+        let tip = to_canvas(VIEW, (u0 + 0.045, v0)).0;
+        assert!(bow > -0.37 && tip < 0.18, "bow at {bow}, tip at {tip}");
+    }
+
+    #[test]
+    fn armed_needs_both_the_spot_and_the_look() {
+        let centre = Vector3::new(997.0, 1.6, 2.05);
+        let spec = KeySpec {
+            view: Vector3::new(994.4, 1.5, 1.55),
+            radius: 0.45,
+            cone: 25.0_f32.to_radians(),
+        };
+        let at = |eye: Vector3, dir: Vector3| camera(eye, dir);
+        let to_centre = (centre - spec.view).normalized();
+        assert!(armed(&at(spec.view, to_centre), &spec, centre));
+        // Within the radius, still looking: armed. A metre off: not.
+        assert!(armed(&at(spec.view + Vector3::new(0.3, 0.0, 0.2), to_centre), &spec, centre));
+        assert!(!armed(&at(spec.view + Vector3::new(-1.0, 0.0, 0.0), to_centre), &spec, centre));
+        // In the spot, looking down the hall instead (90 degrees off): not.
+        assert!(!armed(&at(spec.view, Vector3::new(0.0, 0.0, -1.0)), &spec, centre));
+        // Twenty degrees off the centre is within the cone; thirty is not.
+        let turned = |deg: f32| {
+            let a = deg.to_radians();
+            Vector3::new(
+                to_centre.x * a.cos() - to_centre.z * a.sin(),
+                0.0,
+                to_centre.x * a.sin() + to_centre.z * a.cos(),
+            )
+        };
+        assert!(armed(&at(spec.view, turned(20.0)), &spec, centre));
+        assert!(!armed(&at(spec.view, turned(30.0)), &spec, centre));
+    }
+
+    /// Drive the emergence with `(armed, taken, seconds)` stretches at the fixed step,
+    /// collecting the events and returning them with the final state.
+    fn emerge(script: &[(bool, bool, f32)]) -> (Vec<KeyEvent>, Emergence) {
+        let mut e = Emergence::default();
+        let mut events = Vec::new();
+        for &(armed, taken, secs) in script {
+            for _ in 0..(secs / GH_DT).round() as u32 {
+                events.extend(e.step(armed, taken, GH_DT));
+            }
+        }
+        (events, e)
+    }
+
+    #[test]
+    fn the_key_comes_out_on_arming_and_sinks_back_on_leaving() {
+        // Nothing happens unarmed; arming spawns the key at once and it is out after EMERGE.
+        let (ev, e) = emerge(&[(false, false, 1.0)]);
+        assert!(ev.is_empty() && e.phase() == KeyPhase::Painted && e.blend() == 0.0);
+        let (ev, e) = emerge(&[(true, false, EMERGE * 0.5)]);
+        assert_eq!(ev, [KeyEvent::Spawn]);
+        assert_eq!(e.phase(), KeyPhase::Emerging);
+        assert!((e.blend() - 0.5).abs() < 0.02 && e.floating());
+        let (ev, e) = emerge(&[(true, false, EMERGE + 0.1)]);
+        assert_eq!(ev, [KeyEvent::Spawn]);
+        assert!(e.phase() == KeyPhase::Out && e.blend() == 1.0);
+        // Leave: it sinks for as long as it came out, then is removed and painted again.
+        let (ev, e) = emerge(&[(true, false, EMERGE + 0.1), (false, false, EMERGE * 0.5)]);
+        assert_eq!(ev, [KeyEvent::Spawn]);
+        assert!(e.phase() == KeyPhase::Sinking && (e.blend() - 0.5).abs() < 0.02);
+        let (ev, e) = emerge(&[(true, false, EMERGE + 0.1), (false, false, EMERGE + 0.1)]);
+        assert_eq!(ev, [KeyEvent::Spawn, KeyEvent::Remove]);
+        assert!(e.phase() == KeyPhase::Painted && e.blend() == 0.0 && !e.floating());
+        // Come back mid-sink: it turns round without a second spawn, and a second leave
+        // and return cycle spawns again only after it has been fully removed.
+        let (ev, e) = emerge(&[
+            (true, false, 0.2),
+            (false, false, 0.1),
+            (true, false, EMERGE),
+            (false, false, 1.0),
+            (true, false, 0.1),
+        ]);
+        assert_eq!(ev, [KeyEvent::Spawn, KeyEvent::Remove, KeyEvent::Spawn]);
+        assert_eq!(e.phase(), KeyPhase::Emerging);
+    }
+
+    #[test]
+    fn taking_the_key_is_final() {
+        // Taken while out: no removal, fully blended, and nothing the spot does matters.
+        let (ev, e) = emerge(&[
+            (true, false, EMERGE + 0.1),
+            (true, true, 0.1),
+            (false, true, 2.0),
+            (true, true, 0.1),
+        ]);
+        assert_eq!(ev, [KeyEvent::Spawn]);
+        assert!(e.phase() == KeyPhase::Taken && e.blend() == 1.0 && !e.floating());
+        // Taken mid-emergence: the same, with the painted key gone at once.
+        let (ev, e) = emerge(&[(true, false, 0.1), (true, true, GH_DT)]);
+        assert_eq!(ev, [KeyEvent::Spawn]);
+        assert!(e.phase() == KeyPhase::Taken && e.blend() == 1.0);
+        // Taken while sinking, before the removal: still no removal.
+        let (ev, e) = emerge(&[(true, false, EMERGE), (false, false, 0.1), (false, true, 1.0)]);
+        assert_eq!(ev, [KeyEvent::Spawn]);
+        assert_eq!(e.phase(), KeyPhase::Taken);
     }
 
     #[test]

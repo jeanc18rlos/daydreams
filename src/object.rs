@@ -31,6 +31,12 @@ pub struct UpdateCtx<'a> {
     // it during the loop would alias its RefCell.
     pub cam_to_world: crate::vector::Matrix4,
     pub player_pos: crate::vector::Vector3,
+    // EXT: the scene's object vector, for an object that has to look at the others during
+    // its step -- a held key asking what the crosshair is on (src/ext/key.rs). The cell of
+    // the object being updated is mutably borrowed for the call, so a reader goes through
+    // `try_borrow` and treats its own cell's failure as "not that one", as the ray casts in
+    // src/ext/raycast.rs already do.
+    pub scene: &'a [Rc<std::cell::RefCell<dyn ObjectT>>],
 }
 
 // PORT: `typedef std::vector<std::shared_ptr<Object>> PObjectVec` (Object.h:46) lives in
@@ -247,6 +253,14 @@ pub trait ObjectT {
     // E would do, or why it will not ("LOCKED", "TOO SMALL", "E  USE KEY"). None is silent.
     fn pick_hint(&self) -> Option<&'static str> {
         None
+    }
+
+    // EXT: whether a held key can be used on this object (src/ext/key.rs): the key's step
+    // looks for the nearest object answering true under the crosshair, within its reach, and
+    // offers "E  USE THE KEY"; the press raises `room::request_unlock_window`. The window
+    // answers true while it is locked.
+    fn accepts_key(&self) -> bool {
+        false
     }
 
     //Casts
