@@ -404,10 +404,14 @@ mod tests {
         assert!((full - SPRINT_SPEED).abs() < 1e-3, "{full}");
         // Release: the first frame is still most of a run, not a walk -- the jolt this exists
         // to remove -- and the cap then descends monotonically.
-        let mut input = walking();
+        let input = walking(); // `walking()` has Shift up already
         t += 1.0 / 60.0;
-        let mut prev = s.resolve(&input, false, t).speed;
+        let released = s.resolve(&input, false, t);
+        let mut prev = released.speed;
         assert!(prev > 1.6 && prev < full, "released: {prev}");
+        // Only the speed cap eases: the stepwise factors are off from the FIRST released
+        // frame, while the cap is still most of a run.
+        assert_eq!((released.accel, released.bob), (1.0, 1.0));
         let mut snapped_at = None;
         for i in 0..120 {
             t += 1.0 / 60.0;
@@ -423,8 +427,7 @@ mod tests {
         assert_eq!(prev.to_bits(), 1.0f32.to_bits());
         let i = snapped_at.expect("never snapped");
         assert!((30..50).contains(&i), "snapped on frame {i}");
-        // The stepwise factors were off from the first released frame.
-        input.key[KEY_SPRINT] = false;
+        // And still off on the last.
         let f = s.resolve(&input, false, t);
         assert_eq!((f.accel, f.bob), (1.0, 1.0));
     }
