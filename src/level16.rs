@@ -84,6 +84,15 @@ const ELEVATOR_SPOT: Vector3 = Vector3 {
 /// The doorway faces up the corridor, toward the hall (+z in the model's space).
 const ELEVATOR_FACING: Vector3 = Vector3 { x: 0.0, y: 0.0, z: 1.0 };
 
+/// The window's back (`ext/window.rs`), on the hall's north wall between the second and
+/// third portraits: the wall's face (2.07, where the portraits hang too) less the grab's own
+/// standoff, which is where a re-hung window sits. Its centre is a little under eye height:
+/// grown to a door (`window::PASS_HEIGHT` and more) it must still fit under the far room's
+/// 2.43 m ceiling, since the partner opening hangs at the same height (`window::PARTNER`).
+const WINDOW_SPOT: Vector3 = Vector3 { x: 987.0, y: 1.35, z: 2.07 - crate::ext::grab::FLAT_OFFSET };
+/// The wall's normal, into the hall.
+const WINDOW_FACING: Vector3 = Vector3 { x: 0.0, y: 0.0, z: -1.0 };
+
 impl Scene for Level16 {
     fn load(
         &self,
@@ -183,6 +192,77 @@ impl Scene for Level16 {
                 objs.push(Rc::new(RefCell::new(hang(x, wall_z, facing_z, seed as u32)))
                     as Rc<RefCell<dyn ObjectT>>);
             }
+        }
+
+        // ── The window (`ext/window.rs`): a small locked frame on the north wall between the
+        // second and third portraits, and through it the Overgrown room. The room is loaded a
+        // second time, two kilometres east (`window::FAR2`), from `level18`'s own spec and
+        // placement -- with the level's elevator cabin standing still in its wall, so the copy
+        // is the level down to the cut the loader carves and the two loads share one parse
+        // (`interior::build`, `window::Still`). Once the key has opened the window and the
+        // grab has made a door of it, walking through lands in the copy, and the logic at the
+        // end loads the real level at the same spot. One way: the elevator brings you back.
+        {
+            use crate::ext::interior::{self, Openings};
+            use crate::ext::room::request_scene_load;
+            use crate::ext::scenes;
+            use crate::ext::window::{
+                self, Still, Window, CROSSING_X, FAR2, PARTNER, PARTNER_FACING,
+            };
+            use crate::level18;
+            use crate::portal::Portal;
+
+            /// The level to load once the player is in the copy.
+            const OVERGROWN: usize = match scenes::index_of("Overgrown") {
+                Some(i) => i,
+                None => panic!("the scene registry has no Overgrown scene for the window"),
+            };
+
+            // The copy. The cabin is built where the level builds its own and moved after,
+            // so its cut is the level's to the bit (see `interior::build`).
+            let far_lift =
+                Elevator::new(gl, res, level18::ELEVATOR_SPOT, level18::ELEVATOR_YAW, None);
+            let openings =
+                Openings { cut: &[far_lift.wall_cut()], also_inside: &[far_lift.world_bounds()] };
+            // Whoever ends up under the copy's floor is put back a stride in from the partner
+            // opening; the crossing below then takes them on to the level, as it would have.
+            let respawn = Respawn::facing(
+                FAR2 + PARTNER + PARTNER_FACING * 0.6 + Vector3::new(0.0, GH_PLAYER_HEIGHT, 0.0),
+                PARTNER_FACING,
+            );
+            interior::build(
+                gl,
+                res,
+                objs,
+                &level18::load_spec(),
+                &level18::placement(),
+                openings,
+                0.0,
+                respawn,
+                FAR2,
+            );
+            objs.push(Rc::new(RefCell::new(Still::new(Box::new(far_lift), FAR2)))
+                as Rc<RefCell<dyn ObjectT>>);
+
+            // The opening and its partner, in the scene's portal vector like any other pair;
+            // the window places and connects them every step.
+            let here = Rc::new(RefCell::new(Portal::new(res)));
+            let there = Rc::new(RefCell::new(Portal::new(res)));
+            portals.push(here.clone());
+            portals.push(there.clone());
+            let window =
+                Window::new(gl, res, WINDOW_SPOT, WINDOW_FACING, here, there, window::preset());
+            objs.push(Rc::new(RefCell::new(window)) as Rc<RefCell<dyn ObjectT>>);
+
+            // The crossing: a player in the copy is loaded into the level at the same spot,
+            // looking the same way. No fade -- the two are the same room.
+            objs.push(Rc::new(RefCell::new(RoomLogic::new(|ctx| {
+                if ctx.player_pos.x > CROSSING_X {
+                    let (yaw, pitch) = window::look_of(&ctx.cam_to_world);
+                    window::set_arrival(ctx.player_pos - FAR2, yaw, pitch);
+                    request_scene_load(OVERGROWN);
+                }
+            }))) as Rc<RefCell<dyn ObjectT>>);
         }
     }
 }
@@ -340,5 +420,116 @@ mod tests {
         let forward_out = Vector3::new(-yaw_out.sin(), 0.0, -yaw_out.cos());
         // Facing -x: down the hall, away from the end wall the door faces.
         assert!(forward_out.x < -0.999, "came out facing {forward_out:?}");
+    }
+
+    /// The window's wall: flat behind the whole of a door-sized frame, measured from the
+    /// scan. Rays from across the opening's face at its largest useful size, cast into the
+    /// wall, all meet it a hand's width behind the frame's back -- no skirting, picture rail
+    /// or doorway in the way -- and the paintings either side are clear of the frame.
+    /// The scan as a whole, and where `Backrooms::new` stands it.
+    fn backrooms() -> (Load<'static>, Object) {
+        const PARTS: [PartSpec<'static>; 1] = [PartSpec {
+            name: "all",
+            roots: &["Sketchfab_model"],
+            skip: &[],
+            frame: Frame::Local,
+            anchor: Anchor::Hinge,
+        }];
+        let spec = Load {
+            path: "Meshes/backrooms_vr.glb",
+            parts: &PARTS,
+            fit: Fit::Identity,
+            max_map: 1024,
+            translucent: &[],
+            metallic_override: &[],
+            cut_boxes: &[],
+        };
+        let mut placement = Object::new();
+        placement.pos = FAR - DOOR_SPOT;
+        (spec, placement)
+    }
+
+    #[test]
+    fn the_window_hangs_on_a_flat_stretch_of_the_north_wall() {
+        use crate::ext::window::{BAR_HALF, OPENING, PASS_HEIGHT};
+        let (spec, placement) = backrooms();
+        let tris = crate::ext::interior::probe::world_triangles(&spec, "all", &placement);
+        // A door and a bit: the largest the window gets before its top meets the hall's
+        // ceiling, with the frame's bars round it.
+        let scale = (PASS_HEIGHT + 0.2) / OPENING.1;
+        let half_w = (0.5 * OPENING.0 + 2.0 * BAR_HALF) * scale;
+        let half_h = (0.5 * OPENING.1 + 2.0 * BAR_HALF) * scale;
+        let into_wall = -WINDOW_FACING;
+        for i in 0..=6 {
+            for j in 0..=6 {
+                let x = WINDOW_SPOT.x - half_w + half_w * i as f32 / 3.0;
+                // The bars' full reach, short of the ceiling and the carpet.
+                let y = (WINDOW_SPOT.y - half_h + half_h * j as f32 / 3.0).clamp(0.1, 2.45);
+                // From a stride in front of the frame's back, into the wall.
+                let from = Vector3::new(x, y, WINDOW_SPOT.z - 0.5);
+                let d = crate::ext::interior::probe::nearest_hit(&tris, from, into_wall)
+                    .expect("a wall behind the window");
+                let gap = d - 0.5;
+                assert!(
+                    gap > 0.0 && gap < 0.03,
+                    "at ({x:.2}, {y:.2}) the wall is {gap:.3} m behind the frame's back"
+                );
+            }
+        }
+        // The opening itself (the bars may run into the ceiling; they are hidden there)
+        // clears the hall's ceiling and its carpet.
+        let half_open = 0.5 * OPENING.1 * scale;
+        assert!(WINDOW_SPOT.y + half_open < 2.55, "the opening clears the hall's ceiling");
+        assert!(WINDOW_SPOT.y - half_open > 0.0, "and its carpet");
+        // The portraits at 985 and 989 are 0.8 m wide; the frame is between them.
+        assert!(WINDOW_SPOT.x - half_w > 985.0 + 0.4 + 0.1);
+        assert!(WINDOW_SPOT.x + half_w < 989.0 - 0.4 - 0.1);
+    }
+
+    /// The partner opening's stretch of the Overgrown room's west wall, measured from that
+    /// file through `level18`'s own placement: a wall a quarter of a metre behind the opening
+    /// across its whole door-sized face, floor at 0 and the ceiling over it, and nothing in
+    /// front of it for a stride and more, so the player steps out of the window into the
+    /// room and not into a maze wall.
+    #[test]
+    fn the_partner_opening_is_clear_on_the_far_rooms_west_wall() {
+        use crate::ext::interior::{
+            self,
+            probe::{floor_under, nearest_hit, world_triangles},
+        };
+        use crate::ext::window::{OPENING, PARTNER, PARTNER_FACING, PASS_HEIGHT};
+        use crate::level18;
+        let tris = world_triangles(&level18::load_spec(), level18::PART, &level18::placement());
+        let centre = Vector3::new(PARTNER.x, WINDOW_SPOT.y, PARTNER.z);
+        let scale = (PASS_HEIGHT + 0.2) / OPENING.1;
+        let (half_w, half_h) = (0.5 * OPENING.0 * scale, 0.5 * OPENING.1 * scale);
+        let across = PARTNER_FACING.cross(Vector3::new(0.0, 1.0, 0.0));
+        for i in 0..=6 {
+            for j in 0..=6 {
+                let p = centre
+                    + across * (half_w * (i as f32 / 3.0 - 1.0))
+                    + Vector3::new(0.0, half_h * (j as f32 / 3.0 - 1.0), 0.0);
+                let behind = nearest_hit(&tris, p, -PARTNER_FACING).expect("the west wall");
+                assert!((behind - 0.25).abs() < 0.02, "wall {behind} m behind {p:?}");
+                let ahead = nearest_hit(&tris, p, PARTNER_FACING).unwrap_or(f32::MAX);
+                assert!(ahead > 2.0, "only {ahead} m clear in front of {p:?}");
+            }
+        }
+        let floor = floor_under(&tris, centre).expect("a floor");
+        assert!(floor.abs() < 0.01, "floor at {floor}");
+        assert!(centre.y + half_h < 2.43, "the opening clears the far room's ceiling");
+        // The copy is well clear of everything else in this scene -- the Backrooms' scan
+        // ends a kilometre short of it, with the crossing line between the two -- and well
+        // past the mood split, as its interior grade needs.
+        use crate::ext::window::{CROSSING_X, FAR2};
+        let (hall_spec, hall_placement) = backrooms();
+        let hall = GltfModel::probe_bounds(&hall_spec, "all");
+        let (_, hall_hi) = interior::world_bounds(hall, &hall_placement);
+        let copy = GltfModel::probe_bounds(&level18::load_spec(), level18::PART);
+        let (copy_lo, _) = interior::world_bounds(copy, &level18::placement());
+        let copy_lo = copy_lo + FAR2;
+        assert!(hall_hi.x + 100.0 < CROSSING_X, "the scan ends at x = {}", hall_hi.x);
+        assert!(CROSSING_X + 100.0 < copy_lo.x, "the copy begins at x = {}", copy_lo.x);
+        assert!(copy_lo.x > crate::ext::view::MOOD_SPLIT_X + 1000.0);
     }
 }
