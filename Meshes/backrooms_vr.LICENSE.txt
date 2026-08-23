@@ -1,0 +1,16 @@
+Model Information:
+* title:	Backrooms VR
+* source:	https://sketchfab.com/3d-models/backrooms-vr-d9b98eca8d064d0eafcd7f5484bb61ed
+* author:	carlcapu9 (https://sketchfab.com/carlcapu9)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Backrooms VR" (https://sketchfab.com/3d-models/backrooms-vr-d9b98eca8d064d0eafcd7f5484bb61ed) by carlcapu9 (https://sketchfab.com/carlcapu9) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+
+Provenance of this file: the four lines above are transcribed from the GLB's own
+`asset.extras` block (title, author, license, source), written by Sketchfab's exporter
+(Sketchfab-17.15.0) at download time. VERIFY ON SKETCHFAB: the page at the source URL is
+the authority; the embedded metadata is what it said when the file was downloaded.

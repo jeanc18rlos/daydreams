@@ -193,9 +193,10 @@ const KEYMAP: [(&str, &str, &str); 10] = [
     ("MUTE",            "M",              "CREATE"),
     ("FULLSCREEN",      "ALT + ENTER",    "PS BUTTON"),
 ];
-const CREDITS_TEXT: [&str; 6] = [
+const CREDITS_TEXT: [&str; 7] = [
     "ORIGINAL ENGINE: CODEPARADE (NONEUCLIDEAN, MIT)",
     "ESCHER RELATIVITY: BENOIT GAGNIER (CC-BY-4.0)",
+    "BACKROOMS VR: CARLCAPU9 (CC-BY-4.0)",
     "",
     "RUST PORT AND EXTENSIONS:",
     "GLOW + GLUTIN + WINIT, PORTAL RENDERER,",

@@ -4,8 +4,11 @@ Everything DayDreams ships that was not written for it, with its source and lice
 recorded in this repository. Where nothing is recorded, this file says so rather than guessing;
 those entries are marked **ACTION REQUIRED** and are collected at the end.
 
-The project's own code is MIT (`Cargo.toml`). The in-game Credits screen
-(`src/ext/menu.rs`, `CREDITS_TEXT`) currently names the engine and Escher Relativity only.
+The project's own code is MIT (`Cargo.toml`; the text is the root [`LICENSE`](LICENSE)).
+**The copyright holder named there, "DayDreams contributors", is a placeholder** until the
+project decides who holds it -- a person, a company or that phrase on purpose. The in-game
+Credits screen (`src/ext/menu.rs`, `CREDITS_TEXT`) names the engine, Escher Relativity and
+Backrooms VR.
 
 ## Engine: HackerPoet/NonEuclidean
 
@@ -59,12 +62,16 @@ Benoit Gagnier (<https://sketchfab.com/BenoitGagnier>) licensed under CC-BY-4.0
 |---|---|
 | Source | <https://sketchfab.com/3d-models/backrooms-vr-d9b98eca8d064d0eafcd7f5484bb61ed> |
 | Author | carlcapu9 (<https://sketchfab.com/carlcapu9>) |
-| Licence | CC-BY-4.0 (<http://creativecommons.org/licenses/by/4.0/>) |
-| Where recorded | Only inside the file: the GLB's `asset.extras` block, written by Sketchfab's exporter (`Sketchfab-17.15.0`), carries the title "Backrooms VR", the author, the licence and the source URL above. Nothing outside the file records it, and the in-game credits do not mention it. |
+| Licence | CC-BY-4.0 — [`Meshes/backrooms_vr.LICENSE.txt`](Meshes/backrooms_vr.LICENSE.txt), which ships beside the mesh. |
+| Where recorded | The licence file is a transcription of the GLB's `asset.extras` block, written by Sketchfab's exporter (`Sketchfab-17.15.0`), which carries the title "Backrooms VR", the author, the licence and the source URL above. Credited on the in-game Credits screen. |
 
-**ACTION REQUIRED:** confirm the licence against the Sketchfab page (the embedded metadata
-is what Sketchfab wrote at download time), then add the attribution to the Credits screen and
-to a licence file beside the mesh, as was done for Escher Relativity. CC-BY requires it.
+Required credit, in the form the Escher file uses: *This work is based on "Backrooms VR"
+(<https://sketchfab.com/3d-models/backrooms-vr-d9b98eca8d064d0eafcd7f5484bb61ed>) by carlcapu9
+(<https://sketchfab.com/carlcapu9>) licensed under CC-BY-4.0
+(<http://creativecommons.org/licenses/by/4.0/>).*
+
+**ACTION REQUIRED:** verify on Sketchfab. The embedded metadata is what Sketchfab wrote at
+download time; the page at the source URL is the authority, and the licence file says so.
 
 ## Classic Interior Door — `Meshes/Classic_Interior_Door.glb`
 
@@ -126,7 +133,7 @@ Made for this project by its tools; no third-party content, nothing to credit.
 | File | Made by |
 |---|---|
 | `Meshes/meadow.obj` | `tools/gen_meadow.py` |
-| `Meshes/meadow_tile.obj` | `daydreams --gen-terrain` (`src/ext/terrain.rs`) |
+| `Meshes/meadow_tile.obj` | `daydreams gen-terrain` (`src/ext/terrain.rs`) |
 | `Meshes/penrose_stairs.obj` | `tools/gen_escher.py` — original geometry after Penrose/Escher's *Ascending and Descending*, not derived from any model |
 | `Meshes/bounds.obj`, `gallery_bounds.obj`, `intro_door_collide.obj`, `room.obj` | Hand-written collision and room geometry |
 | `Textures/grass_noise.bmp` | `tools/gen_meadow.py` |
@@ -180,8 +187,11 @@ cargo tree --format "{p} {l}" --prefix none | sort -u
    Sketchfab page; record both in `Meshes/intro_door.ATTRIBUTION.txt`; credit or remove.
 3. **`Meshes/backrooms_vr.glb`** — CC-BY-4.0 by carlcapu9 per the file's own metadata.
    Verify on Sketchfab, add a licence file beside the mesh and the credit line to the
-   Credits screen.
+   Credits screen. (The licence file and the credit line are in place; the Sketchfab
+   check is what remains.)
 4. **`Shaders/grassblade.frag`** — ideas credited to a CC BY-NC-SA 3.0 Shadertoy. Needs a
    legal read for a commercial build, or the three borrowed constants re-derived.
 5. **`assets/ui/cursors_src.png`** and **`Textures/cube_projection.bmp`** — provenance not
    recorded. Confirm original (and drop the unreferenced texture, or say what it is).
+6. **`LICENSE`** — the copyright holder reads "DayDreams contributors", a placeholder.
+   Confirm the name (and the year) before a build leaves this machine.
