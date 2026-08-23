@@ -1,4 +1,5 @@
-//! EXT: Scene `;` -- "Intro". Not part of the C++ port. NEW GAME starts here.
+//! EXT: Scene `;` -- "Intro". Not part of the C++ port. NEW GAME started here until the
+//! Backrooms (`level16`) took its meadow and its door; it is reached from the level list now.
 //!
 //! A stormy meadow, empty except for a white door. Walk up and it swings open onto a sunset
 //! sea -- a different world, with its own weather -- and you can step through. The meadow,

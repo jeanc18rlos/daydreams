@@ -207,11 +207,8 @@ mod tests {
             (KeyCode::Space, b' ' as usize),
             // The scene keys in the registry's own terms.
             (KeyCode::Digit1, crate::ext::scenes::SCENES[0].key as usize),
-            (KeyCode::Quote, crate::ext::scenes::SCENES[16].key as usize),
-            (
-                KeyCode::Semicolon,
-                crate::ext::scenes::SCENES[crate::ext::scenes::INTRO].key as usize,
-            ),
+            (KeyCode::Quote, crate::ext::scenes::SCENES[crate::ext::scenes::INTRO].key as usize),
+            (KeyCode::Semicolon, crate::ext::scenes::SCENES[15].key as usize),
         ];
         for (code, slot) in table {
             assert_eq!(key_index(code), Some(slot), "{code:?}");
