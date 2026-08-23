@@ -2,6 +2,9 @@
 
 use std::rc::Rc;
 
+// EXT: typed loader failures and the asset root (see src/app/).
+use crate::app::assets;
+use crate::app::error::AssetError;
 use crate::collider::Collider;
 use crate::vector::Vector3;
 
@@ -458,21 +461,21 @@ pub struct Mesh {
 
 impl Mesh {
     // Mesh::Mesh (Mesh.cpp:8-153)
-    pub fn new(gl: &Rc<glow::Context>, fname: &str) -> Mesh {
+    // EXT: returns the failure instead of drawing nothing; `Resources::acquire_mesh` is where
+    // it becomes fatal.
+    pub fn new(gl: &Rc<glow::Context>, fname: &str) -> Result<Mesh, AssetError> {
         use glow::HasContext;
 
         //Open the file for reading
         // PORT: on a failed open the C++ `return`s from the constructor before any of the
         // glGen* calls, leaving `vao`/`vbo` uninitialized and Draw() reading garbage handles
-        // (Mesh.cpp:10-13). Here the failure produces an empty ParsedMesh and the GL setup
-        // still runs, so the Mesh is a well-defined no-op instead of undefined behaviour.
-        let parsed = match std::fs::read_to_string(format!("Meshes/{}", fname)) {
-            Ok(text) => parse_obj(&text),
-            Err(e) => {
-                eprintln!("Unable to open mesh: Meshes/{} ({})", fname, e);
-                ParsedMesh::default()
-            }
-        };
+        // (Mesh.cpp:10-13). Here the failure is an error: a mesh that is asked for and not
+        // shipped is a packaging bug, and an invisible object is the worst way to learn of it.
+        // EXT: under the resolved asset root rather than the working directory.
+        let path = assets::path(&format!("Meshes/{}", fname));
+        let parsed = std::fs::read_to_string(&path)
+            .map(|text| parse_obj(&text))
+            .map_err(|source| AssetError::Io { path, source })?;
 
         let verts = parsed.verts;
         // EXT: build the CPU triangle list and bounding radius before the upload consumes
@@ -507,14 +510,15 @@ impl Mesh {
         let is_3d_tex = parsed.is_3d_tex;
 
         //Setup GL
+        let gl_error = |e: String| AssetError::Gl(format!("buffer allocation for '{}' failed: {}", fname, e));
         unsafe {
-            let vao = gl.create_vertex_array().expect("create_vertex_array");
+            let vao = gl.create_vertex_array().map_err(gl_error)?;
             gl.bind_vertex_array(Some(vao));
 
             let vbo: [glow::Buffer; NUM_VBOS] = [
-                gl.create_buffer().expect("create_buffer"),
-                gl.create_buffer().expect("create_buffer"),
-                gl.create_buffer().expect("create_buffer"),
+                gl.create_buffer().map_err(gl_error)?,
+                gl.create_buffer().map_err(gl_error)?,
+                gl.create_buffer().map_err(gl_error)?,
             ];
             {
                 gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo[0]));
@@ -542,7 +546,7 @@ impl Mesh {
                 gl.vertex_attrib_pointer_f32(2, 3, glow::FLOAT, false, 0, 0);
             }
 
-            Mesh {
+            Ok(Mesh {
                 tris,
                 bound_radius,
                 colliders: parsed.colliders,
@@ -554,7 +558,7 @@ impl Mesh {
                 // (was: glDrawArrays(GL_TRIANGLES, 0, (GLsizei)verts.size()), Mesh.cpp:162)
                 vert_count: (verts.len() / 3) as i32,
                 gl: Rc::clone(gl),
-            }
+            })
         }
     }
 

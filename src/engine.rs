@@ -89,7 +89,7 @@ pub struct Engine {
     // EXT: set by the menu's Exit; main.rs polls it and ends the event loop.
     quit_requested: Cell<bool>,
     // EXT: dev tooling -- `--shot path` saves the next rendered frame here, then quits.
-    shot_path: RefCell<Option<String>>,
+    shot_path: RefCell<Option<std::path::PathBuf>>,
     shot_after_frames: Cell<i32>,
     // EXT: dev tooling -- key slots `--forward` / `--strafe` / `--sprint` hold down for the
     // whole run, re-asserted at the top of every frame rather than set once, because a focus
@@ -342,7 +342,7 @@ impl Engine {
         }
         if self.input.borrow().key_press[b'M' as usize] {
             let muted = self.ext.borrow_mut().audio.toggle_mute();
-            println!("[audio] {}", if muted { "muted" } else { "unmuted" });
+            log::debug!("[audio] {}", if muted { "muted" } else { "unmuted" });
         }
 
         // EXT: object rotation. While the modifier is held, this frame's look input is taken
@@ -476,7 +476,7 @@ impl Engine {
     pub fn start_direct(
         &self,
         scene: Option<usize>,
-        shot: Option<String>,
+        shot: Option<std::path::PathBuf>,
         frames: i32,
         yaw: f32,
         pitch: f32,
@@ -541,8 +541,9 @@ impl Engine {
             Ok(()) => {
                 let p = self.player.borrow().obj().pos;
                 // The FOV as well: it is how `--sprint` is checked headlessly (ext/sprint.rs).
-                println!(
-                    "[shot] wrote {path} ({width}x{height}) player at ({:.2}, {:.2}, {:.2}) fov {:.1}",
+                log::info!(
+                    "[shot] wrote {} ({width}x{height}) player at ({:.2}, {:.2}, {:.2}) fov {:.1}",
+                    path.display(),
                     p.x,
                     p.y,
                     p.z,
@@ -551,10 +552,10 @@ impl Engine {
                 // EXT: frame cost over the frames after the scene settled. Only meaningful with
                 // `--no-vsync`; under the display cap every frame measures the refresh period.
                 if let Some((avg, p95, n)) = self.frame_clock.borrow().stats() {
-                    println!("[shot] avg frame {avg:.2} ms, p95 {p95:.2} ms over {n} frames");
+                    log::info!("[shot] avg frame {avg:.2} ms, p95 {p95:.2} ms over {n} frames");
                 }
             }
-            Err(e) => eprintln!("[shot] could not write {path}: {e}"),
+            Err(e) => log::error!("[shot] could not write {}: {e}", path.display()),
         }
         *self.shot_path.borrow_mut() = None;
         self.quit_requested.set(true);
@@ -717,7 +718,7 @@ impl Engine {
         // EXT: now the old scene can go. Anything the new one did not re-acquire is freed here,
         // GL objects included, while the context is current.
         drop(old_objects);
-        println!("[load] scene {ix} in {:.0} ms", t0.elapsed().as_secs_f32() * 1e3);
+        log::info!("[load] scene {ix} in {:.0} ms", t0.elapsed().as_secs_f32() * 1e3);
     }
 
     // void Engine::Update()   (Engine.cpp:146-205)
@@ -1066,7 +1067,6 @@ impl Engine {
 // Engine.cpp / Engine.h; everything below is new.
 // ─────────────────────────────────────────────────────────────────────────────
 
-
 #[allow(dead_code)] // EXT: scene_count / is_holding are for the HUD, added next.
 impl Engine {
     /// EXT: one rendered frame of the title screen's backdrop.
@@ -1167,7 +1167,10 @@ impl Engine {
         // portals draw pink and need no target.
         let n = if GH_MAX_RECURSION <= 1 { 1 } else { GH_MAX_RECURSION - 1 };
         for _ in 0..n {
-            fbos.push(crate::frame_buffer::FrameBuffer::new(&self.gl, w, h));
+            fbos.push(
+                crate::frame_buffer::FrameBuffer::new(&self.gl, w, h)
+                    .unwrap_or_else(|e| crate::app::crash::fatal(&e)),
+            );
         }
     }
 

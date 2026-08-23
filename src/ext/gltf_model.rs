@@ -33,6 +33,9 @@
 //! unlit material keeps its base colour map as shipped and is drawn by a shader that adds
 //! nothing to it, because its lighting is already painted in.
 
+use crate::app::assets;
+use crate::app::crash::fatal;
+use crate::app::error::AssetError;
 use crate::camera::Camera;
 use crate::object::{Object, RenderCtx};
 use crate::shader::Shader;
@@ -103,6 +106,7 @@ pub enum Fit<'a> {
 /// output is the cache key (see `acquire`).
 #[derive(Debug)]
 pub struct Load<'a> {
+    /// Relative to the asset root (`app::assets`): `"Meshes/door.glb"`.
     pub path: &'a str,
     pub parts: &'a [PartSpec<'a>],
     pub fit: Fit<'a>,
@@ -264,15 +268,19 @@ impl GltfModel {
         if let Some(hit) = CACHE.with(|c| c.borrow().get(&key).and_then(|w| w.upgrade())) {
             return hit;
         }
-        let m = Rc::new(GltfModel::load(gl, spec));
+        // Infallible like `Resources::acquire_*`, and for the same reason: the scenes that
+        // place a model have no `Result` to carry a failure, and a model that is asked for
+        // and not there is a packaging bug.
+        let m = Rc::new(GltfModel::load(gl, spec).unwrap_or_else(|e| fatal(&e)));
         CACHE.with(|c| c.borrow_mut().insert(key, Rc::downgrade(&m)));
         m
     }
 
     /// Load `spec.path`, gathering the requested parts and placing them per `spec.fit`.
-    pub fn load(gl: &Rc<glow::Context>, spec: &Load) -> GltfModel {
-        let Parsed { doc, blob, raw, bounds } = parse(spec);
+    pub fn load(gl: &Rc<glow::Context>, spec: &Load) -> Result<GltfModel, AssetError> {
+        let Parsed { doc, blob, raw, bounds } = parse(spec)?;
         let Load { path, parts, max_map, .. } = *spec;
+        let bad = |reason: String| AssetError::Gltf { path: assets::path(path), reason };
 
         // One shader per part (see `PartSpec`): every material a part uses must be the same
         // kind. Checked here, on the materials' own flags, so a re-exported model that mixed
@@ -282,11 +290,12 @@ impl GltfModel {
                 .iter()
                 .map(|r| doc.materials().nth(r.material).is_some_and(|m| m.unlit()));
             let first = kinds.next().expect("part gathered geometry");
-            assert!(
-                kinds.all(|k| k == first),
-                "{path}: part {:?} mixes unlit and PBR materials, and is drawn with one shader",
-                spec.name
-            );
+            if !kinds.all(|k| k == first) {
+                return Err(bad(format!(
+                    "part {:?} mixes unlit and PBR materials, and is drawn with one shader",
+                    spec.name
+                )));
+            }
         }
 
         // ── Materials, then geometry. Every map is decoded first, all at once, so the packing
@@ -294,16 +303,16 @@ impl GltfModel {
         let maps = decode_maps(&doc, &blob, max_map);
         let materials = (0..doc.materials().count())
             .map(|i| build_material(gl, &doc, &maps, i, max_map))
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
 
         let mut built: HashMap<String, Vec<Prim>> = HashMap::new();
         let mut geometry: HashMap<String, Geometry> = HashMap::new();
         for (name, list) in raw.iter() {
-            built.insert(name.clone(), list.iter().map(|r| upload(gl, r)).collect());
+            built.insert(name.clone(), list.iter().map(|r| upload(gl, r)).collect::<Result<_, _>>()?);
             geometry.insert(name.clone(), gather(list));
         }
 
-        GltfModel { gl: gl.clone(), materials, parts: built, bounds, geometry }
+        Ok(GltfModel { gl: gl.clone(), materials, parts: built, bounds, geometry })
     }
 
     /// A part's fitted triangles straight from the file, with no GL context: what a test uses
@@ -311,7 +320,7 @@ impl GltfModel {
     /// as `load`, so the answer is the one `triangles` would give.
     #[cfg(test)]
     pub fn probe_triangles(spec: &Load, part: &str) -> (Vec<[f32; 3]>, Vec<u32>) {
-        let parsed = parse(spec);
+        let parsed = parse(spec).unwrap_or_else(|e| panic!("{e}"));
         let g = gather(&parsed.raw[part]);
         (g.pos, g.idx)
     }
@@ -428,12 +437,15 @@ impl Drop for GltfModel {
     }
 }
 
-/// Read, walk and fit. See `Parsed`.
-fn parse(spec: &Load) -> Parsed {
-    let Load { path, parts, fit, .. } = *spec;
-    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("open {path}: {e}"));
-    let gltf = gltf::Gltf::from_slice(&bytes).unwrap_or_else(|e| panic!("parse {path}: {e}"));
-    let blob = gltf.blob.clone().unwrap_or_else(|| panic!("{path}: no BIN chunk"));
+/// Read, walk and fit. See `Parsed`. Anything wrong with the file, or with what the spec
+/// asks of it, is a `Gltf` error naming the file.
+fn parse(spec: &Load) -> Result<Parsed, AssetError> {
+    let Load { path: rel, parts, fit, .. } = *spec;
+    let path = assets::path(rel);
+    let bad = |reason: String| AssetError::Gltf { path: path.clone(), reason };
+    let bytes = std::fs::read(&path).map_err(|source| AssetError::Io { path: path.clone(), source })?;
+    let gltf = gltf::Gltf::from_slice(&bytes).map_err(|e| bad(format!("parse: {e}")))?;
+    let blob = gltf.blob.clone().ok_or_else(|| bad("no BIN chunk".to_string()))?;
     let doc = gltf.document;
 
     // ── Walk each part's sub-trees into CPU buffers.
@@ -443,19 +455,21 @@ fn parse(spec: &Load) -> Parsed {
         let find = |name: &str| {
             doc.nodes()
                 .find(|n| n.name() == Some(name))
-                .unwrap_or_else(|| panic!("{path}: no node named {name:?}"))
+                .ok_or_else(|| bad(format!("no node named {name:?}")))
         };
         // Translation only: this brings the part back into its siblings' space without
         // re-applying the pose rotation that walking from below the node was meant to drop.
         let mut base = IDENT;
         if let Some(pre) = spec.pre {
-            let t = find(pre).transform().decomposed().0;
+            let t = find(pre)?.transform().decomposed().0;
             base[3] = [t[0], t[1], t[2], 1.0];
         }
         for root in spec.roots {
-            walk(&find(root), base, &blob, &mut out);
+            walk(&find(root)?, base, &blob, &mut out);
         }
-        assert!(!out.is_empty(), "{path}: part {:?} gathered no geometry", spec.name);
+        if out.is_empty() {
+            return Err(bad(format!("part {:?} gathered no geometry", spec.name)));
+        }
         raw.insert(spec.name.to_string(), out);
     }
 
@@ -490,18 +504,19 @@ fn parse(spec: &Load) -> Parsed {
         }
         for spec in parts {
             if let Anchor::Around(h) = spec.anchor {
-                assert!(
-                    raw.contains_key(h),
-                    "{path}: part {:?} is anchored around {h:?}, which is not a declared part",
-                    spec.name
-                );
+                if !raw.contains_key(h) {
+                    return Err(bad(format!(
+                        "part {:?} is anchored around {h:?}, which is not a declared part",
+                        spec.name
+                    )));
+                }
             }
         }
     }
     let bounds: HashMap<String, [f32; 6]> =
         raw.iter().map(|(name, list)| (name.clone(), bbox(list))).collect();
 
-    Parsed { doc, blob, raw, bounds }
+    Ok(Parsed { doc, blob, raw, bounds })
 }
 
 fn bbox(list: &[Raw]) -> [f32; 6] {
@@ -594,35 +609,37 @@ fn gather(list: &[Raw]) -> Geometry {
     Geometry { pos, idx }
 }
 
-fn upload(gl: &Rc<glow::Context>, r: &Raw) -> Prim {
+fn upload(gl: &Rc<glow::Context>, r: &Raw) -> Result<Prim, AssetError> {
+    let gl_error = |e: String| AssetError::Gl(format!("glTF buffer allocation failed: {e}"));
     unsafe {
-        let vao = gl.create_vertex_array().expect("create_vertex_array");
+        let vao = gl.create_vertex_array().map_err(gl_error)?;
         gl.bind_vertex_array(Some(vao));
         let mut bufs = Vec::new();
 
         // Locations 0..3 match the order `Shader` binds them in: it scrapes the vertex source
         // for "\nin " and assigns 0, 1, 2, ... in declaration order (shader.rs:88-96). The door
         // shader therefore declares in_pos, in_uv, in_normal, in_tangent in exactly this order.
-        let mut attrib = |loc: u32, comps: i32, data: &[u8]| {
-            let b = gl.create_buffer().expect("create_buffer");
+        let mut attrib = |loc: u32, comps: i32, data: &[u8]| -> Result<(), AssetError> {
+            let b = gl.create_buffer().map_err(gl_error)?;
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(b));
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, data, glow::STATIC_DRAW);
             gl.enable_vertex_attrib_array(loc);
             gl.vertex_attrib_pointer_f32(loc, comps, glow::FLOAT, false, 0, 0);
             bufs.push(b);
+            Ok(())
         };
-        attrib(0, 3, as_bytes(&r.pos));
-        attrib(1, 2, as_bytes(&r.uv));
-        attrib(2, 3, as_bytes(&r.nrm));
-        attrib(3, 4, as_bytes(&r.tan));
+        attrib(0, 3, as_bytes(&r.pos))?;
+        attrib(1, 2, as_bytes(&r.uv))?;
+        attrib(2, 3, as_bytes(&r.nrm))?;
+        attrib(3, 4, as_bytes(&r.tan))?;
 
-        let ib = gl.create_buffer().expect("create_buffer");
+        let ib = gl.create_buffer().map_err(gl_error)?;
         gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ib));
         gl.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, as_bytes(&r.idx), glow::STATIC_DRAW);
         bufs.push(ib);
 
         gl.bind_vertex_array(None);
-        Prim { vao, bufs, count: r.idx.len() as i32, material: r.material }
+        Ok(Prim { vao, bufs, count: r.idx.len() as i32, material: r.material })
     }
 }
 
@@ -772,7 +789,7 @@ fn build_material(
     maps: &HashMap<usize, image::RgbaImage>,
     i: usize,
     max_map: u32,
-) -> Material {
+) -> Result<Material, AssetError> {
     let m = doc.materials().nth(i).expect("material index in range");
     let pbr = m.pbr_metallic_roughness();
 
@@ -789,21 +806,21 @@ fn build_material(
             (Some(img), Some(info)) => {
                 let s = info.texture().sampler();
                 let (ws, wt) = (wrap_mode(s.wrap_s()), wrap_mode(s.wrap_t()));
-                tex2d(gl, img.as_raw(), img.width(), img.height(), ws, wt)
+                tex2d(gl, img.as_raw(), img.width(), img.height(), ws, wt)?
             }
             // No map: 1x1 white, so `texture(tex, uv) * base_color` is the factor alone.
-            _ => tex2d(gl, &[255, 255, 255, 255], 1, 1, glow::REPEAT, glow::REPEAT),
+            _ => tex2d(gl, &[255, 255, 255, 255], 1, 1, glow::REPEAT, glow::REPEAT)?,
         };
         let strength = m.emissive_strength().unwrap_or(1.0);
         let ef = m.emissive_factor();
-        return Material {
+        return Ok(Material {
             albedo,
             surface: None,
             unlit: Some(Unlit {
                 base_color: bf,
                 emissive: [ef[0] * strength, ef[1] * strength, ef[2] * strength],
             }),
-        };
+        });
     }
 
     let metal_f = pbr.metallic_factor();
@@ -848,16 +865,25 @@ fn build_material(
 
     // Packed maps are addressed by the door's own UV islands, which never leave [0,1]: clamping
     // keeps a mip's edge from bleeding the opposite side of the atlas into the seam.
-    Material {
-        albedo: tex2d(gl, &albedo, map, map, glow::CLAMP_TO_EDGE, glow::CLAMP_TO_EDGE),
-        surface: Some(tex2d(gl, &surface, map, map, glow::CLAMP_TO_EDGE, glow::CLAMP_TO_EDGE)),
+    Ok(Material {
+        albedo: tex2d(gl, &albedo, map, map, glow::CLAMP_TO_EDGE, glow::CLAMP_TO_EDGE)?,
+        surface: Some(tex2d(gl, &surface, map, map, glow::CLAMP_TO_EDGE, glow::CLAMP_TO_EDGE)?),
         unlit: None,
-    }
+    })
 }
 
-fn tex2d(gl: &Rc<glow::Context>, rgba: &[u8], w: u32, h: u32, wrap_s: u32, wrap_t: u32) -> glow::Texture {
+fn tex2d(
+    gl: &Rc<glow::Context>,
+    rgba: &[u8],
+    w: u32,
+    h: u32,
+    wrap_s: u32,
+    wrap_t: u32,
+) -> Result<glow::Texture, AssetError> {
     unsafe {
-        let t = gl.create_texture().expect("create_texture");
+        let t = gl
+            .create_texture()
+            .map_err(|e| AssetError::Gl(format!("glGenTextures for a glTF map failed: {e}")))?;
         gl.bind_texture(glow::TEXTURE_2D, Some(t));
         // LINEAR + mipmaps, unlike the ported 24-bit BMP path's NEAREST (texture.rs:167-177):
         // these are continuous material maps on curved joinery, and point sampling a normal map
@@ -886,7 +912,7 @@ fn tex2d(gl: &Rc<glow::Context>, rgba: &[u8], w: u32, h: u32, wrap_s: u32, wrap_
         );
         gl.generate_mipmap(glow::TEXTURE_2D);
         gl.bind_texture(glow::TEXTURE_2D, None);
-        t
+        Ok(t)
     }
 }
 

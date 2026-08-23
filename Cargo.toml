@@ -38,6 +38,12 @@ gltf = { version = "1.4.1", default-features = false, features = ["utils", "name
 # this drops from the default set is "spade", a Delaunay triangulator only the convex
 # decomposition and polyline-extraction routines use -- nothing here calls them.
 parry3d = { version = "0.30.2", default-features = false, features = ["required-features", "std", "alloc"] }
+clap = { version = "4.6.6", features = ["derive"] }
+log = "0.4.34"
+simplelog = "0.12.2"
+directories = "6.0.0"
+rfd = "0.17.2"
+thiserror = "2.0.20"
 
 [profile.release]
 opt-level = 3

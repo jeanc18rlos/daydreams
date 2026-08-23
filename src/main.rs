@@ -1,3 +1,8 @@
+// EXT: a release build on Windows is a GUI subsystem binary, so launching it does not also
+// open a console window behind the game. Debug builds keep the console: it is where the
+// terminal log sink goes while developing.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 // PORT: Main.cpp's WinMain (Main.cpp:4-16) is replaced by a plain `fn main`; the
 // _DEBUG-only AllocConsole/AttachConsole/freopen block (Main.cpp:6-11) has no equivalent
 // -- a Rust binary already has stdout attached.
@@ -48,6 +53,8 @@ mod level16;
 
 // EXT: new work beyond the port -- grab mechanic, audio, gamepad.
 mod ext;
+// EXT: the application platform layer -- command line, logging, crash handling, asset root.
+mod app;
 
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -69,6 +76,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{CursorGrabMode, Fullscreen, Window, WindowAttributes, WindowId};
 
+use crate::app::cli::{Args, Command};
 use crate::engine::Engine;
 use crate::game_header::{
     GH_HIDE_MOUSE, GH_SCREEN_HEIGHT, GH_SCREEN_WIDTH, GH_SCREEN_X, GH_SCREEN_Y,
@@ -80,20 +88,25 @@ use crate::input::key_index;
 // (was: Engine.cpp:331-368). GH_CLASS has no winit counterpart; the window class is a Win32
 // concept. The size is LOGICAL, matching CreateWindowEx's DPI-aware pixel size after
 // SetProcessDPIAware (Engine.cpp:33).
-fn window_attributes() -> WindowAttributes {
+fn window_attributes(fullscreen: bool) -> WindowAttributes {
     let attributes = Window::default_attributes()
         .with_title(GH_TITLE)
         .with_inner_size(LogicalSize::new(GH_SCREEN_WIDTH, GH_SCREEN_HEIGHT))
         .with_position(LogicalPosition::new(GH_SCREEN_X, GH_SCREEN_Y));
 
     // if (GH_START_FULLSCREEN) { ToggleFullscreen(); }   (Engine.cpp:403-405)
-    // EXT: `--windowed` overrides the constant so dev runs (and parallel headless screenshot
-    // jobs) do not each take the whole display.
-    if start_fullscreen() {
+    // EXT: `fullscreen` is the constant unless `--windowed` overrode it (see `start_fullscreen`).
+    if fullscreen {
         attributes.with_fullscreen(Some(Fullscreen::Borderless(None)))
     } else {
         attributes
     }
+}
+
+/// EXT: whether the window opens fullscreen: `GH_START_FULLSCREEN` unless `--windowed` is
+/// given, so dev runs (and parallel headless screenshot jobs) do not each take the display.
+fn start_fullscreen(args: &Args) -> bool {
+    GH_START_FULLSCREEN && !args.windowed
 }
 
 // PORT: replaces ChoosePixelFormat + the PIXELFORMATDESCRIPTOR (Engine.cpp:377-391). The
@@ -146,7 +159,7 @@ fn grab_cursor(window: &Window) -> bool {
         Ok(()) => true,
         Err(_) => {
             if let Err(err) = window.set_cursor_grab(CursorGrabMode::Confined) {
-                eprintln!("Warning: could not grab the cursor: {err}");
+                log::warn!("could not grab the cursor: {err}");
             }
             false
         }
@@ -214,12 +227,12 @@ struct App {
     // EXT: DualSense / gamepad polling. Finishes the `//TODO:` CodeParade left in
     // Input::UpdateRaw (Input.cpp:43-45) after registering the devices (Engine.cpp:454-465).
     gamepads: ext::gamepad::Gamepads,
-    // EXT: dev flags (see parse_dev_args).
-    dev: DevArgs,
+    // EXT: the command line (src/app/cli.rs): `--windowed`, `--no-vsync` and the dev flags.
+    args: Args,
 }
 
 impl App {
-    fn new(template: ConfigTemplateBuilder, display_builder: DisplayBuilder) -> App {
+    fn new(template: ConfigTemplateBuilder, display_builder: DisplayBuilder, args: Args) -> App {
         App {
             engine: None,
             gl: None,
@@ -233,14 +246,14 @@ impl App {
             // `window_attributes` honours the same constant. If the two disagreed, the first
             // Alt+Enter would try to ENTER a fullscreen the window was already in and do
             // nothing visible.
-            is_fullscreen: start_fullscreen(),
+            is_fullscreen: start_fullscreen(&args),
             cursor_locked: false,
             modifiers: ModifiersState::empty(),
             i_width: GH_SCREEN_WIDTH as i32,
             i_height: GH_SCREEN_HEIGHT as i32,
             // EXT:
             gamepads: ext::gamepad::Gamepads::new(),
-            dev: parse_dev_args(),
+            args,
         }
     }
 
@@ -287,7 +300,7 @@ impl ApplicationHandler for App {
                             gl_config,
                         ),
                         Err(err) => {
-                            eprintln!("Failed to create a window: {err}");
+                            log::error!("failed to create a window: {err}");
                             event_loop.exit();
                             return;
                         }
@@ -298,9 +311,12 @@ impl ApplicationHandler for App {
                 }
                 GlDisplayCreationState::Init => {
                     let gl_config = self.gl_config.clone().expect("no stored GL config");
-                    let window =
-                        glutin_winit::finalize_window(event_loop, window_attributes(), &gl_config)
-                            .expect("failed to re-create the window");
+                    let window = glutin_winit::finalize_window(
+                        event_loop,
+                        window_attributes(start_fullscreen(&self.args)),
+                        &gl_config,
+                    )
+                    .expect("failed to re-create the window");
                     (window, gl_config)
                 }
             };
@@ -338,16 +354,16 @@ impl ApplicationHandler for App {
         // what a frame costs rather than what the display allows. It has to be an explicit
         // request: CGL's default interval is 1, so merely skipping the call below leaves the
         // swap throttled to the panel's refresh.
-        if self.dev.no_vsync {
+        if self.args.no_vsync {
             if let Err(err) = gl_surface.set_swap_interval(&gl_context, SwapInterval::DontWait) {
-                eprintln!("Error disabling vsync: {err:?}");
+                log::warn!("could not disable vsync: {err:?}");
             }
-            println!("[dev] vsync off");
+            log::info!("[dev] vsync off");
         } else if let Err(err) = gl_surface.set_swap_interval(
             &gl_context,
             SwapInterval::Wait(NonZeroU32::new(1).unwrap()),
         ) {
-            eprintln!("Error setting vsync: {err:?}");
+            log::warn!("could not enable vsync: {err:?}");
         }
 
         if GH_HIDE_MOUSE {
@@ -370,15 +386,17 @@ impl ApplicationHandler for App {
             let engine = Engine::new(self.gl.as_ref().unwrap());
             engine.start_run();
             // EXT: dev flags -- direct scene start and/or screenshot-and-quit.
-            if self.dev.scene.is_some() || self.dev.shot.is_some() {
+            if self.args.scene.is_some() || self.args.shot.is_some() {
                 engine.start_direct(
-                    self.dev.scene,
-                    self.dev.shot.clone(),
-                    self.dev.frames,
-                    self.dev.yaw,
-                    self.dev.pitch,
-                    self.dev.pos,
-                    &self.dev.hold,
+                    self.args.scene,
+                    self.args.shot.clone(),
+                    // `u32` on the command line (a negative count is a parse error there);
+                    // the engine counts down in an `i32`.
+                    self.args.frames.min(i32::MAX as u32) as i32,
+                    self.args.yaw,
+                    self.args.pitch,
+                    self.args.pos,
+                    &self.args.held_keys(),
                 );
             }
             self.engine = Some(engine);
@@ -599,7 +617,14 @@ impl ApplicationHandler for App {
 
         // SwapBuffers(hDC);   (Engine.cpp:125)
         if let Err(err) = state.gl_surface.swap_buffers(gl_context) {
-            eprintln!("swap_buffers failed: {err}");
+            log::error!("swap_buffers failed: {err}");
+        }
+
+        // EXT: `--panic-test` exercises the crash path (src/app/crash.rs) from exactly where
+        // a real one would come: inside a winit callback, with the window up and the cursor
+        // locked. After the first frame, so the panic lands on a fully started game.
+        if self.args.panic_test {
+            panic!("--panic-test: deliberate panic after the first frame");
         }
     }
 
@@ -611,91 +636,33 @@ impl ApplicationHandler for App {
     }
 }
 
-/// EXT: dev-tooling flags. `--scene N` skips the title and loads scene N directly;
-/// `--shot path.bmp` saves a screenshot after `--frames K` (default 90) frames and quits;
-/// `--yaw deg` / `--pitch deg` aim the camera. Used to iterate on shaders without a human.
-/// `--shot` on its own photographs whatever the game boots into -- the title screen.
-/// `--no-vsync` requests a swap interval of 0 (`SwapInterval::DontWait`) instead of 1, so the
-/// `[shot]` line's frame times measure the renderer rather than the display.
-/// `--forward` / `--strafe` / `--sprint` hold W / A / Shift down for the whole run, so a
-/// headless shot can photograph the player moving -- and, with Shift as well, running (or, with
-/// `--strafe`, not: a sidestep never sprints): the `[shot]` position then shows how far they got.
-#[derive(Clone, Debug, Default)]
-struct DevArgs {
-    scene: Option<usize>,
-    shot: Option<String>,
-    frames: i32,
-    yaw: f32,
-    pitch: f32,
-    pos: Option<[f32; 3]>,
-    no_vsync: bool,
-    /// Key slots held down every frame (see `Engine::start_direct`).
-    hold: Vec<usize>,
-}
-
-/// EXT: whether the window opens fullscreen: `GH_START_FULLSCREEN` unless `--windowed` is given.
-fn start_fullscreen() -> bool {
-    GH_START_FULLSCREEN && !std::env::args().any(|a| a == "--windowed")
-}
-
-fn parse_dev_args() -> DevArgs {
-    let mut out = DevArgs { frames: 90, ..Default::default() };
-    let args: Vec<String> = std::env::args().collect();
-    let mut i = 1;
-    while i < args.len() {
-        let next = args.get(i + 1).cloned();
-        match args[i].as_str() {
-            // EXT: regenerate the toroidal meadow's tile mesh from ext::terrain::height and
-            // exit. The mesh must be a file because colliders live on Mesh, which only loads
-            // from disk -- but it is derived, so it is generated rather than authored.
-            "--gen-terrain" => {
-                if let Err(e) = crate::ext::terrain::generate() {
-                    eprintln!("--gen-terrain: {e}");
-                    std::process::exit(1);
-                }
-                std::process::exit(0);
-            }
-            "--scene" => out.scene = next.as_deref().and_then(|v| v.parse().ok()),
-            "--shot" => out.shot = next.clone(),
-            "--frames" => out.frames = next.as_deref().and_then(|v| v.parse().ok()).unwrap_or(90),
-            "--yaw" => out.yaw = next.as_deref().and_then(|v| v.parse().ok()).unwrap_or(0.0),
-            "--pitch" => out.pitch = next.as_deref().and_then(|v| v.parse().ok()).unwrap_or(0.0),
-            "--pos" => {
-                // --pos x,y,z
-                out.pos = next.as_deref().and_then(|v| {
-                    let p: Vec<f32> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
-                    (p.len() == 3).then(|| [p[0], p[1], p[2]])
-                });
-            }
-            // Bare flags: no value follows them.
-            "--no-vsync" => {
-                out.no_vsync = true;
-                i += 1;
-                continue;
-            }
-            "--forward" => {
-                out.hold.push(b'W' as usize);
-                i += 1;
-                continue;
-            }
-            "--strafe" => {
-                out.hold.push(b'A' as usize);
-                i += 1;
-                continue;
-            }
-            "--sprint" => {
-                out.hold.push(crate::ext::sprint::KEY_SPRINT);
-                i += 1;
-                continue;
-            }
-            _ => { i += 1; continue; }
-        }
-        i += 2;
-    }
-    out
-}
-
 fn main() {
+    // EXT: the platform layer, in the order each piece needs the one before it: the panic
+    // hook first so that even a bad command line is reported through it; then the command
+    // line, which the log level comes from; then logging, which the asset root's failure is
+    // reported through; then the root, which everything after it loads from.
+    app::crash::install();
+    let args = Args::from_env();
+    app::logging::init(args.log_level, !args.no_log_file);
+    log::info!(
+        "DayDreams {} starting; log file: {}",
+        env!("CARGO_PKG_VERSION"),
+        app::logging::file_path().map_or_else(|| "none".to_string(), |p| p.display().to_string())
+    );
+    let root = app::assets::init(args.assets.clone());
+    log::info!("asset root: {}", root.display());
+
+    // EXT: regenerate the toroidal meadow's tile mesh from ext::terrain::height and exit. The
+    // mesh must be a file because colliders live on Mesh, which only loads from disk -- but it
+    // is derived, so it is generated rather than authored.
+    if let Some(Command::GenTerrain) = args.command {
+        if let Err(e) = ext::terrain::generate() {
+            log::error!("gen-terrain: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let event_loop = EventLoop::new().expect("failed to create the event loop");
     // PORT: Poll, not Wait -- the C++ loop renders whenever PeekMessage finds nothing to do
     // (Engine.cpp:78/86).
@@ -705,10 +672,11 @@ fn main() {
         .with_alpha_size(8)
         .with_depth_size(24)
         .with_transparency(false);
-    let display_builder = DisplayBuilder::new().with_window_attributes(Some(window_attributes()));
+    let display_builder = DisplayBuilder::new()
+        .with_window_attributes(Some(window_attributes(start_fullscreen(&args))));
 
-    let mut app = App::new(template, display_builder);
+    let mut app = App::new(template, display_builder, args);
     if let Err(err) = event_loop.run_app(&mut app) {
-        eprintln!("{err}");
+        log::error!("event loop: {err}");
     }
 }

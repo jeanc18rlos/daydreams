@@ -13,6 +13,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
+// EXT: a loader's failure ends the process through one sink (src/app/crash.rs), so the
+// hundred-odd scene call sites keep their infallible signatures.
+use crate::app::crash::fatal;
 use crate::mesh::Mesh;
 use crate::shader::Shader;
 use crate::texture::Texture;
@@ -48,7 +51,7 @@ impl Resources {
         // (was: if (mesh.expired()) { ... } else { return mesh.lock(); }, Resources.cpp:7-13).
         match mesh.upgrade() {
             None => {
-                let new_mesh = Rc::new(Mesh::new(&self.gl, name));
+                let new_mesh = Rc::new(Mesh::new(&self.gl, name).unwrap_or_else(|e| fatal(&e)));
                 *mesh = Rc::downgrade(&new_mesh);
                 new_mesh
             }
@@ -63,7 +66,7 @@ impl Resources {
         let shader = map.entry(String::from(name)).or_insert_with(Weak::new);
         match shader.upgrade() {
             None => {
-                let new_shader = Rc::new(Shader::new(&self.gl, name));
+                let new_shader = Rc::new(Shader::new(&self.gl, name).unwrap_or_else(|e| fatal(&e)));
                 *shader = Rc::downgrade(&new_shader);
                 new_shader
             }
@@ -83,7 +86,8 @@ impl Resources {
         let tex = map.entry(String::from(name)).or_insert_with(Weak::new);
         match tex.upgrade() {
             None => {
-                let new_tex = Rc::new(Texture::new(&self.gl, name, rows, cols));
+                let new_tex =
+                    Rc::new(Texture::new(&self.gl, name, rows, cols).unwrap_or_else(|e| fatal(&e)));
                 *tex = Rc::downgrade(&new_tex);
                 new_tex
             }

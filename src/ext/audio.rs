@@ -101,16 +101,17 @@ impl Audio {
         let manager = match AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()) {
             Ok(m) => Some(m),
             Err(e) => {
-                eprintln!("[audio] no output device ({e}); running silent");
+                log::warn!("[audio] no output device ({e}); running silent");
                 None
             }
         };
 
-        let (music_files, fallback_music) = index_music(Path::new(MUSIC_DIR));
-        let sfx = load_sfx(Path::new(SFX_DIR));
+        // EXT: under the resolved asset root (src/app/assets.rs), not the working directory.
+        let (music_files, fallback_music) = index_music(&crate::app::assets::path(MUSIC_DIR));
+        let sfx = load_sfx(&crate::app::assets::path(SFX_DIR));
 
         if manager.is_some() && music_files.is_empty() && fallback_music.is_none() {
-            eprintln!(
+            log::info!(
                 "[audio] no music found in {MUSIC_DIR}/ -- drop ogg/mp3/wav/flac files there. \
                  Prefix a filename with a scene number (e.g. 01-tunnels.ogg) to bind it to that scene."
             );
@@ -119,7 +120,7 @@ impl Audio {
             // Silence at startup is ambiguous -- it reads the same whether a track is queued or
             // the file was never picked up -- and the answer is one line.
             let tracks = music_files.len() + usize::from(fallback_music.is_some());
-            println!("[audio] {tracks} track(s), {} effect(s)", sfx.len());
+            log::info!("[audio] {tracks} track(s), {} effect(s)", sfx.len());
         }
 
         Audio {
@@ -183,7 +184,7 @@ impl Audio {
         let data = match StreamingSoundData::from_file(path) {
             Ok(d) => d,
             Err(e) => {
-                eprintln!("[audio] could not load {}: {e}", path.display());
+                log::error!("[audio] could not load {}: {e}", path.display());
                 return;
             }
         };
@@ -197,7 +198,7 @@ impl Audio {
                 self.current_music = Some(handle);
                 self.playing_path = Some(path.to_path_buf());
             }
-            Err(e) => eprintln!("[audio] could not play {}: {e}", path.display()),
+            Err(e) => log::error!("[audio] could not play {}: {e}", path.display()),
         }
     }
 
@@ -208,7 +209,7 @@ impl Audio {
     pub fn tick(&mut self) {
         let Some(handle) = self.current_music.as_mut() else { return };
         while let Some(e) = handle.pop_error() {
-            eprintln!("[audio] music stream error: {e}");
+            log::warn!("[audio] music stream error: {e}");
         }
     }
 
@@ -326,7 +327,7 @@ fn load_sfx(dir: &Path) -> HashMap<Sfx, StaticSoundData> {
                     Ok(d) => {
                         map.insert(sfx, d);
                     }
-                    Err(e) => eprintln!("[audio] could not load {}: {e}", path.display()),
+                    Err(e) => log::error!("[audio] could not load {}: {e}", path.display()),
                 }
                 break;
             }
