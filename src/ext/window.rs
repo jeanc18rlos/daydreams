@@ -453,6 +453,12 @@ impl ObjectT for Window {
     fn pick_hint(&self) -> Option<&'static str> {
         self.opening.hint()
     }
+    /// The held key's target (`ext/key.rs`): the key finds the window by this while it is
+    /// locked, and once used the unlock arrives through `take_unlock_window` on the next
+    /// step; an unlocked window takes no key.
+    fn accepts_key(&self) -> bool {
+        self.locked
+    }
 
     fn as_physical(&self) -> Option<&Physical> {
         Some(&self.body)
