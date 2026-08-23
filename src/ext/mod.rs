@@ -74,6 +74,7 @@ pub mod occlusion;
 pub mod outline;
 pub mod painting;
 pub mod physics;
+pub mod portrait_atlas;
 pub mod raycast;
 pub mod rigid;
 pub mod room;
