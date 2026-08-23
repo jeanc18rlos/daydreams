@@ -758,7 +758,7 @@ binary already has stdout) and the entire Win32 half of `Engine.cpp`: `CreateGLW
 ## Status
 
 `cargo build --release` — 0 errors, 0 warnings; `cargo build --profile dist` — clean.
-`cargo test --release` — 246 passed, 0 failed.
+`cargo test --release` — 273 passed, 0 failed.
 `cargo clippy --release --all-targets -- -D warnings` — clean, with an empty `[lints.clippy]` table.
 `cargo fmt --check` — clean.
 `cargo deny check` — advisories, bans, licences, sources ok.
@@ -772,7 +772,7 @@ counterpart and is not part of HackerPoet/NonEuclidean.
 
 The split is enforced by convention and visible in the source: the port carries **226
 `// PORT:` comments** citing the original line each deviation came from, while additions carry
-**`// EXT:`** comments. New code lives in `src/ext/` and `src/level7..16.rs`; the ported files
+**`// EXT:`** comments. New code lives in `src/ext/` and `src/level7..18.rs`; the ported files
 were touched only where a hook was unavoidable, and each of those is a handful of lines.
 
 ## New scenes
@@ -785,6 +785,8 @@ were touched only where a hook was unavoidable, and each of those is a handful o
 | `-` | **Unobserved** | Statues that only move while you are not looking at them, across two portal-linked chambers. |
 | `=` | **Anamorphic Chamber** | Twelve scattered fragments that resolve into a ring from exactly one spot in the room. |
 | `'` | **Backrooms** | The intro's meadow and door, but the door opens onto a scanned, light-baked office maze with real wall, floor and furniture collision. See [Backrooms](#backrooms-scene-) below. |
+| `,` | **Pool Rooms** | A white-tiled hall of pillars, flooded knee-deep: the water is a real translucent surface the player wades through, the tiles under it the floor. See [Pool Rooms and Overgrown](#pool-rooms-and-overgrown-scenes--and-) below. |
+| `.` | **Overgrown** | A backrooms maze gone to grass and bushes under a plaster ceiling, two rusted doors with lit EXIT signs. Same section. |
 
 Scenes `1`–`7` are CodeParade's originals and are untouched.
 
@@ -1108,7 +1110,7 @@ Small additions, each tagged `// EXT:`:
 | File | Hook |
 |------|------|
 | `collider.rs` | read-only `mat()` accessor, so rays can transform the rectangle to world space |
-| `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`R` and the scene keys `8`–`'` (`8` `9` `0` `-` `=` `[` `]` `\` `;` `'`); `Shift` into the `VK_SHIFT` slot and the resolved sprint multipliers |
+| `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`R` and the scene keys `8`–`.` (`8` `9` `0` `-` `=` `[` `]` `\` `;` `'` `,` `.`); `Shift` into the `VK_SHIFT` slot and the resolved sprint multipliers |
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
 | `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery |
 | `frame_buffer.rs` | sized attachments instead of `GH_FBO_SIZE` square |
@@ -1209,6 +1211,72 @@ absolute numbers are pessimistic; the comparison is what matters): meadow spawn 
 in the hall looking down it **6.1 ms**, looking back at the door (the portal draws the meadow)
 **8.0 ms**. Physics at 500 Hz with the triangle collider is inside those numbers.
 
+## Pool Rooms and Overgrown (scenes `,` and `.`)
+
+Two of the three Sketchfab assets the loader grew for (the third is the elevator, which is
+the next step) as levels of their own: Blenderust's "Level 37 flooded tiled complex"
+(`Meshes/level_37_flooded_tiled_complex.glb`) and "Backrooms room with plants, overgrown"
+(`Meshes/backrooms_room_with_plants_overgrown.glb`), both CC-BY-4.0, licences beside them and
+credit lines in `THIRD_PARTY.md`. Neither has a meadow in front of it: the player is simply
+stood inside, and the whole scene is graded as an interior from the first step
+(`view::set_scene_mood`). What the Backrooms built by hand for one unlit scan -- model, triangle
+collider, fence, ground cap, fall-out respawn -- is a function now, `ext/interior.rs`, and each
+level is a `Load`, a placement and a handful of constants measured from the file, with tests
+that measure them again (`GltfModel::probe_solid_triangles`, rays cast against the placed
+triangles: the floor under the arrival is at y = 0, the ceiling is where the docs say, the wall
+behind the reserved elevator spot is flat for the width of a cabin and clear in front). The
+collider is built from the **solid** triangles only (`GltfModel::solid_triangles`): nothing
+alpha-tested or translucent collides, so the pool's water is waded through and the foliage
+cards are walked through rather than bumped into at their transparent corners.
+
+Each level places its model so that its arrival spot is the world origin with the floor at
+y = 0 and the player facing -z, the engine's default heading, which keeps `--yaw 0` meaning
+"straight ahead" here as everywhere else. The arrival is 1.5 m in front of a stretch of outer
+wall reserved for an elevator, exported as `ELEVATOR_SPOT` (the cabin's floor point on the
+wall's inner face, world coordinates: `(0, 0, 1.5)` in both levels) and `ELEVATOR_YAW` (the
+yaw its doorway faces, `Object::euler.y` convention: pi, i.e. -z); the level's own spawn is
+derived from the two (`interior::arrival`), so they cannot drift apart. The cabin is 2.7 m deep
+and sinks into the wall, which in both levels is the model's outer face: it will reach past
+the fence, which stands a metre outside the model, and the step that places it has that to
+move.
+
+**Pool Rooms.** The model is two storeys of white mosaic tile, 37 x 33 m, with marble slides
+through both and a tiled basement under the floor. The level is the lower hall: a flat floor
+at model y = 0 with no holes (the basement is sealed under it), inner wall faces at model
+x = -3.15 and 27.62, z = -22.13 and 3.3 -- 31 x 25 m of pillars on a 6 m grid -- under the
+upper floor's slab at 4.15 with ceiling lamps hanging to 3.64. The water (`Water.002`, named
+in `Load::translucent`, a constant 75% alpha) lies at model y = **0.78**: knee-deep wading, the
+eye at 1.5 staying 0.72 m above the surface. The upper storey (floor 4.2, its own water at
+4.54) is reached only by a spiral stair in the hall's south-west corner, and the engine cannot
+climb stairs -- the foot sphere stops at every riser, which is why `level13.rs` blurs
+Relativity's staircases into ramps -- so it and the slides, which leave the building through
+the south wall, are scenery. The hall's long axis is model +x, so the model is turned
+a quarter turn (model +x to world -z) and the elevator spot is on the west wall's inner face
+at mid-length, centred between two pillar rows 2.4 m out -- the doorway looks down the whole
+hall between them. Above 1.82 m that wall is pierced by arched windows 2.75 m wide on a 4.5 m
+pitch, open to the dark outside, and one of them is over the doorway: a 4.4 m cabin panel
+covers a window wherever it goes on this wall, and the opaque cabin is what hides the hole.
+
+**Overgrown.** A 20 x 20 m maze of yellow wallpaper under a plaster ceiling at 2.43, the floor
+one moss quad at model y = 0, the outer walls single quads on x, z = +-10.01 facing inward, two
+shut rusted doors on the z = +-10 walls at x about -7 with a red-emissive EXIT sign over each.
+Everything green is `BLEND` foliage cards, alpha-tested by the loader at 0.5 (crisp edges,
+depth-correct, no sorting); the bushes ship with no `metallicFactor`, which glTF reads as a
+fully metallic material and which drew them as dark metal, so the level's `Load` names
+`Bush_*`, `Grass_*` and the moss in `metallic_override` and they render as the dielectrics
+they are. The wallpaper shares the moss's normal map at a normal `scale` of 0 -- which the
+loader now honours, baking the scale into the packed normal xy; before that every wall was
+grained with moss. The whole room is one floor and all of it is reachable. The elevator spot is
+on the south wall (z = +10.01), the one stretch of outer wall 4.5 m wide with open floor in
+front of it that is not a door -- from a maze wall meeting the outer wall at x = -3.7 to the end
+of the central block at x = 1.9, the cabin centred at x = -0.9 -- and the arrival looks -z into
+the maze with the central block's wall 2.4 m ahead and corridors either side.
+
+Screenshots, for the record of the look: `--scene 17` and `--scene 18` at the four yaws, and
+`--pos 0.9,25,-8.5 --pitch -89` over the Overgrown room, whose ceiling is single-sided and
+shows the whole maze from above (the pool's roof is not, so its plan is the occupancy raster
+the level was measured from).
+
 ## glTF loader
 
 `ext/gltf_model.rs` is the one path every non-OBJ model takes: the door, the Backrooms scan,
@@ -1220,7 +1288,7 @@ all CC-BY-4.0; see `THIRD_PARTY.md`). What it accepts and what it does with it:
 | | |
 |---|---|
 | **Formats** | GLB only, images embedded as PNG or JPEG; a URI image is a load error naming it, not a missing map. `KHR_materials_unlit`, `KHR_materials_emissive_strength` and `KHR_texture_transform` are honoured -- the last by baking offset, rotation and scale into the primitive's UVs at load, so the shaders never see it. Only the **base colour** texture's transform is read, and it is applied to every map of that material (a primitive has one UV stream here, and `gltf` 1.4 exposes no transform for the normal map anyway). A file without tangents gets them computed from its UVs, as the spec asks. Clearcoat, specular and the second UV set are ignored. A primitive with no material gets the spec's default material, not the file's first. |
-| **Materials** | PBR maps are packed into three RGBA textures per material -- base colour + alpha, normal xy + roughness + metalness, emissive + occlusion -- each at the size of the largest map feeding it (1x1 for a factor-only material); factors, emissive strength and occlusion strength are baked in. Unlit materials go up as shipped. A part is drawn with one shader, so it is all PBR or all unlit. One gotcha is the spec's: a material that writes no `metallicFactor` is fully **metallic** (the default is 1.0), and a metal has no diffuse, so a foliage card exported with nothing but a base colour map renders as a dark cut-out. `Load::metallic_override` names such materials (`"Bush_*"`, a trailing star for a prefix) and the metalness they should have had; a pattern matching nothing is an error. |
+| **Materials** | PBR maps are packed into three RGBA textures per material -- base colour + alpha, normal xy + roughness + metalness, emissive + occlusion -- each at the size of the largest map feeding it (1x1 for a factor-only material); factors, emissive strength, occlusion strength and the normal map's `scale` are baked in. Unlit materials go up as shipped. A part is drawn with one shader, so it is all PBR or all unlit. One gotcha is the spec's: a material that writes no `metallicFactor` is fully **metallic** (the default is 1.0), and a metal has no diffuse, so a foliage card exported with nothing but a base colour map renders as a dark cut-out. `Load::metallic_override` names such materials (`"Bush_*"`, a trailing star for a prefix) and the metalness they should have had; a pattern matching nothing is an error. |
 | **Alpha** | A policy, not the file's word. `OPAQUE` is opaque. `MASK` is alpha-tested at the file's cutoff; `BLEND` is alpha-tested at 0.5 too -- foliage cards want crisp, depth-correct edges, not sorting artefacts -- *unless* the material is named in `Load::translucent` (`"Water.002"`), when it is drawn in a second pass after the part's other primitives: blended `SRC_ALPHA, ONE_MINUS_SRC_ALPHA`, depth-tested, not depth-writing, both faces. A name the file lacks is an error. |
 | **Interior lighting** | `Shaders/gltfpbr.frag` under `mood > 1.5` (`view::MOOD_INTERIOR`) drops the sun for a hemisphere -- warm white from above, a dim brown bounce from the floor -- plus a small ambient, a damped overhead specular, the same hemisphere as the metals' environment, and the material's emission, saturating (no HDR target). The Backrooms' return door takes it through the meadow split; a scene that is an interior from the first step calls `view::set_scene_mood(MOOD_INTERIOR)`, which answers for every eye and is cleared on the next load. |
 | **Animation** | Translation channels only (`LINEAR`, `STEP`; `CUBICSPLINE` reduced to its keys), by node name: `GltfModel::animation(name)`, `Animation::translation(node, t)` in the node's local space, clamped to the clip (a NaN time reads as the rest pose), and `GltfModel::node_delta(anim, node, t)` -- the node's displacement from rest in the model's fitted space, parent chain and fit scale applied. `Animation::duration` is the last key over the kept channels. A moving node is gathered as its own part with `PartSpec { roots: &["Door1"], frame: Frame::Scene, .. }`, left out of the body with `skip`, and drawn at the elevator's `Object` plus the delta. `ext/gltf_prop.rs` does exactly that for any `Load`: every part at one `Object`, triangle collision from the solid materials only (no foliage cards, no water), every part's opaque pass before any part's translucent one, a clip playing on the parts that follow a node. |
@@ -1393,9 +1461,9 @@ resolved here.
 
 `src/ext/scenes.rs` is the one table a scene is declared in: `SceneEntry { key, name, make }`,
 in key order -- CodeParade's seven first, in the registration order of `Engine.cpp:41-47`, then
-`8` `9` `0` `-` `=` `[` `]` `\` `;` `'`. `Engine` builds its scene vector from it, the
+`8` `9` `0` `-` `=` `[` `]` `\` `;` `'` `,` `.`. `Engine` builds its scene vector from it, the
 level-select menu reads the names from it and the key loop walks it; `scenes::INTRO` is the
 index NEW GAME and the title backdrop use. To add a scene, append an entry and make sure
-`input::key_index` maps its key -- the registry's tests check that there are seventeen entries,
+`input::key_index` maps its key -- the registry's tests check that there are nineteen entries,
 that keys and names are unique, that `SCENES[INTRO]` is the intro, that every constructor
 builds, and that every key byte is reachable from a physical `KeyCode`.

@@ -604,6 +604,34 @@ impl GltfModel {
         (g.pos, g.idx)
     }
 
+    /// A part's fitted bounds straight from the file, with no GL context (see `bounds`).
+    #[cfg(test)]
+    pub fn probe_bounds(spec: &Load, part: &str) -> [f32; 6] {
+        parse(spec).unwrap_or_else(|e| panic!("{e}")).bounds[part]
+    }
+
+    /// What `spec.metallic_override` made of the material called `name`: the metalness it
+    /// will be packed with, or `None` where the file's own factor stands.
+    #[cfg(test)]
+    pub fn probe_metallic(spec: &Load, name: &str) -> Option<f32> {
+        let parsed = parse(spec).unwrap_or_else(|e| panic!("{e}"));
+        let i = parsed
+            .doc
+            .materials()
+            .position(|m| m.name() == Some(name))
+            .unwrap_or_else(|| panic!("no material {name:?}"));
+        parsed.policies[i].metallic
+    }
+
+    /// `probe_triangles` for the part's solid triangles only (see `solid_triangles`): what a
+    /// test measures a floor or a wall from, with the foliage cards out of the way.
+    #[cfg(test)]
+    pub fn probe_solid_triangles(spec: &Load, part: &str) -> (Vec<[f32; 3]>, Vec<u32>) {
+        let parsed = parse(spec).unwrap_or_else(|e| panic!("{e}"));
+        let g = gather(&parsed.raw[part], &parsed.policies);
+        (g.pos, g.solid)
+    }
+
     /// The file's clips and the nodes each one moves, `(clip, nodes)` in file order, read
     /// without loading anything else: what a scene needs before it can build a `Load` that
     /// splits the moving nodes into parts of their own (`PartSpec::skip`, [`Frame::Scene`]).
