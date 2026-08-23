@@ -202,15 +202,15 @@ enforces the allowlist in `deny.toml` and fails CI on anything outside it.
 
 | Licence | Crates |
 |---|---|
-| MIT | 191 |
-| Apache-2.0 | 158 |
+| MIT | 214 |
+| Apache-2.0 | 181 — `rapier3d`, the rigid-body engine behind the props (src/ext/physics.rs), is Apache-2.0 only, as are `parry3d`, `nalgebra` and `simba` under it |
 | Zlib | 18 — the two new ones are `zune-core` and `zune-jpeg`, the JPEG decoder behind `image`'s "jpeg" feature (each also MIT / Apache-2.0) |
 | MPL-2.0 | 13 — `symphonia*` (kira's decoders), `audio_thread_priority`, `option-ext`, `triple_buffer` |
 | Apache-2.0 WITH LLVM-exception | 4 — `rustix`, `linux-raw-sys` |
 | BSD-2-Clause | 4 |
 | BSD-3-Clause | 4 |
 | ISC | 3 — `libloading`, `inotify`, `inotify-sys` |
-| Unlicense | 3 — `byteorder`, `memchr`, `walkdir` (each also MIT) |
+| Unlicense | 5 — `byteorder`, `byteorder-lite`, `memchr`, `termcolor`, `winapi-util` (each also MIT) |
 | 0BSD | 1 — `adler2` (also MIT / Apache-2.0) |
 | Unicode-3.0 | 1 — `unicode-ident` |
 

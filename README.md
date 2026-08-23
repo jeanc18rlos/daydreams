@@ -933,6 +933,90 @@ indices it frees go to `grab::GrabState::on_removed`, since the grab holds one a
 **The unlock** (`room::request_unlock_window`, `room::take_unlock_window`) is a one-shot flag
 the key raises and the window consumes, in either order within a step.
 
+### Real physics — `ext/physics.rs`, `ext/rigid.rs`
+
+The ported engine has one kind of motion: a `Physical` falls under its own gravity and is
+pushed out of rectangles and triangle meshes sphere by sphere (`Engine.cpp:155-192`). That is
+everything a walking player needs and nothing a thrown die needs -- no rotation, no friction
+worth the name, no body ever at rest on another. So the things on the Backrooms' carpet -- an
+apple, a die, a chess king, a few steps in from the door -- are **rigid bodies** in a
+[rapier3d](https://rapier.rs) world (`ext/physics.rs`), and the engine's own passes leave them
+alone: `ObjectT::engine_collision` is false for a `RigidProp` (`ext/rigid.rs`), so the
+collision pass never pushes it and the portal pass never warps it. Every fixed step the prop
+copies its body's pose into `Object::pos` and `Object::rot` -- the rotation-matrix override
+the prop scaffolding added, since a tumbling body's orientation does not survive a trip
+through Euler angles -- and is drawn through `Object::draw_impl` like any ported object, with
+`Shaders/prop.*`: the interior hemisphere `gltfpbr.frag` lights the elevator with, and the
+walls' own fog, when the scene is an interior; the ported sun term anywhere else.
+
+**What rapier owns and what the port keeps.** Rapier owns the props' bodies and nothing else.
+The player stays on the ported physics -- the walk, the head bob, the portal warp and the
+collision epsilon all hang off it -- and is mirrored into the world as a **kinematic capsule**
+spanning the player's two hit spheres (`Player.cpp:9-10`), moved to the player's eye every
+step, so a prop on the carpet is shoved aside by someone walking into it while the player never
+feels the prop (a jump of more than half a metre in one step -- a respawn, a portal, `--pos` --
+puts the capsule there rather than sweeping it, which would fling everything on the line). The
+static world is rebuilt on every scene load (`Engine::load_scene`, once the object list is
+complete) from what the scene's objects already declare for the ported pass: every
+`ObjectT::trimesh()` as a fixed triangle mesh -- the collider's own `parry3d` mesh, shared, not
+rebuilt; `TriMeshCollider::new` builds it with `FIX_INTERNAL_EDGES` so a body rolling across a
+floor of many triangles is not bumped at every shared edge -- and every rectangle collider as a
+thin fixed box, except on meshes carrying more than 1,024 of them, which are terrain shells
+(the meadow tiles carry 4,356 each, nine of them a load) for ground no prop reaches. It is a
+snapshot of what the objects answer at load: the elevator's shut leaves, offered to the ported
+pass only while the doors are closing, are not in it, so a prop left in the doorway as they
+close is not pushed by them. A prop that leaves the building through a gap in the scan falls past the carpet
+for ever, cheaply; the fence's boxes keep it from going far, and nothing catches it.
+
+**Step rate.** The world steps once per engine fixed step, 500 Hz, `dt = GH_DT`, from
+`Engine::update` between the collision pass and the portal pass. Measured with the three props
+and the 70k-triangle scan: **3-6 µs a step** with the props asleep, **9-12 µs** while they
+roll, a worst step of a third of a millisecond (the `[phys]` line at shot time: average, worst
+and count since the last shot). Substepping -- k engine steps per physics step -- would buy
+nothing worth its complexity at those numbers, and the static world costs the load nothing
+because the mesh is shared (`[phys] static world: ... in 0.0 ms`, at debug level).
+
+**Being grabbed.** A `RigidProp` is a `Physical` with exactly one hit sphere, which is how
+`ext/grab.rs` recognises a grabbable, so it is picked up, carried, resized by perspective and
+put down like the bunny. `on_grab` makes the body kinematic -- it follows the hand and shoves
+what it meets -- and turns its rotation matrix back into the engine's Euler order
+(`Matrix4::to_euler`, the inverse of `Object::local_to_world`'s `rot_y * rot_x * rot_z`, exact
+at the gimbal lock, round-trip tested) so the rotate-with-R1/RMB feature keeps adding to
+`euler`. `on_release` freezes the Euler product into `rot`, hands the body back to gravity
+with the hand's velocity over the last rendered frame (capped at 12 u/s) and a tumble about
+the axis across the throw: let go while the view is moving and it flies. `on_rescale` rebuilds
+the collider at the new `p_scale`; mass follows volume through the material's density.
+
+**Adding a prop** is one constructor in a level's `load`: `RigidProp::new(res, name, "x.obj",
+"x.bmp", shape, material, pos)`, with a `Shape` (`Ball`, `Cuboid`, `RoundCuboid`, `Cylinder`,
+`Capsule`, in metres at `p_scale == 1`; the last two stand on the mesh's origin, the others
+are centred on it) and a `Material` (friction, restitution, density). The three shipped props
+and their textures are generated by `tools/gen_props.py` (numpy + Pillow): two lathes with
+enough segments that the loader's flat normals do not show, a 24-vertex die whose faces map
+to a 3 x 2 pip atlas with opposite faces summing to seven, and 24-bit BMPs in the loader's
+bottom-first convention.
+
+```sh
+# the three at rest, asleep within 240 frames; a [prop] line each, a [phys] line for the step
+daydreams --windowed --mute --scene 16 --pos 999.3,1.5,0 --yaw 90 --pitch -30 --frames 240 --shot rest.bmp
+# dropped from a metre, tipped past a die's corner: the king topples, the die rolls, all settle
+daydreams --windowed --mute --scene 16 --pos 999.3,1.5,0 --yaw 90 --pitch -30 --frames 240 --drop-props 1 --shot drop.bmp
+# walk into the apple: it is pushed a metre and a half down the hall
+daydreams --windowed --mute --scene 16 --pos 998.5,1.5,0.6 --yaw 90 --forward --frames 120 --shot push.bmp
+```
+
+`--drop-props H` is hidden dev tooling: with `--scene`, every prop is lifted by `H` metres
+and tipped once the scene has loaded. The world is a thread-local reached through
+`physics::with`, for the same reason the elevator's ride and the HUD hint are: a prop is built
+inside `Scene::load`, which cannot see the engine, registers its body there, and unregisters
+it in `Drop` wherever the object vector lets go of it -- a scene load, a `room::request_remove`.
+The engine itself only calls `rebuild_static` and `step`. The pure logic is tested without a
+GL context: a ball dropped on a trimesh floor settles at `y = r` and sleeps, a standing
+cylinder rests on its base, a kinematic body holds its pose and leaves with the velocity it is
+released with, a rescaled ball's mass grows eightfold for twice the radius, the capsule pushes
+a ball it walks into and sweeps nothing on a teleport, rectangle colliders become boxes a ball
+rests on, and `to_euler` round-trips four hundred rotations including a whisker off the lock.
+
 ## Gamepad — `ext/gamepad.rs`
 
 CodeParade *registered* joystick and gamepad raw-input devices in `Engine::SetupInputs`
@@ -1173,7 +1257,7 @@ Small additions, each tagged `// EXT:`:
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
 | `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery; `Object::rot`, a rotation matrix that stands in for `euler` in `local_to_world`/`world_to_local`/`forward` when set (a rigid body's orientation does not round-trip through Euler angles); the prop hooks on `ObjectT`, all defaulted: `engine_collision()` (false: the collision pass never pushes it and the portal pass never warps it -- something else owns its motion), `on_grab()`, `on_release(velocity)`, `on_rescale(p_scale)` (called by `ext/grab.rs`), `place_flat()` (the grab lays it on the surface it hits instead of standing it off by its sphere) and `pick_hint()` (a HUD line while the crosshair is on it) |
 | `frame_buffer.rs` | sized attachments instead of `GH_FBO_SIZE` square |
-| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn, portal-removal, spawn and remove requests applied after the portal pass (a removal's freed indices handed to the grab), its scene-load request applied after the fixed-step loop; the collision pass skipping an `engine_collision() == false` object as its subject and the portal pass skipping it outright; E offered to the elevator before the grab, the frame's hint (`ext/hint.rs`) and the elevator's black-out in the overlay block (the black-out under the pause menu too); the `--forward`/`--strafe`/`--sprint` held keys, `--arrive` and `--ride-at`, handed over as one `cli::DirectRun`; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`) |
+| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn, portal-removal, spawn and remove requests applied after the portal pass (a removal's freed indices handed to the grab), its scene-load request applied after the fixed-step loop; the collision pass skipping an `engine_collision() == false` object as its subject and the portal pass skipping it outright; E offered to the elevator before the grab, the frame's hint (`ext/hint.rs`) and the elevator's black-out in the overlay block (the black-out under the pause menu too); the `--forward`/`--strafe`/`--sprint` held keys, `--arrive` and `--ride-at`, handed over as one `cli::DirectRun`; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`); the rigid-body world's static rebuild once a load's object list is complete, its step between the collision and portal passes, its `[phys]`/`[prop]` report at shot time and `--drop-props` (`ext/physics.rs`) |
 | `portal.rs` | the nested pass scissored to the quad's screen footprint; `passable` (default true) and `tint` (default clear), the second uploaded to `portal.frag` as `uniform vec4 tint` and mixed over the far side by its alpha |
 | `physical.rs` | `try_portal` returns false without warping through a portal that is not `passable` |
 | `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4`; `new` returns `Result<_, AssetError>` and the attribute scan is a pure, tested `scrape_attribs` |
@@ -1200,7 +1284,9 @@ objects are unaffected.
 
 **No object-vs-object collision.** The ported pass tests each `Physical`'s hit spheres against
 other objects' *mesh colliders* (`Engine.cpp:155-192`), so grabbed props collide with level
-geometry but pass through each other. They cannot be stacked.
+geometry but pass through each other. They cannot be stacked. The rigid-body props are the
+exception ([Real physics](#real-physics--extphysicsrs-extrigidrs)): those collide with each
+other, and with nothing on the ported path but the player's capsule.
 
 **No HUD.** There is no crosshair, so aiming a grab is currently guesswork at screen centre.
 
@@ -1567,7 +1653,9 @@ Four flags are hidden from `--help` because they are tools rather than features:
 model, see [glTF loader](#gltf-loader)), and `--arrive` and `--ride-at FRAME` (with `--scene`:
 load it as an elevator ride would, and press E once on that frame; see
 [Elevator](#elevator)). `--view-glb` excludes `--scene`; its path is taken under the working
-directory when a file is there, under the asset root otherwise.
+directory when a file is there, under the asset root otherwise. A fifth, `--drop-props H`
+(with `--scene`), lifts the rigid-body props by `H` metres at the start; see
+[Real physics](#real-physics--extphysicsrs-extrigidrs).
 
 ### Logging
 
