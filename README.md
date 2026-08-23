@@ -174,9 +174,10 @@ what ships.
 
 ### Git LFS
 
-`Meshes/`, `assets/` and `Textures/` hold about 150 MB of binaries (the two GLBs, the
-47 MB Escher mesh, the soundtrack, the font), and the history holds more: the door GLB was
-committed at 79 MB before its textures were shrunk. `.gitattributes` already routes `*.glb`,
+The files the LFS patterns below match come to about 90 MB across 27 files (the 47 MB Escher
+mesh, the 20 MB Backrooms GLB, the 20 MB soundtrack, the door GLB, the other meshes, the
+font; `git ls-files -z | xargs -0 du -ch` filtered by the patterns), and the history holds
+more: the door GLB was committed at 79 MB before its textures were shrunk. `.gitattributes` already routes `*.glb`,
 `*.mp3`, `*.ttf` and `Meshes/*.obj` through Git LFS for files added from now on, but the files
 already in history are ordinary blobs until they are rewritten. There is no remote yet, so the
 rewrite is cheap; run it once, before the first push:
@@ -200,8 +201,9 @@ git lfs ls-files      # should list every one of them
 - **dist**, on tags `v*` only, after the other two: `cargo build --profile dist` on each OS and
   an artifact per platform in the layout above.
 
-Until the formatting and clippy passes land, `fmt --check` (145 hunks in 48 files) and the three
-remaining clippy warnings keep **check** red; the other jobs are green.
+**check** is red until the formatting and clippy passes land -- `fmt --check` still reports
+hunks across most of the source, and clippy is clean under `-D warnings` only once the quality
+pass that follows this one lands; the other jobs are green.
 
 ## Controls
 
@@ -954,10 +956,12 @@ pad_sensitivity = 5
 muted = false
 ```
 
-A `serde` struct with `#[serde(default)]` reads it, so any key may be missing; a wrong-typed value
-keeps that one field's default (each field deserialises through `toml::Value`, so one bad line does
-not reject the file), an out-of-range notch clamps, unknown keys are ignored — an older build reads a
-newer build's file — and a file that is not TOML at all gives the defaults plus one line on stderr.
+A `serde` struct with `#[serde(default)]` reads it, so any key may be missing; an out-of-range
+notch clamps, and unknown keys are ignored — an older build reads a newer build's file. The
+leniency has a shape worth knowing: a wrong-typed value costs that field (each deserialises
+through `toml::Value`, so `mouse_sensitivity = "high"` keeps that one default); a file that is
+not valid TOML costs all of them, with one warning in the log. The old parser skipped bad
+lines, so a file it would have half-read is now either read or not.
 The previous format, `settings.cfg` in the working directory with `muted = 1`, is valid TOML and
 still loads; if the new file does not exist and `./settings.cfg` does, it is read once and the new
 file written from it, after which the old one is ignored.
