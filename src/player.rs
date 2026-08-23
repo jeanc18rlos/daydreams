@@ -75,7 +75,7 @@ impl Player {
     pub fn update_player(&mut self, ctx: &UpdateCtx) {
         // EXT: sprint multipliers for this step, all exactly 1.0 when not sprinting so every
         // ported expression below evaluates bit-identically to the original.
-        let sprint = crate::ext::sprint::factors(ctx.input.sprint);
+        let sprint = ctx.input.sprint;
 
         //Update bobbing motion
         let mut mag_t =
@@ -363,7 +363,7 @@ mod tests {
         let mut p = Player::new();
         let mut input = Input::new();
         input.key[b'W' as usize] = true;
-        input.sprint = sprinting;
+        input.sprint = factors(sprinting);
         let n = (secs / GH_DT) as usize;
         for _ in 0..n {
             // `update_player` clears on_ground each step; a real walk re-sets it from the

@@ -378,6 +378,7 @@ impl ApplicationHandler for App {
                     self.dev.yaw,
                     self.dev.pitch,
                     self.dev.pos,
+                    &self.dev.hold,
                 );
             }
             self.engine = Some(engine);
@@ -614,8 +615,11 @@ impl ApplicationHandler for App {
 /// `--shot path.bmp` saves a screenshot after `--frames K` (default 90) frames and quits;
 /// `--yaw deg` / `--pitch deg` aim the camera. Used to iterate on shaders without a human.
 /// `--shot` on its own photographs whatever the game boots into -- the title screen.
-/// `--no-vsync` skips the swap-interval request, so the `[shot]` line's frame times measure the
-/// renderer rather than the display.
+/// `--no-vsync` requests a swap interval of 0 (`SwapInterval::DontWait`) instead of 1, so the
+/// `[shot]` line's frame times measure the renderer rather than the display.
+/// `--forward` / `--strafe` / `--sprint` hold W / A / Shift down for the whole run, so a
+/// headless shot can photograph the player moving -- and, with Shift as well, running (or, with
+/// `--strafe`, not: a sidestep never sprints): the `[shot]` position then shows how far they got.
 #[derive(Clone, Debug, Default)]
 struct DevArgs {
     scene: Option<usize>,
@@ -625,6 +629,8 @@ struct DevArgs {
     pitch: f32,
     pos: Option<[f32; 3]>,
     no_vsync: bool,
+    /// Key slots held down every frame (see `Engine::start_direct`).
+    hold: Vec<usize>,
 }
 
 /// EXT: whether the window opens fullscreen: `GH_START_FULLSCREEN` unless `--windowed` is given.
@@ -661,9 +667,24 @@ fn parse_dev_args() -> DevArgs {
                     (p.len() == 3).then(|| [p[0], p[1], p[2]])
                 });
             }
-            // A bare flag: no value follows it.
+            // Bare flags: no value follows them.
             "--no-vsync" => {
                 out.no_vsync = true;
+                i += 1;
+                continue;
+            }
+            "--forward" => {
+                out.hold.push(b'W' as usize);
+                i += 1;
+                continue;
+            }
+            "--strafe" => {
+                out.hold.push(b'A' as usize);
+                i += 1;
+                continue;
+            }
+            "--sprint" => {
+                out.hold.push(crate::ext::sprint::KEY_SPRINT);
                 i += 1;
                 continue;
             }

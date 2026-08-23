@@ -654,17 +654,27 @@ a frame earlier than the render pass could report it.
 ### Running — `ext/sprint.rs`
 
 CodeParade's player has one speed. Holding `Shift` raises the `GH_WALK_SPEED` cap to 1.8× and
-`GH_WALK_ACCEL` to 1.5×, and quickens the head-bob by 1.35× so the cadence reads as a run. The
-multipliers are exactly `1.0` when not sprinting, so the walk is bit-identical to the port — a
-test pins both caps.
+`GH_WALK_ACCEL` to 1.5×, and quickens the head-bob by 1.35× so the cadence reads as a run
+(the bob's amplitude rises with speed as well, by the ported formula — `bob_mag` tracks the
+distance covered per step — so a run both strides faster and bounces higher). The multipliers
+are exactly `1.0` when not sprinting, so the walk is bit-identical to the port — a test pins
+both caps.
 
-The pad gets the console idiom instead of a hold: clicking L3 toggles the run and letting the
-stick return to centre ends it, so stopping never leaves a toggle armed for the next push (a
-click while standing still is ignored for the same reason). L3 held also works, and a `Shift`
-press drops a pad toggle, so a player who switches instruments mid-run is never carried by a
-toggle they cannot see. The decision is made once per rendered frame, before the fixed-step loop
-— `Input::end_frame` zeroes the Shift edge inside it — and written to `Input::sprint`, which is
-all the ported player reads.
+Only a forward run sprints: the multipliers apply while the movement vector's forward component
+is at least 0.3 of its length (a diagonal is 0.71), so strafing and backpedalling are at walk
+speed however the key or button is held. And the speed cap eases rather than steps. `Move`
+clips the horizontal velocity to the cap every 2 ms, so a cap that fell from 1.8× to 1.0× in
+one step would brake the player at some 1,160 u/s² while the view was still easing back — a
+jolt. The cap relaxes with a 100 ms time constant instead, snapping to exactly 1.0 once within a
+thousandth so the walk stays bit-exact; acceleration and bob stay stepwise.
+
+The pad gets the console idiom instead of a hold: clicking L3 starts the run, and it ends when
+the stick returns to centre or on the next click, so stopping never leaves a toggle armed for
+the next push (a click while standing still is ignored for the same reason). L3 held also
+works, and a `Shift` press drops a pad toggle, so a player who switches instruments mid-run is
+never carried by a toggle they cannot see. The decision is made once per rendered frame, before
+the fixed-step loop — `Input::end_frame` zeroes the Shift edge inside it — and written to
+`Input::sprint`, which is all the ported player reads.
 
 Running widens the vertical field of view by 8°, eased with a frame-rate-independent exponential
 (150 ms time constant) through the same `view::set_fov` the dolly zoom was built for. The pause
@@ -700,7 +710,7 @@ The same table is in the game, under **Options → Controls**, alongside the key
 | Control | Action |
 |---------|--------|
 | Left stick | Move (analog) |
-| L3 (stick click) | Run: press to toggle, hold to hold; ends when the stick returns to centre |
+| L3 (stick click) | Run: press to start; ends when the stick returns to centre or on the next press. Holding it runs too |
 | Right stick | Look |
 | Cross / Square / R2 | Grab / release |
 | R1 (hold) | Rotate the held object with the right stick |
@@ -843,7 +853,7 @@ Small additions, each tagged `// EXT:`:
 | File | Hook |
 |------|------|
 | `collider.rs` | read-only `mat()` accessor, so rays can transform the rectangle to world space |
-| `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`8`–`=`/`'` key mappings; `Shift` into the `VK_SHIFT` slot and the sprint levels |
+| `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`R` and the scene keys `8`–`'` (`8` `9` `0` `-` `=` `[` `]` `\` `;` `'`); `Shift` into the `VK_SHIFT` slot and the resolved sprint multipliers |
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
 | `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum and eye, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery |
 | `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and query pool; the old scene kept alive across `load_scene`; the triangle-mesh rounds in the collision pass |
@@ -941,6 +951,10 @@ menu that is the thing being looked at.
 `--pos x,y,z` places the player; `--windowed` opens a 1280×720 window instead of taking the
 display; `--no-vsync` requests a swap interval of 0 so the `[shot]` line's second half — `avg
 frame X ms, p95 Y ms over N frames`, measured over the frames after the first ten — reports what
-the renderer costs rather than what the panel allows. `[load] scene N in M ms` is printed on every
+the renderer costs rather than what the panel allows. `--forward` / `--strafe` hold `W` / `A` down for
+the whole run and `--sprint` holds `Shift`, so the `[shot]` position print shows how far the
+player walked — or, with `--forward --sprint`, ran — in the frames before the shot, and the
+shot itself shows the sprint's 68° projection. `--strafe --sprint` covers the same ground as
+`--strafe` alone: a sidestep never sprints. `[load] scene N in M ms` is printed on every
 scene load. The numbers in [Load time and frame cost](#load-time-and-frame-cost) are
 `--shot --frames 600 --no-vsync` at fullscreen.

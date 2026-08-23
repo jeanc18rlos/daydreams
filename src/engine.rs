@@ -95,6 +95,10 @@ pub struct Engine {
     // EXT: dev tooling -- `--shot path` saves the next rendered frame here, then quits.
     shot_path: RefCell<Option<String>>,
     shot_after_frames: Cell<i32>,
+    // EXT: dev tooling -- key slots `--forward` / `--sprint` hold down for the whole run.
+    // Re-asserted at the top of every frame rather than set once, because a focus change
+    // drops every key level (main.rs) and a headless window may never be focused at all.
+    dev_hold: RefCell<Vec<usize>>,
     // EXT: this frame's gamepad edges, handed in by main.rs before run_frame.
     pad_events: Cell<crate::ext::gamepad::PadEvents>,
     // EXT: dev tooling -- wall time per rendered frame, reported on the `[shot]` line.
@@ -202,6 +206,7 @@ impl Engine {
             quit_requested: Cell::new(false),
             shot_path: RefCell::new(None),
             shot_after_frames: Cell::new(0),
+            dev_hold: RefCell::new(Vec::new()),
             pad_events: Cell::new(crate::ext::gamepad::PadEvents::default()),
             frame_clock: RefCell::new(crate::ext::frametime::FrameClock::new()),
             queries: RefCell::new(Vec::new()),
@@ -252,6 +257,10 @@ impl Engine {
     pub fn run_frame(&self, i_width: i32, i_height: i32) {
         // EXT: frame clock for shaders.
         crate::ext::view::set_time(self.timer.get_ticks() as f32 * 1e-9);
+        // EXT: dev tooling -- the keys a direct run holds down (see `dev_hold`).
+        for &k in self.dev_hold.borrow().iter() {
+            self.input.borrow_mut().key[k] = true;
+        }
         // EXT: and the dev frame-time record. Ticked here, at the top, so one interval spans a
         // whole frame including the swap main.rs does after run_frame returns.
         self.frame_clock.borrow_mut().tick();
@@ -358,12 +367,13 @@ impl Engine {
 
         // EXT: sprint. Resolved once per rendered frame, here, for the same reason as the
         // rotate block: `key_press[16]` (the Shift edge) is zeroed by the first `end_frame`
-        // inside the loop below. The level is written into `Input::sprint`, which is what the
-        // ported `Player::update_player` reads on every step of this frame.
+        // inside the loop below. The multipliers are written into `Input::sprint`, which is
+        // what the ported `Player::update_player` reads on every step of this frame.
         {
             let mut input = self.input.borrow_mut();
-            let sprinting = self.ext.borrow_mut().sprint.resolve(&input, pad.sprint);
-            input.sprint = sprinting;
+            let factors =
+                self.ext.borrow_mut().sprint.resolve(&input, pad.sprint, crate::ext::view::time());
+            input.sprint = factors;
         }
 
         //Used fixed time steps for updates
@@ -460,6 +470,11 @@ impl Engine {
     /// Without a scene it only arms the screenshot and leaves the menu where it is, which is
     /// the only way to photograph the title screen and its backdrop -- loading a scene would
     /// close the menu that is the thing being looked at.
+    ///
+    /// `hold` lists key slots to keep down every frame (`--forward`, `--sprint`), so the shot
+    /// can photograph the player walking or running and the `[shot]` position print how far
+    /// they travelled.
+    #[allow(clippy::too_many_arguments)] // one flag each; a struct would only rename them
     pub fn start_direct(
         &self,
         scene: Option<usize>,
@@ -468,7 +483,9 @@ impl Engine {
         yaw: f32,
         pitch: f32,
         pos: Option<[f32; 3]>,
+        hold: &[usize],
     ) {
+        *self.dev_hold.borrow_mut() = hold.to_vec();
         if let Some(scene) = scene {
             self.ext.borrow_mut().menu.close();
             if scene < self.v_scenes.len() {
@@ -525,7 +542,14 @@ impl Engine {
         match std::fs::write(&path, &out) {
             Ok(()) => {
                 let p = self.player.borrow().obj().pos;
-                println!("[shot] wrote {path} ({width}x{height}) player at ({:.2}, {:.2}, {:.2})", p.x, p.y, p.z);
+                // The FOV as well: it is how `--sprint` is checked headlessly (ext/sprint.rs).
+                println!(
+                    "[shot] wrote {path} ({width}x{height}) player at ({:.2}, {:.2}, {:.2}) fov {:.1}",
+                    p.x,
+                    p.y,
+                    p.z,
+                    crate::ext::view::fov()
+                );
                 // EXT: frame cost over the frames after the scene settled. Only meaningful with
                 // `--no-vsync`; under the display cap every frame measures the refresh period.
                 if let Some((avg, p95, n)) = self.frame_clock.borrow().stats() {
@@ -1125,7 +1149,6 @@ impl Engine {
             let p = self.player.borrow();
             (p.cam_to_world(), p.steps())
         };
-        let sprinting = self.input.borrow().sprint;
         let objects = self.v_objects.borrow();
 
         let mut ext = self.ext.borrow_mut();
@@ -1133,7 +1156,7 @@ impl Engine {
         crate::ext::grab::update(&objects, &cam_to_world, grab_pressed, &mut ext.grab);
         ext.fire_grab_sfx();
         ext.fire_footstep_sfx(steps);
-        crate::ext::view::set_fov(ext.sprint.ease_fov(crate::ext::view::time(), sprinting));
+        crate::ext::view::set_fov(ext.sprint.ease_fov(crate::ext::view::time()));
     }
 
     /// EXT: at least `n` occlusion queries from the pool (see the `queries` field). Returns a
