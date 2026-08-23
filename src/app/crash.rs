@@ -113,8 +113,12 @@ fn panic_message(info: &PanicHookInfo) -> String {
 /// An asset could not be loaded and the caller cannot carry the error. Never returns.
 pub fn fatal(err: &AssetError) -> ! {
     log::error!("fatal: {err}");
+    let dialog = dialog_allowed();
+    if !dialog {
+        log::info!("no crash dialog: headless run, or not the main thread");
+    }
     log::logger().flush();
-    if dialog_allowed() {
+    if dialog {
         show_dialog("DayDreams cannot start", &err.to_string());
     }
     std::process::exit(1);
