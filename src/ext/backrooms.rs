@@ -159,8 +159,9 @@ impl ObjectT for Backrooms {
 }
 
 /// What the building's walls fade to with distance: a dark yellow-brown, the maps' own colour
-/// gone dim, so the far end of the maze softens rather than popping at the far plane.
-const WALL_FOG: [f32; 4] = [0.40, 0.33, 0.16, 1.0];
+/// gone dim, so the far end of the maze softens rather than popping at the far plane. Public
+/// for what hangs on those walls (`ext/painting.rs`), which must fade to the same place.
+pub const WALL_FOG: [f32; 4] = [0.40, 0.33, 0.16, 1.0];
 
 /// How far past the building's footprint the ground cap reaches. Its edge must lie beyond the
 /// far plane (`GH_FAR` = 100) from anywhere the player can stand, or the sky would show as a

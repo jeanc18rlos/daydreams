@@ -40,6 +40,7 @@
 //! | `scissor`  | Portal passes scissored to the quad's screen footprint           |
 //! | `occlusion` | Portal occlusion queries read one frame late, never stalling   |
 //! | `meadow`   | The intro's meadow, door and title vantage, shared by the scenes that open on it |
+//! | `painting` | Portraits whose eyes follow the pass camera and whose faces change only unobserved |
 
 pub mod audio;
 pub mod backrooms;
@@ -59,6 +60,7 @@ pub mod meadow;
 pub mod menu;
 pub mod occlusion;
 pub mod outline;
+pub mod painting;
 pub mod raycast;
 pub mod room;
 pub mod rotate;
