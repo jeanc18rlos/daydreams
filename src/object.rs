@@ -180,6 +180,13 @@ pub trait ObjectT {
         }
     }
 
+    // EXT: a triangle-mesh collider (src/ext/trimesh.rs), consulted by Engine::update's
+    // collision pass beside the rectangle colliders on `base().mesh`. Scenery built from a
+    // scanned model has no rectangles to declare and returns its mesh here instead.
+    fn trimesh(&self) -> Option<Rc<crate::ext::trimesh::TriMeshCollider>> {
+        None
+    }
+
     //Casts
     fn as_physical(&self) -> Option<&crate::physical::Physical> {
         None

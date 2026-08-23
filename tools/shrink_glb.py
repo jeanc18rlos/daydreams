@@ -5,10 +5,10 @@
 # Why
 
 The intro door shipped as a 79 MB GLB: ten PNGs, most of them 4096 square, which the runtime
-loader (src/ext/gltf_model.rs) decoded on three threads and downscaled to its MAP = 512 square
-on every intro load -- 0.22 s and ~400 MB of transient RGBA for a door a few hundred pixels tall
-on screen. The loader already threw the extra resolution away, so it is thrown away here, once,
-and the asset shrinks to a few megabytes that decode in a few milliseconds.
+loader (src/ext/gltf_model.rs) decoded on three threads and downscaled to the door's MAP = 512
+square on every intro load -- 0.22 s and ~400 MB of transient RGBA for a door a few hundred
+pixels tall on screen. The loader already threw the extra resolution away, so it is thrown away
+here, once, and the asset shrinks to a few megabytes that decode in a few milliseconds.
 
 # What is preserved
 

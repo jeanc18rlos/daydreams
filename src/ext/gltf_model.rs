@@ -21,17 +21,28 @@
 //!
 //! Colliders are *not* handled here: glTF has no such concept, and the engine's collision loop
 //! reads them off `base().mesh` (engine.rs:676-691). A scene that needs the player to bump into
-//! glTF geometry keeps a small collider-only OBJ in `Object::mesh` and simply never draws it.
+//! glTF geometry keeps a small collider-only OBJ in `Object::mesh` and simply never draws it --
+//! or, for scanned interiors, builds an `ext::trimesh::TriMeshCollider` from the fitted
+//! triangles this loader keeps per part ([`GltfModel::triangles`]).
+//!
+//! # Two kinds of model
+//!
+//! The door is a lit PBR asset that has to be re-fitted to the game's door size; the backrooms
+//! is a baked, unlit scan already in metres. The loader serves both through [`Fit`] (one
+//! similarity from a named part, or the source placement as-is) and per-material `unlit`: an
+//! unlit material keeps its base colour map as shipped and is drawn by a shader that adds
+//! nothing to it, because its lighting is already painted in.
 
 use crate::camera::Camera;
-use crate::object::Object;
+use crate::object::{Object, RenderCtx};
 use crate::shader::Shader;
 use crate::vector::Vector3;
 use glow::HasContext;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-/// Where a part's origin goes once the model is fitted.
+/// Where a part's origin goes once the model is fitted. Consulted only under [`Fit::Part`];
+/// [`Fit::Identity`] keeps every part exactly where the file puts it.
 ///
 /// Every part is fitted with the SAME scale and from the SAME origin -- the one belonging to the
 /// hinge part -- so the model's true relative placement survives. Anchoring each part to its own
@@ -68,6 +79,35 @@ pub struct PartSpec<'a> {
     pub anchor: Anchor<'a>,
 }
 
+/// How the gathered geometry is placed in the model's object space.
+#[derive(Clone, Copy)]
+pub enum Fit<'a> {
+    /// ONE uniform scale and ONE origin for the whole model, both taken from `part`: scaled so
+    /// that part is `height` tall, with its hinge anchor (see [`Anchor::Hinge`]) at the origin.
+    /// A single similarity keeps the parts consistent with each other -- a door leaf must still
+    /// fit its frame afterwards.
+    Part { part: &'a str, height: f32 },
+    /// Source units and source origin: only the node transforms are applied. For a model
+    /// authored to scale in the engine's metres, which the scene then places through its
+    /// `Object` like any other prop.
+    Identity,
+}
+
+/// Everything `GltfModel::acquire` needs to know about a file.
+pub struct Load<'a> {
+    pub path: &'a str,
+    pub parts: &'a [PartSpec<'a>],
+    pub fit: Fit<'a>,
+    /// Largest texture side kept, per load. Maps larger than this are downscaled to it; maps
+    /// already at or under it are uploaded as decoded. The door asks for 512 (see `MAP_FILTER`
+    /// for why its 4096 sources were an absurd budget -- the shipped GLB is pre-shrunk to that
+    /// size by `tools/shrink_glb.py`, 79 MB -> 1.3 MB, so in practice nothing is resampled; keep
+    /// `door::MAP` and the tool agreeing, or the loader quietly goes back to resizing at load
+    /// time); the backrooms asks for 1024, the size its wall and carpet maps were baked at, so
+    /// nothing there is resampled either.
+    pub max_map: u32,
+}
+
 struct Prim {
     vao: glow::VertexArray,
     bufs: Vec<glow::Buffer>,
@@ -76,10 +116,27 @@ struct Prim {
 }
 
 struct Material {
-    /// RGB = base colour, A = ambient occlusion.
+    /// PBR: RGB = base colour, A = ambient occlusion, packed at `max_map` square.
+    /// Unlit: the base colour map exactly as shipped (or 1x1 white when there is none).
     albedo: glow::Texture,
-    /// RG = tangent-space normal xy, B = roughness, A = metalness.
-    surface: glow::Texture,
+    /// PBR only: RG = tangent-space normal xy, B = roughness, A = metalness.
+    surface: Option<glow::Texture>,
+    /// `KHR_materials_unlit`: the map already contains its lighting. Drawn with per-primitive
+    /// `base_color` / `emissive` uniforms instead of the packed-surface PBR path.
+    unlit: bool,
+    /// Unlit only. Applied in the shader as uniforms, so a 1024-square map is never walked on
+    /// the CPU to bake a factor in that the GPU multiplies for free.
+    base_color: [f32; 4],
+    /// Unlit only: `emissiveFactor` x `KHR_materials_emissive_strength`, left unclamped here
+    /// and clamped in the shader -- there is no HDR target for a strength of 10 to mean
+    /// anything more than "saturate".
+    emissive: [f32; 3],
+}
+
+/// CPU copy of a part's fitted triangles, for building colliders from.
+struct Geometry {
+    pos: Vec<[f32; 3]>,
+    idx: Vec<u32>,
 }
 
 pub struct GltfModel {
@@ -89,6 +146,9 @@ pub struct GltfModel {
     /// Fitted bounds per part, `[minx, maxx, miny, maxy, minz, maxz]`. Scenes assert against
     /// these rather than pasting numbers from a converter's printout.
     bounds: HashMap<String, [f32; 6]>,
+    /// Fitted triangles per part, each triangle once (the double-sided duplicate windings that
+    /// go to the GPU are not repeated here -- a collider wants each surface exactly once).
+    geometry: HashMap<String, Geometry>,
 }
 
 // ── glTF matrices are column-major `[[f32; 4]; 4]`, indexed m[col][row]. The engine's own
@@ -141,25 +201,12 @@ struct Raw {
     nrm: Vec<[f32; 3]>,
     tan: Vec<[f32; 4]>,
     idx: Vec<u32>,
+    /// How many of `idx` are the source's own winding; the rest is the double-sided copy.
+    front: usize,
     material: usize,
 }
 
-/// Every material map is packed to this square. The door's source maps were 4096x4096 -- an
-/// absurd budget for something a few hundred pixels tall on screen, and six of them would be
-/// 400 MB of decoded RGBA.
-///
-/// 512, down from 1024: the door is 1.7 units tall (`door::HALF_H`) and stands at conversational
-/// distance at most, so even 512 is more texel than it can show. Halving the square quarters
-/// both the packing loop and the resident texture, and the pack is the only part of this loader
-/// that scales with MAP rather than with the source.
-///
-/// The shipped GLB is pre-shrunk to exactly this size by `tools/shrink_glb.py` (79 MB -> 1.3 MB),
-/// so in practice `decode_one` decodes ten small PNGs and resizes nothing. The resize path stays
-/// for any model that is not, and `MAP` is the one number both agree on: change it here and
-/// re-run the tool, or the loader quietly goes back to resizing at load time.
-const MAP: u32 = 512;
-
-/// Resampling filter for the 4096 -> MAP downscale.
+/// Resampling filter for the downscale to `max_map` (4096 -> 512 on the door).
 ///
 /// Triangle, not Lanczos3. `image` scales a filter's kernel by the resampling ratio, so at 8:1
 /// Lanczos3's support of 3 becomes a 24-pixel radius -- roughly 2,300 taps per output pixel,
@@ -181,33 +228,20 @@ thread_local! {
 }
 
 impl GltfModel {
-    /// Load `path` once per scene, sharing it with every later caller that asks for the same
-    /// file. `parts`, `scale_part` and `scale_height` are only consulted on a cache miss.
-    pub fn acquire(
-        gl: &Rc<glow::Context>,
-        path: &str,
-        parts: &[PartSpec],
-        scale_part: &str,
-        scale_height: f32,
-    ) -> Rc<GltfModel> {
-        if let Some(hit) = CACHE.with(|c| c.borrow().get(path).and_then(|w| w.upgrade())) {
+    /// Load `spec.path` once per scene, sharing it with every later caller that asks for the
+    /// same file. The rest of `spec` is only consulted on a cache miss.
+    pub fn acquire(gl: &Rc<glow::Context>, spec: &Load) -> Rc<GltfModel> {
+        if let Some(hit) = CACHE.with(|c| c.borrow().get(spec.path).and_then(|w| w.upgrade())) {
             return hit;
         }
-        let m = Rc::new(GltfModel::load(gl, path, parts, scale_part, scale_height));
-        CACHE.with(|c| c.borrow_mut().insert(path.to_string(), Rc::downgrade(&m)));
+        let m = Rc::new(GltfModel::load(gl, spec));
+        CACHE.with(|c| c.borrow_mut().insert(spec.path.to_string(), Rc::downgrade(&m)));
         m
     }
 
-    /// Load `path`, gathering the requested parts and fitting the whole model with ONE uniform
-    /// scale so that `scale_part` ends up `scale_height` tall. A single similarity keeps the
-    /// parts consistent with each other -- a door leaf must still fit its frame afterwards.
-    pub fn load(
-        gl: &Rc<glow::Context>,
-        path: &str,
-        parts: &[PartSpec],
-        scale_part: &str,
-        scale_height: f32,
-    ) -> GltfModel {
+    /// Load `spec.path`, gathering the requested parts and placing them per `spec.fit`.
+    pub fn load(gl: &Rc<glow::Context>, spec: &Load) -> GltfModel {
+        let Load { path, parts, fit, max_map } = *spec;
         let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("open {path}: {e}"));
         let gltf = gltf::Gltf::from_slice(&bytes).unwrap_or_else(|e| panic!("parse {path}: {e}"));
         let blob = gltf.blob.clone().unwrap_or_else(|| panic!("{path}: no BIN chunk"));
@@ -236,58 +270,63 @@ impl GltfModel {
             raw.insert(spec.name.to_string(), out);
         }
 
-        // ── Fit. ONE scale and ONE origin for the whole model, both taken from the hinge part.
-        // Every other part keeps its true offset from it, so the assembly comes out of the file
-        // rather than being reassembled from constants.
-        let sb = bbox(&raw[scale_part]);
-        let scale = scale_height / (sb[3] - sb[2]);
-        // The hinge part's own anchor: low-x edge, foot, z centre.
-        let origin = [sb[0], sb[2], 0.5 * (sb[4] + sb[5])];
-        let half_w = 0.5 * (sb[1] - sb[0]) * scale;
+        // ── Fit. Under `Fit::Part`: ONE scale and ONE origin for the whole model, both taken
+        // from the hinge part. Every other part keeps its true offset from it, so the assembly
+        // comes out of the file rather than being reassembled from constants. Under
+        // `Fit::Identity` nothing moves, and the bounds simply report where the file put things.
+        if let Fit::Part { part: scale_part, height: scale_height } = fit {
+            let sb = bbox(&raw[scale_part]);
+            let scale = scale_height / (sb[3] - sb[2]);
+            // The hinge part's own anchor: low-x edge, foot, z centre.
+            let origin = [sb[0], sb[2], 0.5 * (sb[4] + sb[5])];
+            let half_w = 0.5 * (sb[1] - sb[0]) * scale;
 
-        let mut bounds = HashMap::new();
-        for spec in parts {
-            let list = raw.get_mut(spec.name).expect("part present");
-            // `Around` shifts x so the hinge part, hung by door.rs at local (-half_w, 0, 0),
-            // lands back on the origin -- i.e. exactly where the model has it.
-            let shift = match spec.anchor {
-                Anchor::Hinge => 0.0,
-                Anchor::Around(_) => -half_w,
-            };
-            for r in list.iter_mut() {
-                for p in r.pos.iter_mut() {
-                    p[0] = (p[0] - origin[0]) * scale + shift;
-                    p[1] = (p[1] - origin[1]) * scale;
-                    p[2] = (p[2] - origin[2]) * scale;
+            for spec in parts {
+                let list = raw.get_mut(spec.name).expect("part present");
+                // `Around` shifts x so the hinge part, hung by door.rs at local (-half_w, 0, 0),
+                // lands back on the origin -- i.e. exactly where the model has it.
+                let shift = match spec.anchor {
+                    Anchor::Hinge => 0.0,
+                    Anchor::Around(_) => -half_w,
+                };
+                for r in list.iter_mut() {
+                    for p in r.pos.iter_mut() {
+                        p[0] = (p[0] - origin[0]) * scale + shift;
+                        p[1] = (p[1] - origin[1]) * scale;
+                        p[2] = (p[2] - origin[2]) * scale;
+                    }
+                }
+                // A uniform scale plus a translation leaves normals and tangents untouched,
+                // which is the whole reason for insisting on one similarity for the model.
+            }
+            for spec in parts {
+                if let Anchor::Around(h) = spec.anchor {
+                    assert!(
+                        raw.contains_key(h),
+                        "{path}: part {:?} is anchored around {h:?}, which is not a declared part",
+                        spec.name
+                    );
                 }
             }
-            // A uniform scale plus a translation leaves normals and tangents untouched, which
-            // is the whole reason for insisting on one similarity for the model.
-            bounds.insert(spec.name.to_string(), bbox(list));
         }
-        for spec in parts {
-            if let Anchor::Around(h) = spec.anchor {
-                assert!(
-                    raw.contains_key(h),
-                    "{path}: part {:?} is anchored around {h:?}, which is not a declared part",
-                    spec.name
-                );
-            }
-        }
+        let bounds: HashMap<String, [f32; 6]> =
+            raw.iter().map(|(name, list)| (name.clone(), bbox(list))).collect();
 
         // ── Materials, then geometry. Every map is decoded first, all at once, so the packing
         // loops below are pure CPU work over images that are already in hand.
-        let maps = decode_maps(&doc, &blob);
+        let maps = decode_maps(&doc, &blob, max_map);
         let materials = (0..doc.materials().count())
-            .map(|i| build_material(gl, &doc, &maps, i))
+            .map(|i| build_material(gl, &doc, &maps, i, max_map))
             .collect();
 
         let mut built: HashMap<String, Vec<Prim>> = HashMap::new();
+        let mut geometry: HashMap<String, Geometry> = HashMap::new();
         for (name, list) in raw.iter() {
             built.insert(name.clone(), list.iter().map(|r| upload(gl, r)).collect());
+            geometry.insert(name.clone(), gather(list));
         }
 
-        GltfModel { gl: gl.clone(), materials, parts: built, bounds }
+        GltfModel { gl: gl.clone(), materials, parts: built, bounds, geometry }
     }
 
     /// Fitted bounds of a part: `[minx, maxx, miny, maxy, minz, maxz]`.
@@ -295,20 +334,58 @@ impl GltfModel {
         *self.bounds.get(part).unwrap_or_else(|| panic!("no part {part:?}"))
     }
 
-    /// Draw one part positioned by `obj`, seen from `eye` (the pass's camera position, carried
-    /// on `RenderCtx`). This mirrors `Object::draw_impl` (object.rs:79-101) exactly -- same
-    /// matrices, same EXT uniform set -- so a glTF part lights and grades like every other
-    /// surface in the scene, then adds the two material samplers on top.
+    /// A part's fitted triangles in the model's object space, as `(positions, indices)` with
+    /// three indices per triangle and each triangle listed once. What a collider is built from.
+    pub fn triangles(&self, part: &str) -> (&[[f32; 3]], &[u32]) {
+        let g = self.geometry.get(part).unwrap_or_else(|| panic!("no part {part:?}"));
+        (&g.pos, &g.idx)
+    }
+
+    /// The part's bounding sphere in object space, `(centre, radius)`, from its fitted bounds.
+    fn bounding_sphere(&self, part: &str) -> (Vector3, f32) {
+        let b = self.bounds(part);
+        let lo = Vector3::new(b[0], b[2], b[4]);
+        let hi = Vector3::new(b[1], b[3], b[5]);
+        ((lo + hi) * 0.5, (hi - lo).mag() * 0.5)
+    }
+
+    /// Draw one part positioned by `obj`, in the pass described by `ctx` (its frustum and eye,
+    /// computed once per pass in `Engine::render`). This mirrors `Object::draw_impl`
+    /// (object.rs:79-101) exactly -- same matrices, same EXT uniform set -- so a glTF part
+    /// lights and grades like every other surface in the scene, then adds the two material
+    /// samplers on top.
     ///
     /// Takes `&self`: `ObjectT::draw` is re-entrant through portal recursion (Portal::Draw
     /// re-enters Engine::Render), so a draw path must never mutate.
-    pub fn draw_part(&self, part: &str, obj: &Object, shader: &Shader, cam: &Camera, eye: Vector3) {
+    ///
+    /// Skipped outright when the part's bounding sphere lies wholly outside the pass frustum
+    /// (`ext::cull`). The backrooms sits 1,000 units from the meadow and is drawn by the
+    /// meadow's main pass too; without this its 70k triangles would be transformed and clipped
+    /// in every pass that cannot see it.
+    pub fn draw_part(&self, part: &str, obj: &Object, shader: &Shader, cam: &Camera, ctx: &RenderCtx) {
         let Some(prims) = self.parts.get(part) else { return };
+        let local_to_world = obj.local_to_world();
+        let (centre, radius) = self.bounding_sphere(part);
+        let world_centre = local_to_world.mul_point(centre);
+        // The largest axis stretch bounds how far any local point can move from the centre.
+        let stretch = local_to_world
+            .x_axis()
+            .mag()
+            .max(local_to_world.y_axis().mag())
+            .max(local_to_world.z_axis().mag());
+        if !ctx.frustum.sphere(world_centre, radius * stretch) {
+            return;
+        }
+        let eye = ctx.eye;
+
         let mv = obj.world_to_local().transposed();
-        let mvp = cam.matrix() * obj.local_to_world();
+        let mvp = cam.matrix() * local_to_world;
 
         shader.use_program();
         shader.set_mvp(Some(&mvp), Some(&mv));
+        // local_to_world as its own uniform: the unlit shader wants world positions for its
+        // fog and has no reason to invert `mv` per vertex to get them.
+        shader.set_mat4("model", &local_to_world);
         shader.set_f32("time", crate::ext::view::time());
         shader.set_vec4("cam_pos", [eye.x, eye.y, eye.z, 1.0]);
         shader.set_f32("mood", crate::ext::view::mood_for(eye));
@@ -320,12 +397,21 @@ impl GltfModel {
         unsafe {
             for p in prims {
                 let m = &self.materials[p.material];
-                self.gl.active_texture(glow::TEXTURE1);
-                self.gl.bind_texture(glow::TEXTURE_2D, Some(m.surface));
-                // Leave unit 0 active on the way out: Object::draw_impl binds its texture with
-                // no active_texture call of its own (object.rs:86-88), so any object drawn after
-                // this one would otherwise land its texture on unit 1 and sample black.
-                self.gl.active_texture(glow::TEXTURE0);
+                if let Some(surface) = m.surface {
+                    self.gl.active_texture(glow::TEXTURE1);
+                    self.gl.bind_texture(glow::TEXTURE_2D, Some(surface));
+                    // Leave unit 0 active on the way out: Object::draw_impl binds its texture
+                    // with no active_texture call of its own (object.rs:86-88), so any object
+                    // drawn after this one would otherwise land its texture on unit 1 and
+                    // sample black.
+                    self.gl.active_texture(glow::TEXTURE0);
+                }
+                if m.unlit {
+                    let [r, g, b, a] = m.base_color;
+                    shader.set_vec4("base_color", [r, g, b, a]);
+                    let [er, eg, eb] = m.emissive;
+                    shader.set_vec4("emissive", [er, eg, eb, 0.0]);
+                }
                 self.gl.bind_texture(glow::TEXTURE_2D, Some(m.albedo));
                 self.gl.bind_vertex_array(Some(p.vao));
                 self.gl.draw_elements(glow::TRIANGLES, p.count, glow::UNSIGNED_INT, 0);
@@ -348,7 +434,9 @@ impl Drop for GltfModel {
             }
             for m in &self.materials {
                 self.gl.delete_texture(m.albedo);
-                self.gl.delete_texture(m.surface);
+                if let Some(surface) = m.surface {
+                    self.gl.delete_texture(surface);
+                }
             }
         }
     }
@@ -410,17 +498,38 @@ fn walk(node: &gltf::Node, parent: M, blob: &[u8], out: &mut Vec<Raw>) {
             // flip the normal on gl_FrontFacing (Shaders/grassblade.frag:28-35); the door's
             // fragment shader does the flip, so the second winding is all that is missing.
             // It doubles this model to ~5,300 triangles, which is nothing.
+            let front = idx.len();
             if prim.material().double_sided() {
                 let back: Vec<u32> =
                     idx.chunks_exact(3).flat_map(|t| [t[2], t[1], t[0]]).collect();
                 idx.extend(back);
             }
-            out.push(Raw { pos, uv, nrm, tan, idx, material: prim.material().index().unwrap_or(0) });
+            out.push(Raw {
+                pos,
+                uv,
+                nrm,
+                tan,
+                idx,
+                front,
+                material: prim.material().index().unwrap_or(0),
+            });
         }
     }
     for c in node.children() {
         walk(&c, world, blob, out);
     }
+}
+
+/// Concatenate a part's primitives into one triangle list, each triangle once.
+fn gather(list: &[Raw]) -> Geometry {
+    let mut pos = Vec::new();
+    let mut idx = Vec::new();
+    for r in list {
+        let base = pos.len() as u32;
+        pos.extend_from_slice(&r.pos);
+        idx.extend(r.idx[..r.front].iter().map(|i| i + base));
+    }
+    Geometry { pos, idx }
 }
 
 fn upload(gl: &Rc<glow::Context>, r: &Raw) -> Prim {
@@ -468,7 +577,7 @@ fn as_bytes<T>(v: &[T]) -> &[u8] {
 /// carried six 4096-square maps totalling ~79 MB of PNG, and decoding them one after another
 /// was half a second in which the game showed nothing. They are wholly independent -- each
 /// reads its own slice of the shared, immutable BIN chunk and produces an owned image -- so
-/// they scale almost perfectly across cores. (The shipped door is now pre-shrunk, see `MAP`,
+/// they scale almost perfectly across cores. (The shipped door is now pre-shrunk, see `Load::max_map`,
 /// and decodes in a few milliseconds either way; the lanes cost nothing and keep a full-size
 /// model loadable.)
 ///
@@ -478,7 +587,7 @@ fn as_bytes<T>(v: &[T]) -> &[u8] {
 ///
 /// Decoding by *image* rather than by material also de-duplicates: `SM_Door4_Parts` is worn by
 /// three of the door's five primitives, and its four maps are now decoded once between them.
-fn decode_maps(doc: &gltf::Document, blob: &[u8]) -> HashMap<usize, image::RgbaImage> {
+fn decode_maps(doc: &gltf::Document, blob: &[u8], max_map: u32) -> HashMap<usize, image::RgbaImage> {
     let mut wanted: Vec<usize> = doc
         .materials()
         .flat_map(|m| material_sources(&m))
@@ -518,7 +627,7 @@ fn decode_maps(doc: &gltf::Document, blob: &[u8]) -> HashMap<usize, image::RgbaI
             scope.spawn(|| loop {
                 let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let Some(&(i, bytes)) = jobs.get(k) else { break };
-                let img = decode_one(bytes);
+                let img = decode_one(bytes, max_map);
                 done.lock().expect("decode queue").push((i, img));
             });
         }
@@ -543,31 +652,53 @@ fn decode_maps(doc: &gltf::Document, blob: &[u8]) -> HashMap<usize, image::RgbaI
 /// memory, and at this asset's shape there is very little time left to buy.
 const DECODE_LANES: usize = 3;
 
-/// The four maps a glTF metallic-roughness material can carry, as image indices.
+/// The four maps a glTF metallic-roughness material can carry, as image indices. An unlit
+/// material reads only its base colour map: the other three describe a lighting response it
+/// does not have, so they are never decoded for it.
 fn material_sources(m: &gltf::Material) -> [Option<usize>; 4] {
     let pbr = m.pbr_metallic_roughness();
+    let base = pbr.base_color_texture().map(|t| t.texture().source().index());
+    if m.unlit() {
+        return [base, None, None, None];
+    }
     [
-        pbr.base_color_texture().map(|t| t.texture().source().index()),
+        base,
         pbr.metallic_roughness_texture().map(|t| t.texture().source().index()),
         m.normal_texture().map(|t| t.texture().source().index()),
         m.occlusion_texture().map(|t| t.texture().source().index()),
     ]
 }
 
-/// Decode one embedded image to RGBA at `MAP` square.
-fn decode_one(bytes: &[u8]) -> Option<image::RgbaImage> {
+/// Decode one embedded image to RGBA, downscaled to `max_map` square if it is larger.
+///
+/// A source already at or under the cap is handed back as decoded: no resample, and so no
+/// softening of maps that were baked at exactly the size they are shown. `into_rgba8` also
+/// expands paletted PNGs (the backrooms ships one), so every map arrives as straight RGBA.
+fn decode_one(bytes: &[u8], max_map: u32) -> Option<image::RgbaImage> {
     // `into_rgba8`, not `to_rgba8`: the latter copies the decoded image into a second buffer of
     // the same size, which at 4096 square is another 67 MB held for the length of the resize.
     let rgba = image::load_from_memory(bytes).ok()?.into_rgba8();
-    // A map that already is MAP square -- every one in the shipped door -- is used as decoded.
-    // Resampling at 1:1 would be a copy through the filter that changes nothing but the time.
-    if rgba.width() == MAP && rgba.height() == MAP {
+    // A map already at or under the cap -- every one in the shipped door, and all of the
+    // backrooms' -- is used as decoded. Resampling at 1:1 would be a copy through the filter
+    // that changes nothing but the time.
+    if rgba.width() <= max_map && rgba.height() <= max_map {
         return Some(rgba);
     }
-    Some(image::imageops::resize(&rgba, MAP, MAP, MAP_FILTER))
+    Some(image::imageops::resize(&rgba, max_map, max_map, MAP_FILTER))
 }
 
-/// Pack a glTF material's four maps into TWO RGBA textures.
+/// GL wrap mode for a glTF sampler's, so tiling carpet tiles and clamped decals stay as authored.
+fn wrap_mode(w: gltf::texture::WrappingMode) -> u32 {
+    use gltf::texture::WrappingMode;
+    match w {
+        WrappingMode::ClampToEdge => glow::CLAMP_TO_EDGE,
+        WrappingMode::MirroredRepeat => glow::MIRRORED_REPEAT,
+        WrappingMode::Repeat => glow::REPEAT,
+    }
+}
+
+/// Build a material's textures: the unlit map as shipped, or a glTF metallic-roughness
+/// material's four maps packed into TWO RGBA textures.
 ///
 /// `Object` has a single texture slot and the ported `Texture` can only be built from a file on
 /// disk, so a multi-map material needs its own upload path anyway. Packing is not just
@@ -578,6 +709,7 @@ fn build_material(
     doc: &gltf::Document,
     maps: &HashMap<usize, image::RgbaImage>,
     i: usize,
+    max_map: u32,
 ) -> Material {
     let m = doc.materials().nth(i).expect("material index in range");
     let pbr = m.pbr_metallic_roughness();
@@ -587,16 +719,45 @@ fn build_material(
     let (base, mr, nrm, occ) = (get(base_src), get(mr_src), get(nrm_src), get(occ_src));
 
     let bf = pbr.base_color_factor();
+
+    if m.unlit() {
+        // The map goes up untouched, at its own size and with its own wrap mode; the factor
+        // and the emissive term are uniforms. No pack, no per-texel loop.
+        let albedo = match (base, pbr.base_color_texture()) {
+            (Some(img), Some(info)) => {
+                let s = info.texture().sampler();
+                let (ws, wt) = (wrap_mode(s.wrap_s()), wrap_mode(s.wrap_t()));
+                tex2d(gl, img.as_raw(), img.width(), img.height(), ws, wt)
+            }
+            // No map: 1x1 white, so `texture(tex, uv) * base_color` is the factor alone.
+            _ => tex2d(gl, &[255, 255, 255, 255], 1, 1, glow::REPEAT, glow::REPEAT),
+        };
+        let strength = m.emissive_strength().unwrap_or(1.0);
+        let ef = m.emissive_factor();
+        return Material {
+            albedo,
+            surface: None,
+            unlit: true,
+            base_color: bf,
+            emissive: [ef[0] * strength, ef[1] * strength, ef[2] * strength],
+        };
+    }
+
     let metal_f = pbr.metallic_factor();
     let rough_f = pbr.roughness_factor();
     let occ_str = m.occlusion_texture().map(|t| t.strength()).unwrap_or(1.0);
 
-    let n = (MAP * MAP) as usize;
+    let map = max_map;
+    let n = (map * map) as usize;
     let mut albedo = vec![0u8; n * 4];
     let mut surface = vec![0u8; n * 4];
     for k in 0..n {
-        let (x, y) = ((k as u32) % MAP, (k as u32) / MAP);
-        let px = |img: Option<&image::RgbaImage>| img.map(|im| *im.get_pixel(x, y));
+        let (x, y) = ((k as u32) % map, (k as u32) / map);
+        // Maps smaller than the pack square (a source already under `max_map`) are point-sampled
+        // up to it; the door's are all downscaled to exactly `max_map`, where this is identity.
+        let px = |img: Option<&image::RgbaImage>| {
+            img.map(|im| *im.get_pixel(x * im.width() / map, y * im.height() / map))
+        };
 
         // Base colour: the map where there is one, the factor otherwise. Both stay in raw byte
         // space -- the engine has no sRGB decode anywhere, so a gamma-correct upload here would
@@ -622,10 +783,18 @@ fn build_material(
         surface[k * 4 + 3] = (metal.clamp(0.0, 1.0) * 255.0) as u8;
     }
 
-    Material { albedo: tex2d(gl, &albedo), surface: tex2d(gl, &surface) }
+    // Packed maps are addressed by the door's own UV islands, which never leave [0,1]: clamping
+    // keeps a mip's edge from bleeding the opposite side of the atlas into the seam.
+    Material {
+        albedo: tex2d(gl, &albedo, map, map, glow::CLAMP_TO_EDGE, glow::CLAMP_TO_EDGE),
+        surface: Some(tex2d(gl, &surface, map, map, glow::CLAMP_TO_EDGE, glow::CLAMP_TO_EDGE)),
+        unlit: false,
+        base_color: bf,
+        emissive: [0.0; 3],
+    }
 }
 
-fn tex2d(gl: &Rc<glow::Context>, rgba: &[u8]) -> glow::Texture {
+fn tex2d(gl: &Rc<glow::Context>, rgba: &[u8], w: u32, h: u32, wrap_s: u32, wrap_t: u32) -> glow::Texture {
     unsafe {
         let t = gl.create_texture().expect("create_texture");
         gl.bind_texture(glow::TEXTURE_2D, Some(t));
@@ -638,8 +807,8 @@ fn tex2d(gl: &Rc<glow::Context>, rgba: &[u8]) -> glow::Texture {
             glow::LINEAR_MIPMAP_LINEAR as i32,
         );
         gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
-        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, wrap_s as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, wrap_t as i32);
         // RGBA, not the BMP path's BGRA: `image` decodes to RGBA byte order. Rows go up in
         // decode order (row 0 first), which is what puts glTF's v=0 -- the TOP of the image --
         // at GL t=0, matching this engine's convention (texture.rs:27-41). No flip, anywhere.
@@ -647,8 +816,8 @@ fn tex2d(gl: &Rc<glow::Context>, rgba: &[u8]) -> glow::Texture {
             glow::TEXTURE_2D,
             0,
             glow::RGBA8 as i32,
-            MAP as i32,
-            MAP as i32,
+            w as i32,
+            h as i32,
             0,
             glow::RGBA,
             glow::UNSIGNED_BYTE,

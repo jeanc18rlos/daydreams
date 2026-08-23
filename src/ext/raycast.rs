@@ -105,6 +105,16 @@ pub fn raycast(
         // an object elsewhere in the update, and a ray miss is far better than a panic.
         let Ok(o) = obj.try_borrow() else { continue };
         let base = o.base();
+
+        // Triangle-mesh scenery (ext/trimesh.rs) first: it is already in world space.
+        if let Some(tm) = o.trimesh() {
+            if let Some((t, normal)) = tm.cast_ray(origin, dir, max_dist) {
+                if best.map_or(true, |b| t < b.dist) {
+                    best = Some(RayHit { dist: t, point: origin + dir * t, normal, object: i });
+                }
+            }
+        }
+
         let Some(mesh) = base.mesh.as_ref() else {
             continue;
         };

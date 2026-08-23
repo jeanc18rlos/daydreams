@@ -31,8 +31,11 @@
 //! | `frametime` | Frame-time statistics for the `--shot` dev path                  |
 //! | `cull`     | View-frustum culling, computed once per render pass              |
 //! | `grassgen` | The blade patch itself, generated in-process and bucketed for culling |
+//! | `trimesh`  | Triangle-mesh collision (parry3d) beside the ported rectangles   |
+//! | `backrooms` | The scanned, light-baked Backrooms as solid scenery             |
 
 pub mod audio;
+pub mod backrooms;
 pub mod bounds;
 pub mod cull;
 pub mod door;
@@ -51,6 +54,7 @@ pub mod rotate;
 pub mod settings;
 pub mod skybake;
 pub mod terrain;
+pub mod trimesh;
 pub mod ui;
 pub mod ui_atlas;
 pub mod view;

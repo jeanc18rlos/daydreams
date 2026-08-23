@@ -19,9 +19,11 @@ pub struct Shader {
     mv_id: Option<glow::UniformLocation>,
     gl: Rc<glow::Context>,
     // EXT: by-name uniform locations, resolved once per program. `Object::draw_impl` sets six
-    // named uniforms per object per pass, and each lookup was a CString allocation plus a
-    // driver call; the locations never change after linking. `None` is cached too, so a
-    // uniform a shader does not declare costs one miss and then nothing.
+    // named uniforms per object per pass, and a glTF model asks for a few more per primitive
+    // per pass; each lookup was a CString allocation plus a driver call, and the locations
+    // never change after linking. `None` is cached too, so a uniform a shader does not declare
+    // costs one miss and then nothing -- "not declared" is the common case for the EXT
+    // uniforms on the ported shaders.
     uniforms: RefCell<HashMap<String, Option<glow::UniformLocation>>>,
 }
 
@@ -202,7 +204,7 @@ impl Drop for Shader {
 impl Shader {
     /// EXT: look up a uniform by name, memoised per program. `None` if the shader does not
     /// declare it (or the compiler optimised it away), in which case the setters below are
-    /// silent no-ops.
+    /// silent no-ops. Misses are cached too, so a by-name miss is one hash probe.
     pub fn uniform(&self, name: &str) -> Option<glow::UniformLocation> {
         if let Some(loc) = self.uniforms.borrow().get(name) {
             return loc.clone();

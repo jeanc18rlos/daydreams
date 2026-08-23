@@ -167,6 +167,7 @@ impl Engine {
             Rc::new(crate::level13::Level13),
             Rc::new(crate::level14::Level14),
             Rc::new(crate::level15::Level15),
+            Rc::new(crate::level16::Level16),
         ];
 
         let timer = Timer::new();
@@ -311,8 +312,9 @@ impl Engine {
         // EXT: the C++ hard-codes seven if/else branches for keys 1-7 (Engine.cpp:90-104).
         // With extension scenes added there are more than nine, so the mapping is table-driven:
         // 1-9 select scenes 0-8, 0 selects the tenth, then '-' and '=' continue the run.
-        const SCENE_KEYS: [u8; 16] = [
+        const SCENE_KEYS: [u8; 17] = [
             b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'0', b'-', b'=', b'[', b']', b'\\', b';',
+            b'\'',
         ];
         for (i, key) in SCENE_KEYS.iter().enumerate() {
             if i < self.v_scenes.len() && self.input.borrow().key_press[*key as usize] {
@@ -598,7 +600,7 @@ impl Engine {
 
     /// EXT: human-readable scene names, in key order, for the level-select menu.
     pub fn scene_names(&self) -> Vec<String> {
-        const NAMES: [&str; 16] = [
+        const NAMES: [&str; 17] = [
             "Tunnels",
             "Three Rooms",
             "Six Rooms",
@@ -615,6 +617,7 @@ impl Engine {
             "Relativity",
             "Meadow",
             "Intro",
+            "Backrooms",
         ];
         (0..self.v_scenes.len())
             .map(|i| NAMES.get(i).map_or_else(|| format!("Scene {}", i + 1), |n| n.to_string()))
@@ -754,7 +757,15 @@ impl Engine {
                     // to the mesh is cloned out so the cell can be re-borrowed mutably below
                     // (was: Engine.cpp:163-164).
                     let mesh = v_objects[j].borrow().base().mesh.clone();
-                    let Some(mesh) = mesh else { continue };
+                    // EXT: an object may collide through a triangle mesh (src/ext/trimesh.rs)
+                    // instead of, or as well as, rectangle colliders -- so a mesh-less object is
+                    // only skipped when it has neither.
+                    let trimesh = v_objects[j].borrow().trimesh();
+                    if mesh.is_none() && trimesh.is_none() {
+                        continue;
+                    }
+                    let colliders: &[crate::collider::Collider] =
+                        mesh.as_ref().map_or(&[], |m| &m.colliders);
 
                     //For each hit sphere
                     for s in 0..hit_spheres.len() {
@@ -766,8 +777,8 @@ impl Engine {
                         let mut unit_to_world = world_to_unit.inverse();
 
                         //For each collider
-                        for c in 0..mesh.colliders.len() {
-                            let collider = &mesh.colliders[c];
+                        for c in 0..colliders.len() {
+                            let collider = &colliders[c];
                             // PORT: `bool Collide(const Matrix4&, Vector3& push)` -> the push is
                             // returned in an Option (was: Engine.cpp:176-178).
                             if let Some(push) = collider.collide(&local_to_unit) {
@@ -788,6 +799,28 @@ impl Engine {
                                 world_to_unit = sphere.local_to_unit() * world_to_local;
                                 local_to_unit =
                                     world_to_unit * v_objects[j].borrow().base().local_to_world();
+                                unit_to_world = world_to_unit.inverse();
+                            }
+                        }
+
+                        // EXT: then the triangle mesh, one push per round exactly as a rectangle
+                        // is applied above -- on_hit, on_collide, matrices rebuilt -- until the
+                        // sphere is clear or the round cap is hit. The sphere's world centre and
+                        // radius fall out of unit_to_world: its translation and x-axis length.
+                        if let Some(trimesh) = &trimesh {
+                            for _ in 0..crate::ext::trimesh::MAX_PUSHES {
+                                let centre = unit_to_world.translation();
+                                let radius = unit_to_world.x_axis().mag();
+                                let Some(push) = trimesh.push_sphere(centre, radius) else { break };
+                                v_objects[j].borrow_mut().on_hit(push);
+                                v_objects[i].borrow_mut().on_collide(push);
+
+                                world_to_local = v_objects[i]
+                                    .borrow()
+                                    .as_physical()
+                                    .expect("as_physical changed mid-collision")
+                                    .world_to_local();
+                                world_to_unit = sphere.local_to_unit() * world_to_local;
                                 unit_to_world = world_to_unit.inverse();
                             }
                         }

@@ -1,0 +1,39 @@
+#version 150
+precision highp float;
+
+// EXT: unlit glTF material (KHR_materials_unlit), for src/ext/gltf_model.rs.
+//
+// The backrooms model is a light-bake: every wall, lamp and carpet already carries its final
+// colour in its map, and KHR_materials_unlit is the file saying "do not light this". So this
+// shader adds nothing the ported light direction, the weather grade or the door's light pool
+// would otherwise contribute -- `mood` is deliberately ignored, the place is its own weather.
+//
+// What it does add is a mild depth fog toward a dark yellow-brown, for two reasons: the bake
+// has no atmosphere of its own, so a corridor's far end reads as flat as its near end; and the
+// engine's far plane is 100 units (GH_FAR) while the maze is 80 long, so without it the
+// furthest walls would pop at the clip rather than fade.
+
+uniform sampler2D tex;    // base colour map as shipped (1x1 white when the material has none)
+uniform vec4 base_color;  // glTF baseColorFactor
+uniform vec4 emissive;    // emissiveFactor x KHR_materials_emissive_strength, unclamped
+uniform vec4 cam_pos;
+
+in vec2 ex_uv;
+in vec3 ex_world;
+
+out vec4 fragColor;
+
+void main(void) {
+	// There is no HDR target here, so a strength of 10 means "saturate": the red exit lamps and
+	// the white diffusers clip to pure colour, which is what they look like in the reference.
+	vec3 col = clamp(texture(tex, ex_uv).rgb * base_color.rgb + emissive.rgb, 0.0, 1.0);
+
+	// Squared-distance falloff rather than linear: nothing within arm's reach is touched
+	// (1% at 5 units), the 23-unit hall end is softened (19%), and the far end of the maze
+	// is mostly gone (92% at 80) before the far plane would have cut it.
+	float d = length(ex_world - cam_pos.xyz) * 0.0195;
+	float fog = 1.0 - exp(-d * d);
+	col = mix(col, vec3(0.40, 0.33, 0.16), fog);
+
+	fragColor = vec4(col, 1.0);
+}

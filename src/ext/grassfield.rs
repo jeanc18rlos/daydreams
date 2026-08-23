@@ -284,8 +284,9 @@ impl ObjectT for GrassField {
     }
 
     fn update(&mut self, ctx: &UpdateCtx) {
-        // Do not follow the player into the sea world (see `draw`): the patch stays parked at
-        // its last meadow position, where the portal pass never draws it anyway.
+        // Do not follow the player into the far world behind the door -- the sea, the backrooms
+        // (see `draw`): the patch stays parked at its last meadow position, where the portal
+        // pass never draws it anyway.
         if ctx.player_pos.x > crate::ext::view::MOOD_SPLIT_X {
             return;
         }

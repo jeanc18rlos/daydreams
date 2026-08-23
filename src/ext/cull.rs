@@ -125,6 +125,15 @@ mod tests {
     }
 
     #[test]
+    fn sphere_reaching_back_across_the_far_plane_is_kept() {
+        let f = Frustum::from_view_proj(&cam().matrix());
+        assert!(f.sphere(Vector3::new(0.0, 0.0, -98.0), 1.0));
+        assert!(!f.sphere(Vector3::new(0.0, 0.0, -102.0), 1.0));
+        // Centred past the far plane but reaching back across it: a draw, not a hole.
+        assert!(f.sphere(Vector3::new(0.0, 0.0, -102.0), 3.0));
+    }
+
+    #[test]
     fn side_planes_follow_the_field_of_view() {
         let f = Frustum::from_view_proj(&cam().matrix());
         // GH_FOV is 60 degrees vertical: at z = -10 the half-height is 10 tan(30) = 5.77, and

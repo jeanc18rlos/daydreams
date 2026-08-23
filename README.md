@@ -610,6 +610,7 @@ were touched only where a hook was unavoidable, and each of those is a handful o
 | `0` | **Compound** | Carry a grabbed object through a scaling portal so both size effects multiply. Neither source game does this. |
 | `-` | **Unobserved** | Statues that only move while you are not looking at them, across two portal-linked chambers. |
 | `=` | **Anamorphic Chamber** | Twelve scattered fragments that resolve into a ring from exactly one spot in the room. |
+| `'` | **Backrooms** | The intro's meadow and door, but the door opens onto a scanned, light-baked office maze with real wall, floor and furniture collision. See [Backrooms](#backrooms-scene-) below. |
 
 Scenes `1`–`7` are CodeParade's originals and are untouched.
 
@@ -817,9 +818,9 @@ Small additions, each tagged `// EXT:`:
 | `collider.rs` | read-only `mat()` accessor, so rays can transform the rectangle to world space |
 | `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`8`–`=` key mappings |
 | `player.rs` | stick axes added to the keyboard move and look vectors |
-| `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum and eye, and `draw_impl` culls by bounding sphere |
-| `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, scene-load notification; the portal frustum pre-test and query pool; the old scene kept alive across `load_scene` |
-| `shader.rs` | memoised by-name uniform lookup, `set_mat4` |
+| `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum and eye, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery |
+| `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, scene-load notification; the portal frustum pre-test and query pool; the old scene kept alive across `load_scene`; the triangle-mesh rounds in the collision pass |
+| `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4` |
 | `props.rs` | `Sky::draw` takes the eye from the inverse it already computes |
 | `main.rs` | gamepad polling in `about_to_wait`; `--no-vsync` |
 
@@ -867,6 +868,34 @@ cost](#load-time-and-frame-cost) for what that costs.
 
 The new sky applies to every scene; the ported gradient-only sky is kept as
 `Shaders/sky_plain.frag.txt`.
+
+## Backrooms (scene `'`)
+
+The intro again -- same meadow, same white door -- except that through the door is
+`Meshes/backrooms_vr.glb`: a Sketchfab light-bake of the Backrooms, 29 primitives, 70k
+triangles, 27 maps, every material `KHR_materials_unlit`. Three things had to exist for it to be
+a place rather than a picture:
+
+| What | Where |
+|------|-------|
+| **A general glTF load.** The door loader fitted one model to one height and packed PBR maps at 512. `Load { fit, max_map }` now chooses between that and `Fit::Identity` (source metres, source origin -- the scan is already to scale and already Y-up once the root node's rotation is applied), and per-material `unlit` skips the PBR pack entirely: the base map goes up as shipped, at its own size and with its own wrap mode, and `baseColorFactor` / `emissiveFactor x KHR_materials_emissive_strength` are uniforms. The door's path is byte-identical. | `ext/gltf_model.rs`, `Shaders/gltfunlit.*` |
+| **Triangle-mesh collision.** The engine only knew axis-aligned rectangles declared on OBJ `c` lines. The whole scan becomes one parry3d `TriMesh`, built once in world space; the collision pass asks it for the deepest sphere penetration, applies the push exactly as it applies a rectangle's (on_hit, on_collide, matrices rebuilt), and asks again, up to eight rounds. The player walks on the carpet, is stopped by walls, skirting and armchairs, and the grab raycast sees the same surfaces. | `ext/trimesh.rs`, `ObjectT::trimesh` |
+| **Frustum culling.** The model is drawn by the meadow's main pass too, 1,000 units away. A six-plane test from the pass camera's matrix (oblique near plane included) skips the draw when the part's bounding sphere is wholly outside. | `ext/cull.rs` |
+
+The model is placed by its door: `ext/backrooms.rs` names a spot of open carpet in model
+coordinates (`DOOR_SPOT`, in the 23 m hall at the building's east end, 1.2 m clear of the end
+wall) and `Backrooms::new` takes the world point it should land on, so the level reasons about
+the return door and the placement follows. An invisible fence one metre outside the model's
+extent, and a net at its lowest point, keep the player inside whatever the scan's seams allow.
+The backrooms shader ignores the weather grade every other surface takes -- its lighting is
+painted in -- and adds a squared-distance fog toward dark yellow-brown so the far end of the
+maze fades rather than popping at the 100-unit far plane.
+
+Frame cost, measured with `glFinish` after each frame on a shared M3 Max at 2560x1440 (so
+absolute numbers are pessimistic; the comparison is what matters): meadow spawn in the intro
+**8.1 ms**, the same spawn in the Backrooms (the portal now draws the hall) **8.6 ms**, standing
+in the hall looking down it **6.1 ms**, looking back at the door (the portal draws the meadow)
+**8.0 ms**. Physics at 500 Hz with the triangle collider is inside those numbers.
 
 ### Dev tooling
 

@@ -31,7 +31,8 @@ kira = "0.12.3"
 # because src/ext/gltf_model.rs resizes and repacks the maps itself rather than taking gltf's
 # decoded images wholesale (six 4096-square RGBA maps would be 400 MB resident).
 image = { version = "0.25.10", default-features = false, features = ["png"] }
-gltf = { version = "1.4.1", default-features = false, features = ["utils", "names"] }
+gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "KHR_materials_unlit", "KHR_materials_emissive_strength"] }
+parry3d = "0.30.2"
 
 [profile.release]
 opt-level = 3
