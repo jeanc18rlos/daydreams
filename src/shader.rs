@@ -16,6 +16,8 @@ pub struct Shader {
     mvp_id: Option<glow::UniformLocation>,
     mv_id: Option<glow::UniformLocation>,
     gl: Rc<glow::Context>,
+    // EXT: memoised by-name uniform locations, see `uniform` below.
+    uniforms: std::cell::RefCell<std::collections::HashMap<String, Option<glow::UniformLocation>>>,
 }
 
 // PORT: `str.find(pat, from)` has no direct std equivalent (was: str.find("\nin ", ix), Shader.cpp:95).
@@ -75,6 +77,7 @@ impl Shader {
                 mvp_id,
                 mv_id,
                 gl: Rc::clone(gl),
+                uniforms: Default::default(),
             }
         }
     }
@@ -194,8 +197,26 @@ impl Drop for Shader {
 impl Shader {
     /// EXT: look up a uniform by name. `None` if the shader does not declare it (or the
     /// compiler optimised it away), in which case the setters below are silent no-ops.
+    ///
+    /// Memoised: a program's uniform locations are fixed at link time, and `glGetUniformLocation`
+    /// is a string lookup in the driver. `Object::draw_impl` asks for six of them per draw, and
+    /// a glTF model asks for a few more per primitive per pass, so one hash probe per ask beats
+    /// a driver call. Misses are cached too, because "not declared" is the common case for the
+    /// EXT uniforms on the ported shaders.
     pub fn uniform(&self, name: &str) -> Option<glow::UniformLocation> {
-        unsafe { self.gl.get_uniform_location(self.prog, name) }
+        if let Some(hit) = self.uniforms.borrow().get(name) {
+            return *hit;
+        }
+        let loc = unsafe { self.gl.get_uniform_location(self.prog, name) };
+        self.uniforms.borrow_mut().insert(name.to_string(), loc);
+        loc
+    }
+
+    /// EXT: set a `mat4` uniform from a row-major `Matrix4`, transposing on upload like `set_mvp`.
+    pub fn set_mat4(&self, name: &str, m: &Matrix4) {
+        if let Some(loc) = self.uniform(name) {
+            unsafe { self.gl.uniform_matrix_4_f32_slice(Some(&loc), true, &m.m) }
+        }
     }
 
     /// EXT: set a `vec4` uniform on the currently bound program.

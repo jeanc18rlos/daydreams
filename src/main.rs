@@ -44,6 +44,7 @@ mod level12;
 mod level13;
 mod level14;
 mod level15;
+mod level16;
 
 // EXT: new work beyond the port -- grab mechanic, audio, gamepad.
 mod ext;

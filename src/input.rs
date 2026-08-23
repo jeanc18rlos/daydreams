@@ -126,6 +126,7 @@ pub fn key_index(k: winit::keyboard::KeyCode) -> Option<usize> {
         KeyCode::BracketRight => b']',
         KeyCode::Backslash => b'\\',
         KeyCode::Semicolon => b';',
+        KeyCode::Quote => b'\'',
         // EXT: grab / release the held object.
         KeyCode::KeyE => b'E',
         // EXT: mute toggle.

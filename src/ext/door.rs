@@ -21,7 +21,7 @@
 //! portal at `portal_transform()` themselves.
 
 use crate::camera::Camera;
-use crate::ext::gltf_model::{Anchor, GltfModel, PartSpec};
+use crate::ext::gltf_model::{Anchor, Fit, GltfModel, Load, PartSpec};
 use crate::object::{Object, ObjectT, RenderCtx, UpdateCtx};
 use crate::resources::Resources;
 use crate::shader::Shader;
@@ -91,6 +91,11 @@ const LEAF_SEAT: f32 = 0.0;
 /// The source model, loaded at runtime with its own normals, tangents and material maps.
 const MODEL: &str = "Meshes/Classic_Interior_Door.glb";
 
+/// Texture side the door's 4096-square maps are brought down to. The door is 1.7 units tall
+/// (`HALF_H`) and stands at conversational distance at most, so even 512 is more texel than it
+/// can show -- and halving from 1024 quartered both the packing loop and the resident textures.
+const MAP: u32 = 512;
+
 /// Half-height of the opening, and so the door's whole size: the loader fits the leaf to
 /// `2 * HALF_H` and scales the frame with it.
 ///
@@ -145,27 +150,30 @@ impl Door {
         // with the leaf, so both land in one part and swing together.
         let model = GltfModel::acquire(
             gl,
-            MODEL,
-            &[
-                PartSpec {
-                    name: "leaf",
-                    roots: &["MatrixTransform_37", "Door4_Handle"],
-                    // ...but keep that node's TRANSLATION, or the leaf loses its position in the
-                    // assembly and the frame has to be re-aligned to it by hand.
-                    pre: Some("Door"),
-                    // Origin ON THE HINGE: Object rotates about its own origin, so the leaf's
-                    // local x=0 must be its hinge edge or it would orbit instead of swing.
-                    anchor: Anchor::Hinge,
-                },
-                PartSpec {
-                    name: "frame",
-                    roots: &["Door4_Frame"],
-                    pre: None,
-                    anchor: Anchor::Around("leaf"),
-                },
-            ],
-            "leaf",
-            HALF_H * 2.0,
+            &Load {
+                path: MODEL,
+                parts: &[
+                    PartSpec {
+                        name: "leaf",
+                        roots: &["MatrixTransform_37", "Door4_Handle"],
+                        // ...but keep that node's TRANSLATION, or the leaf loses its position
+                        // in the assembly and the frame has to be re-aligned to it by hand.
+                        pre: Some("Door"),
+                        // Origin ON THE HINGE: Object rotates about its own origin, so the
+                        // leaf's local x=0 must be its hinge edge or it would orbit instead of
+                        // swing.
+                        anchor: Anchor::Hinge,
+                    },
+                    PartSpec {
+                        name: "frame",
+                        roots: &["Door4_Frame"],
+                        pre: None,
+                        anchor: Anchor::Around("leaf"),
+                    },
+                ],
+                fit: Fit::Part { part: "leaf", height: HALF_H * 2.0 },
+                max_map: MAP,
+            },
         );
 
         let leaf_b = model.bounds("leaf");

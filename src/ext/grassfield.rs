@@ -72,6 +72,12 @@ impl ObjectT for GrassField {
     }
 
     fn update(&mut self, ctx: &UpdateCtx) {
+        // Past the mood split the player is in the far world behind the door (the sea, the
+        // backrooms), where a patch of meadow following them would stand up through whatever
+        // floor they are on. Leave it where it was.
+        if ctx.player_pos.x > crate::ext::view::MOOD_SPLIT_X {
+            return;
+        }
         let snap = |v: f32| (v / SNAP).round() * SNAP;
         self.base.pos = Vector3::new(snap(ctx.player_pos.x), self.ground_y, snap(ctx.player_pos.z));
     }

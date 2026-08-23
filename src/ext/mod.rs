@@ -28,9 +28,14 @@
 //! | `skybake`  | Clouds baked once into a panorama; the sky is one texture tap     |
 //! | `door`     | A freestanding door with a swinging leaf (the intro level)       |
 //! | `grassfield` | Real grass blades, in a patch that follows the player          |
+//! | `cull`     | View-frustum test for skipping draws the GPU would clip anyway   |
+//! | `trimesh`  | Triangle-mesh collision (parry3d) beside the ported rectangles   |
+//! | `backrooms` | The scanned, light-baked Backrooms as solid scenery             |
 
 pub mod audio;
+pub mod backrooms;
 pub mod bounds;
+pub mod cull;
 pub mod door;
 pub mod gamepad;
 pub mod gltf_model;
@@ -45,6 +50,7 @@ pub mod rotate;
 pub mod settings;
 pub mod skybake;
 pub mod terrain;
+pub mod trimesh;
 pub mod ui;
 pub mod ui_atlas;
 pub mod view;
