@@ -1,0 +1,6 @@
+# Whatever stable is current. The crate pins no nightly features; the floor is `rust-version`
+# in Cargo.toml. Pinning a specific version here would mean every machine downloads one more
+# toolchain for no gain.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

@@ -1,0 +1,134 @@
+# DayDreams CI: format, lint and test on the three platforms the game ships to; audit the
+# dependency tree; build the shipping binary on a version tag.
+#
+# Meshes/ is needed by the tests (the .obj parser is checked against the shipped meshes),
+# so every checkout pulls LFS objects. Until `git lfs migrate import` has run (README,
+# "Shipping") the assets are ordinary blobs and `lfs: true` is a no-op.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Rebuilding the 500 Hz collision loop's dependencies with incremental metadata is
+  # slower than not; CI never edits, so incremental buys nothing.
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  check:
+    name: fmt + clippy + test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        # libudev: gilrs. libasound2 + libdbus-1: cpal (kira) and its thread-priority
+        # helper. libwayland + libxkbcommon + libxcb: winit/glutin's Linux backends.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libudev-dev libasound2-dev libdbus-1-dev \
+            libwayland-dev libxkbcommon-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libx11-dev libgl1-mesa-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --release --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --release
+
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  dist:
+    name: dist (${{ matrix.os }})
+    # Tags only: the shipping binary is built once per release, not per push.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [check, deny]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: macos-arm64
+          - os: ubuntu-latest
+            target: linux-x86_64
+          - os: windows-latest
+            target: windows-x86_64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libudev-dev libasound2-dev libdbus-1-dev \
+            libwayland-dev libxkbcommon-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libx11-dev libgl1-mesa-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo build --profile dist
+        run: cargo build --profile dist
+
+      # The zip layout the README describes: the binary with the four asset directories
+      # beside it, plus the licences. macOS gets the same flat layout here; the .app is
+      # made locally with `just bundle` because signing needs a developer certificate.
+      - name: Stage (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p stage/DayDreams
+          cp target/dist/daydreams stage/DayDreams/
+          cp -R Meshes Textures Shaders assets stage/DayDreams/
+          cp LICENSE-ORIGINAL-MIT THIRD_PARTY.md stage/DayDreams/
+
+      - name: Stage (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force stage/DayDreams | Out-Null
+          Copy-Item -Path target/dist/daydreams.exe -Destination stage/DayDreams/
+          Copy-Item -Path Meshes, Textures, Shaders, assets -Destination stage/DayDreams/ -Recurse
+          Copy-Item -Path LICENSE-ORIGINAL-MIT, THIRD_PARTY.md -Destination stage/DayDreams/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daydreams-${{ github.ref_name }}-${{ matrix.target }}
+          path: stage/DayDreams
+          if-no-files-found: error

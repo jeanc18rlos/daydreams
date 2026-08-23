@@ -1,0 +1,5 @@
+# Matches the style the source was written in: 100 columns, and every construct kept on one
+# line whenever it fits (the default heuristics would wrap struct literals, chains and
+# `fn` signatures at much narrower widths and rewrite most files).
+max_width = 100
+use_small_heuristics = "Max"
