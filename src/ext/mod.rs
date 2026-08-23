@@ -40,12 +40,14 @@
 //! | `scissor`  | Portal passes scissored to the quad's screen footprint           |
 //! | `occlusion` | Portal occlusion queries read one frame late, never stalling   |
 //! | `meadow`   | The intro's meadow, door and title vantage, shared by the scenes that open on it |
+//! | `elevator` | The elevator between levels: the animated cabin, its ride and its floors |
 
 pub mod audio;
 pub mod backrooms;
 pub mod bounds;
 pub mod cull;
 pub mod door;
+pub mod elevator;
 pub mod frametime;
 pub mod gamepad;
 pub mod glbview;
@@ -136,6 +138,15 @@ impl ExtState {
         crate::ext::view::reset_fov();
         self.sprint.reset(crate::ext::view::time());
         self.audio.set_scene(scene);
+        // EXT: which floor the elevator is on, and whether the screen starts black.
+        crate::ext::elevator::on_scene_loaded(scene);
+    }
+
+    /// The elevator's doors starting to close: one sound per ride.
+    pub fn fire_elevator_sfx(&mut self) {
+        if crate::ext::elevator::take_ride_started() {
+            self.audio.play(Sfx::Elevator);
+        }
     }
 
     /// One footstep sound per footfall the player has taken since the last call -- at most

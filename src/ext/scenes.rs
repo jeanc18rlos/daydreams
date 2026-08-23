@@ -53,10 +53,45 @@ pub const SCENES: &[SceneEntry] = &[
     SceneEntry { key: b'.', name: "Overgrown", make: || Rc::new(crate::level18::Level18) },
 ];
 
-/// Index of the intro scene: where NEW GAME begins and what the title screen shows behind
-/// itself. A constant rather than a lookup because `Engine::new` wants it before anything
-/// else exists; `intro_is_the_intro` pins it to the name.
-pub const INTRO: usize = 15;
+/// The registry index of the scene called `name`, or `None` if no scene is. A `const fn`, so
+/// [`INTRO`] can be resolved by name at compile time; at runtime it is what the elevator
+/// (`ext/elevator.rs`) turns its floor names into, which is how a floor whose scene is not
+/// registered yet is simply skipped rather than mis-indexed.
+pub const fn index_of(name: &str) -> Option<usize> {
+    let mut i = 0;
+    while i < SCENES.len() {
+        if str_eq(SCENES[i].name, name) {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// `a == b` for a `const fn`: `str::eq` is not const, so the bytes are walked by hand.
+const fn str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Index of the scene where NEW GAME begins and that the title screen shows behind itself:
+/// the Backrooms. Looked up by name rather than written as a number so that reordering the
+/// table cannot quietly start the game somewhere else; `Engine::new` wants it before anything
+/// else exists, which the `const` lookup allows.
+pub const INTRO: usize = match index_of("Backrooms") {
+    Some(i) => i,
+    None => panic!("the scene registry has no Backrooms scene for NEW GAME to start in"),
+};
 
 #[cfg(test)]
 mod tests {
@@ -68,9 +103,22 @@ mod tests {
         assert_eq!(SCENES.len(), 19);
     }
 
+    /// NEW GAME opens in the Backrooms: on the meadow, facing the door into the hall.
     #[test]
-    fn intro_is_the_intro() {
-        assert_eq!(SCENES[INTRO].name, "Intro");
+    fn intro_is_the_backrooms() {
+        assert_eq!(SCENES[INTRO].name, "Backrooms");
+        assert_eq!(SCENES[INTRO].key, b'\'');
+    }
+
+    #[test]
+    fn index_of_finds_every_name_and_nothing_else() {
+        for (i, entry) in SCENES.iter().enumerate() {
+            assert_eq!(index_of(entry.name), Some(i), "{:?}", entry.name);
+        }
+        assert_eq!(index_of("Intro"), Some(15));
+        assert_eq!(index_of(""), None);
+        assert_eq!(index_of("Backroom"), None, "a prefix is not a match");
+        assert_eq!(index_of("Backrooms "), None, "nor is a longer string");
     }
 
     #[test]

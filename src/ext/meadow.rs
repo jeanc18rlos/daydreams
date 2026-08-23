@@ -51,6 +51,14 @@ pub const DOOR_POS: Vector3 =
 /// The meadow door faces the player, on its +z side.
 const DOOR_FACING: Vector3 = Vector3 { x: 0.0, y: 0.0, z: 1.0 };
 
+/// Whether a player at `pos` is in the far world -- has been through the door. The warp is
+/// instantaneous and the two worlds are a thousand units apart, so "past the mood split" is
+/// the same fact as "crossed": nothing walks there. The title's vantage and the spawn are
+/// both on the meadow side (`a_crossing_is_being_past_the_split` checks).
+pub fn in_far_world(pos: Vector3) -> bool {
+    pos.x > view::MOOD_SPLIT_X
+}
+
 /// What a level gets back from [`load_meadow`]: the handles its far world needs.
 pub struct MeadowSide {
     /// The far half of the door's link. The far door is built with it, so the two leaves
@@ -207,6 +215,17 @@ mod tests {
         // GH_FOV is the VERTICAL 60 degrees; at any widescreen aspect the horizontal half-angle
         // is past 0.75 rad, so this leaves the door a wide margin from the edge of the frame.
         assert!(off < 0.50, "door is {off} rad off axis and drifting out of frame");
+    }
+
+    /// The one-way door's trigger: on the meadow -- at the spawn, at the title's vantage,
+    /// on the doorstep -- it has not fired; anywhere the far door can deliver you, it has.
+    #[test]
+    fn a_crossing_is_being_past_the_split() {
+        assert!(!in_far_world(Vector3::new(0.0, terrain::DOOR_Y + GH_PLAYER_HEIGHT, -2.0)));
+        assert!(!in_far_world(title_view().0));
+        assert!(!in_far_world(DOOR_POS + Vector3::new(0.0, GH_PLAYER_HEIGHT, -0.01)));
+        assert!(in_far_world(FAR + Vector3::new(-0.01, GH_PLAYER_HEIGHT, 0.0)));
+        assert!(in_far_world(FAR + Vector3::new(-20.0, GH_PLAYER_HEIGHT, 0.0)));
     }
 
     /// mood_for must answer per region when the scene enables it, and "daylight" otherwise.

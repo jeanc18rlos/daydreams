@@ -115,8 +115,16 @@ pub struct Backrooms {
 impl Backrooms {
     /// Load the model and place it so that [`DOOR_SPOT`] lands on `door_world`, unrotated --
     /// the model's axes stay the world's, so [`DOOR_FACING`] is the door's facing in world
-    /// space too.
-    pub fn new(gl: &Rc<glow::Context>, res: &Resources, door_world: Vector3) -> Backrooms {
+    /// space too. The world-space boxes in `openings` are carved out of the collision
+    /// (`ext::trimesh::cut_box`) -- for whatever the level sets into the scan's walls, such
+    /// as the elevator. The drawing is untouched: whatever is set in has to cover the wall it
+    /// replaces.
+    pub fn new(
+        gl: &Rc<glow::Context>,
+        res: &Resources,
+        door_world: Vector3,
+        openings: &[(Vector3, Vector3)],
+    ) -> Backrooms {
         let model = GltfModel::acquire(gl, &load_spec());
 
         let mut base = Object::new();
@@ -125,7 +133,8 @@ impl Backrooms {
         base.pos = door_world - DOOR_SPOT;
 
         let (pos, idx) = model.triangles(PART);
-        let collider = Rc::new(TriMeshCollider::new(pos, idx, &base.local_to_world()));
+        let collider =
+            Rc::new(TriMeshCollider::new_with_holes(pos, idx, &base.local_to_world(), openings));
 
         Backrooms { base, model, shader: res.acquire_shader("gltfunlit"), collider }
     }

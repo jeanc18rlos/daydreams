@@ -71,6 +71,11 @@ pub struct Args {
     #[arg(long)]
     pub sprint: bool,
 
+    /// With `--scene`: load it as the elevator would deliver you -- doors shut, screen black,
+    /// stood in the cabin -- so an arrival can be photographed. Hidden: dev tooling.
+    #[arg(long, hide = true, requires = "scene")]
+    pub arrive: bool,
+
     /// Panic after the first frame, to exercise the crash dialog. Hidden: it is a test of the
     /// platform layer, not a feature.
     #[arg(long, hide = true)]
@@ -294,6 +299,13 @@ mod tests {
     fn finder_process_serial_is_ignored() {
         let a = Args::try_from_tokens(&["-psn_0_1234567", "--windowed"]).unwrap();
         assert!(a.windowed);
+    }
+
+    #[test]
+    fn arrive_needs_a_scene() {
+        assert!(Args::try_from_tokens(&["--arrive"]).is_err());
+        assert!(Args::try_from_tokens(&["--scene", "16", "--arrive"]).unwrap().arrive);
+        assert!(!Args::try_from_tokens(&["--scene", "16"]).unwrap().arrive);
     }
 
     #[test]

@@ -23,12 +23,23 @@
 //! `ext::terrain::wrap_player`, and placed next to it, for the same reason: a position set
 //! mid-step would hand `try_portal` a segment from wherever the player was to wherever they are
 //! now, and a long enough one sweeps a doorway.
+//!
+//! Two more requests ride the same channel shape, for the same reason -- a room's closure can
+//! reach neither the portal vector nor the scene list:
+//!
+//! * [`request_remove_portals`] takes portals out of the scene for good (the Backrooms' door,
+//!   once crossed). Applied by `Engine::update` after the portal pass, like the respawn: the
+//!   pass that just ran may have warped the player through one of them.
+//! * [`request_scene_load`] asks for another scene (the elevator's ride). Applied by
+//!   `Engine::run_frame` once the fixed-step loop is over -- never mid-step, because the load
+//!   replaces the object vector the step is iterating.
 
 use crate::camera::Camera;
 use crate::object::{Object, ObjectT, RenderCtx, UpdateCtx};
 use crate::player::Player;
+use crate::scene::PPortalVec;
 use crate::vector::Vector3;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 /// An invisible object that runs a closure every fixed step.
 pub struct RoomLogic {
@@ -103,10 +114,52 @@ pub fn apply_respawn(player: &mut Player) {
     player.set_look(r.yaw, 0.0);
 }
 
+thread_local! {
+    /// EXT: portal ids a room has asked to have removed. Ids, not indices: `Portal::id` is
+    /// what `Warp::to_portal` names a portal by, and it survives the vector being reordered.
+    static REMOVE_PORTALS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+    /// EXT: the registry index a room has asked the engine to load next.
+    static SCENE_LOAD: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+/// Ask the engine to drop the portals with these ids at the end of this step. Requests
+/// accumulate until applied; an id the scene does not have is ignored.
+pub fn request_remove_portals(ids: &[u32]) {
+    REMOVE_PORTALS.with(|r| r.borrow_mut().extend_from_slice(ids));
+}
+
+/// Carry out pending removals on the scene's portal vector: every portal whose id was asked
+/// for is dropped, the rest keep their order. Called by `Engine::update` after the portal
+/// pass, once per step. Returns whether anything was removed, so the engine can forget the
+/// occlusion results that named the old vector's indices.
+pub fn apply_remove_portals(portals: &mut PPortalVec) -> bool {
+    let ids = REMOVE_PORTALS.with(|r| std::mem::take(&mut *r.borrow_mut()));
+    if ids.is_empty() {
+        return false;
+    }
+    let before = portals.len();
+    portals.retain(|p| !ids.contains(&p.borrow().id));
+    portals.len() != before
+}
+
+/// Ask the engine to load registry scene `ix` once the current frame's steps are done. A
+/// later request in the same frame wins.
+pub fn request_scene_load(ix: usize) {
+    SCENE_LOAD.with(|c| c.set(Some(ix)));
+}
+
+/// The pending scene request, consumed. Called by `Engine::run_frame` after the fixed-step
+/// loop.
+pub fn take_scene_load() -> Option<usize> {
+    SCENE_LOAD.with(|c| c.take())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::game_header::GH_PI;
+    use crate::portal::Portal;
+    use std::rc::Rc;
 
     #[test]
     fn facing_matches_the_portal_convention() {
@@ -137,5 +190,31 @@ mod tests {
         p.base.set_position(elsewhere);
         apply_respawn(&mut p);
         assert!((p.obj().pos - elsewhere).mag() == 0.0);
+    }
+
+    #[test]
+    fn removing_portals_keeps_the_others_in_order() {
+        let portals: PPortalVec =
+            (0..4).map(|_| Rc::new(RefCell::new(Portal::detached()))).collect();
+        let ids: Vec<u32> = portals.iter().map(|p| p.borrow().id).collect();
+        let mut v = portals.clone();
+        assert!(!apply_remove_portals(&mut v), "nothing asked for, nothing removed");
+        request_remove_portals(&[ids[1]]);
+        request_remove_portals(&[ids[3], 0xFFFF_FFF0]);
+        assert!(apply_remove_portals(&mut v));
+        let left: Vec<u32> = v.iter().map(|p| p.borrow().id).collect();
+        assert_eq!(left, [ids[0], ids[2]]);
+        // Consumed: nothing more goes.
+        assert!(!apply_remove_portals(&mut v));
+        assert_eq!(v.len(), 2);
+    }
+
+    #[test]
+    fn a_scene_load_request_is_taken_once_and_the_last_wins() {
+        assert_eq!(take_scene_load(), None);
+        request_scene_load(3);
+        request_scene_load(7);
+        assert_eq!(take_scene_load(), Some(7));
+        assert_eq!(take_scene_load(), None);
     }
 }

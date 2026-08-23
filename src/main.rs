@@ -399,6 +399,7 @@ impl ApplicationHandler for App {
                     self.args.pitch,
                     self.args.pos,
                     &self.args.held_keys(),
+                    self.args.arrive,
                 );
             }
             self.engine = Some(engine);

@@ -393,6 +393,13 @@ impl Engine {
             self.cur_ticks.set(new_ticks);
         }
 
+        // EXT: a scene a room asked for (the elevator's ride, src/ext/room.rs), loaded HERE --
+        // after the loop, so no step ever sees the object vector it is iterating replaced
+        // under it -- and before the extension update, whose grab state a load clears.
+        if let Some(ix) = crate::ext::room::take_scene_load() {
+            self.load_scene(ix);
+        }
+
         // EXT: forced-perspective grab. Runs once per rendered frame rather than per 500 Hz
         // physics step -- it casts a ray, and the held object's transform only needs to be
         // right at draw time.
@@ -454,6 +461,15 @@ impl Engine {
             };
             ext.ui.begin(i_width, i_height);
             crate::ext::hud::draw(&ext.ui, cursor);
+            // The elevator's prompt, and its black-out between floors (src/ext/elevator.rs);
+            // the black goes over the cursor too.
+            if let Some(hint) = crate::ext::elevator::hint() {
+                crate::ext::hud::draw_hint(&ext.ui, &hint);
+            }
+            let fade = crate::ext::elevator::fade();
+            if fade > 0.0 {
+                ext.ui.fill_rect(0.0, 0.0, i_width as f32, i_height as f32, [0.0, 0.0, 0.0, fade]);
+            }
             ext.ui.end();
         }
 
@@ -471,7 +487,8 @@ impl Engine {
     ///
     /// `hold` lists key slots to keep down every frame (`--forward`, `--strafe`, `--sprint`),
     /// so the shot can photograph the player walking or running and the `[shot]` position
-    /// print how far they travelled.
+    /// print how far they travelled. `arrive` loads the scene as an elevator ride would
+    /// (`--arrive`, src/ext/elevator.rs).
     pub fn start_direct(
         &self,
         scene: Option<crate::app::cli::DirectScene>,
@@ -481,11 +498,15 @@ impl Engine {
         pitch: f32,
         pos: Option<[f32; 3]>,
         hold: &[usize],
+        arrive: bool,
     ) {
         use crate::app::cli::DirectScene;
         *self.dev_hold.borrow_mut() = hold.to_vec();
         if let Some(scene) = scene {
             self.ext.borrow_mut().menu.close();
+            if arrive {
+                crate::ext::elevator::deliver(crate::ext::elevator::Arrival { from_floor: 0 });
+            }
             match scene {
                 // In range: the command line checks the index against the registry, and
                 // `v_scenes` is built from the same table.
@@ -889,6 +910,13 @@ impl Engine {
         // cannot fight a push out of a hillside either.
         crate::ext::room::apply_respawn(&mut self.player.borrow_mut());
         crate::ext::terrain::wrap_player(&mut self.player.borrow_mut());
+        // EXT: and a room's request to be rid of portals (the Backrooms' one-way door). Also
+        // after the portal pass, which may have just warped the player through one of them;
+        // the one-frame-late occlusion results are keyed on portal indices, which have just
+        // changed, so they are forgotten.
+        if crate::ext::room::apply_remove_portals(&mut self.v_portals.borrow_mut()) {
+            self.occlusion.borrow_mut().reset();
+        }
     }
 
     // void Engine::Render(const Camera& cam, GLuint curFBO, const Portal* skipPortal)
@@ -1149,7 +1177,13 @@ impl Engine {
     fn ext_update(&self) {
         // The grab latch, set either by the E key at the top of run_frame or by the gamepad.
         // NOT read from key_press directly: EndFrame has already cleared it by this point.
-        let grab_pressed = self.pad_grab.replace(false);
+        // The elevator has first claim on it: standing in its cabin, E rides rather than grabs
+        // (src/ext/elevator.rs).
+        let mut grab_pressed = self.pad_grab.replace(false);
+        if grab_pressed && crate::ext::elevator::wants_interact() {
+            crate::ext::elevator::press();
+            grab_pressed = false;
+        }
 
         let (cam_to_world, steps) = {
             let p = self.player.borrow();
@@ -1162,6 +1196,7 @@ impl Engine {
         crate::ext::grab::update(&objects, &cam_to_world, grab_pressed, &mut ext.grab);
         ext.fire_grab_sfx();
         ext.fire_footstep_sfx(steps);
+        ext.fire_elevator_sfx();
         crate::ext::view::set_fov(ext.sprint.ease_fov(crate::ext::view::time()));
     }
 
