@@ -44,6 +44,7 @@
 //! | `carve`    | Carving a box out of a triangle soup, generic over the vertex, for the loader |
 //! | `interior` | A glTF interior as a level: model, collider, fence, cap and respawn as one function |
 //! | `painting` | Portraits whose eyes follow the pass camera and whose faces change only unobserved |
+//! | `key`      | The key painted into one portrait in anamorphosis, and what it opens          |
 
 pub mod audio;
 pub mod backrooms;
@@ -63,6 +64,7 @@ pub mod grassgen;
 pub mod hint;
 pub mod hud;
 pub mod interior;
+pub mod key;
 pub mod meadow;
 pub mod menu;
 pub mod occlusion;
