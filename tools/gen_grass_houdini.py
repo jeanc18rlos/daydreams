@@ -1,4 +1,18 @@
-"""Build a tileable patch of grass BLADES in Houdini and export it in the engine's OBJ dialect.
+"""SUPERSEDED -- kept as documentation of the original scatter. Do not run.
+
+The blade patch is now generated in-process by src/ext/grassgen.rs, which is the source of
+truth: same PATCH / DENSE_R / BLADES / SEGMENTS / BLADE_H / BLADE_W, same arch and taper, and
+the same (t, phase, lean) vertex channel -- but indexed, one winding, and bucketed into cull
+cells, none of which the engine's OBJ dialect can express. Meshes/grass_patch.obj (124 MB, the
+file this wrote) has been removed from the tree; the generator builds the patch in ~20 ms at
+startup instead of the parser spending 0.37 s re-reading it on every intro load.
+
+This script stays because it documents where the numbers came from and what the Houdini
+session looked like; nothing in the build or the runtime depends on it.
+
+Original docstring follows.
+
+Build a tileable patch of grass BLADES in Houdini and export it in the engine's OBJ dialect.
 
 Run with hython:
     /Applications/Houdini/Houdini22.0.368/Frameworks/Houdini.framework/Versions/22.0/\

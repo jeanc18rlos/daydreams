@@ -55,7 +55,7 @@ struct SStream<'a> {
     ///
     /// PORT: the C++ overwrites every '/' in an `f` line with a space before parsing it
     /// (Mesh.cpp:61) so that `>>` splits `1/2` into two integers. Doing that literally means
-    /// copying the line to mutate it, which on `grass_patch.obj` is a million heap allocations
+    /// copying the line to mutate it, which on a million-face mesh is a million heap allocations
     /// for a rewrite that only ever feeds this tokenizer. Splitting on the character instead
     /// produces the same tokens without touching the input. It is opt-in rather than always on
     /// so that `v`/`vt`/`c` lines keep failing on a stray '/' exactly as the stream they
@@ -274,7 +274,7 @@ pub fn parse_obj(text: &str) -> ParsedMesh {
             // the line is only read: the slashes are counted where they are, and the tokenizer
             // below is told to split on them (`SStream::slash_splits`). The rewrite existed
             // solely to make `>>` split, and copying a line per face to perform it cost two
-            // heap allocations each -- two million of them on `grass_patch.obj` alone.
+            // heap allocations each -- two million of them on the old 124 MB grass patch alone.
             let mut num_slashes = 0i32;
             let mut last_slash_ix: usize = 0;
             let mut doubleslash = false;

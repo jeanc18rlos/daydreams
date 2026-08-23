@@ -137,7 +137,7 @@ impl Scene for Level15 {
         // Real blades in a patch that follows the player; the ground texture covers the rest.
         // The blades read the same height field in their vertex shader, so they stand on the
         // hills rather than hovering in a flat sheet.
-        objs.push(Rc::new(RefCell::new(GrassField::new(res, 0.0))) as Rc<RefCell<dyn ObjectT>>);
+        objs.push(Rc::new(RefCell::new(GrassField::new(gl, res, 0.0))) as Rc<RefCell<dyn ObjectT>>);
         // No bounds box on this side: walls at +/-120 would stop the player 8 units short of the
         // wrap line and the torus would never close.
 

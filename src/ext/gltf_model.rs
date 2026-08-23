@@ -26,6 +26,7 @@
 use crate::camera::Camera;
 use crate::object::Object;
 use crate::shader::Shader;
+use crate::vector::Vector3;
 use glow::HasContext;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -143,7 +144,7 @@ struct Raw {
     material: usize,
 }
 
-/// Every material map is packed to this square. The door's source maps are 4096x4096 -- an
+/// Every material map is packed to this square. The door's source maps were 4096x4096 -- an
 /// absurd budget for something a few hundred pixels tall on screen, and six of them would be
 /// 400 MB of decoded RGBA.
 ///
@@ -151,6 +152,11 @@ struct Raw {
 /// distance at most, so even 512 is more texel than it can show. Halving the square quarters
 /// both the packing loop and the resident texture, and the pack is the only part of this loader
 /// that scales with MAP rather than with the source.
+///
+/// The shipped GLB is pre-shrunk to exactly this size by `tools/shrink_glb.py` (79 MB -> 1.3 MB),
+/// so in practice `decode_one` decodes ten small PNGs and resizes nothing. The resize path stays
+/// for any model that is not, and `MAP` is the one number both agree on: change it here and
+/// re-run the tool, or the loader quietly goes back to resizing at load time.
 const MAP: u32 = 512;
 
 /// Resampling filter for the 4096 -> MAP downscale.
@@ -289,13 +295,14 @@ impl GltfModel {
         *self.bounds.get(part).unwrap_or_else(|| panic!("no part {part:?}"))
     }
 
-    /// Draw one part positioned by `obj`. This mirrors `Object::draw_impl` (object.rs:79-101)
-    /// exactly -- same matrices, same EXT uniform set -- so a glTF part lights and grades like
-    /// every other surface in the scene, then adds the two material samplers on top.
+    /// Draw one part positioned by `obj`, seen from `eye` (the pass's camera position, carried
+    /// on `RenderCtx`). This mirrors `Object::draw_impl` (object.rs:79-101) exactly -- same
+    /// matrices, same EXT uniform set -- so a glTF part lights and grades like every other
+    /// surface in the scene, then adds the two material samplers on top.
     ///
     /// Takes `&self`: `ObjectT::draw` is re-entrant through portal recursion (Portal::Draw
     /// re-enters Engine::Render), so a draw path must never mutate.
-    pub fn draw_part(&self, part: &str, obj: &Object, shader: &Shader, cam: &Camera) {
+    pub fn draw_part(&self, part: &str, obj: &Object, shader: &Shader, cam: &Camera, eye: Vector3) {
         let Some(prims) = self.parts.get(part) else { return };
         let mv = obj.world_to_local().transposed();
         let mvp = cam.matrix() * obj.local_to_world();
@@ -303,7 +310,6 @@ impl GltfModel {
         shader.use_program();
         shader.set_mvp(Some(&mvp), Some(&mv));
         shader.set_f32("time", crate::ext::view::time());
-        let eye = cam.world_view.inverse().translation();
         shader.set_vec4("cam_pos", [eye.x, eye.y, eye.z, 1.0]);
         shader.set_f32("mood", crate::ext::view::mood_for(eye));
         shader.set_vec4("glow", crate::ext::view::glow());
@@ -459,10 +465,12 @@ fn as_bytes<T>(v: &[T]) -> &[u8] {
 /// glTF image index.
 ///
 /// PNG decode is what is left of this loader's cost once the resize is sensible: the door
-/// carries six 4096-square maps totalling ~79 MB of PNG, and decoding them one after another is
-/// half a second in which the game shows nothing. They are wholly independent -- each reads its
-/// own slice of the shared, immutable BIN chunk and produces an owned image -- so they scale
-/// almost perfectly across cores.
+/// carried six 4096-square maps totalling ~79 MB of PNG, and decoding them one after another
+/// was half a second in which the game showed nothing. They are wholly independent -- each
+/// reads its own slice of the shared, immutable BIN chunk and produces an owned image -- so
+/// they scale almost perfectly across cores. (The shipped door is now pre-shrunk, see `MAP`,
+/// and decodes in a few milliseconds either way; the lanes cost nothing and keep a full-size
+/// model loadable.)
 ///
 /// This is the only threaded code in the engine, and it stays that way by construction:
 /// `thread::scope` joins every worker before returning, nothing here touches GL (the uploads in
@@ -551,6 +559,11 @@ fn decode_one(bytes: &[u8]) -> Option<image::RgbaImage> {
     // `into_rgba8`, not `to_rgba8`: the latter copies the decoded image into a second buffer of
     // the same size, which at 4096 square is another 67 MB held for the length of the resize.
     let rgba = image::load_from_memory(bytes).ok()?.into_rgba8();
+    // A map that already is MAP square -- every one in the shipped door -- is used as decoded.
+    // Resampling at 1:1 would be a copy through the filter that changes nothing but the time.
+    if rgba.width() == MAP && rgba.height() == MAP {
+        return Some(rgba);
+    }
     Some(image::imageops::resize(&rgba, MAP, MAP, MAP_FILTER))
 }
 

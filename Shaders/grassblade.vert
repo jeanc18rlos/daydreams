@@ -3,12 +3,17 @@
 // EXT: grass blades. All bending happens here -- the patch mesh is static and the CPU never
 // touches a vertex.
 //
-// in_uv carries per-vertex blade data packed by tools/gen_grass_houdini.py:
+// in_uv carries per-vertex blade data packed by src/ext/grassgen.rs:
 //   .x = t, height along the blade (0 root .. 1 tip)
 //   .y = per-blade random, so neighbours sway out of phase
 //   .z = lean angle, the direction this blade bends
-uniform mat4 mvp;
-uniform mat4 mv;          // normal matrix = transpose(world_to_local) (Object.cpp:22)
+//
+// Not the engine's mvp/mv pair: the blades bend in WORLD space (the wind field must not travel
+// with the patch, which follows the player), so the patch's local-to-world and the camera's
+// view-projection are wanted separately. Sending both is what lets the shader skip the two 4x4
+// inversions per vertex it used to spend reconstructing them from mv.
+uniform mat4 vp;          // projection * world_view (Camera::matrix)
+uniform mat4 l2w;         // the patch object's local_to_world
 uniform float time;
 uniform vec4 cam_pos;
 uniform float wrap;       // world period on a wrapping scene, 0 otherwise (src/ext/view.rs)
@@ -63,7 +68,6 @@ float snap_phase(float k) {
 
 in vec3 in_pos;
 in vec3 in_uv;
-in vec3 in_normal;
 
 out vec3 ex_world;
 out vec3 ex_normal;
@@ -103,8 +107,8 @@ void main(void) {
 	// The patch object is moved by ext/grassfield.rs, so local -> world gives the true
 	// world position the wind field must be sampled at (otherwise gusts would travel with
 	// the player).
-	mat4 l2w = inverse(transpose(mv));
-	vec3 world = (l2w * vec4(in_pos, 1.0)).xyz;
+	vec3 root = (l2w * vec4(in_pos, 1.0)).xyz;
+	vec3 world = root;
 
 	// Gust field: two scales drifting downwind, plus a fast flutter per blade.
 	vec2 wdir = normalize(vec2(0.82, 0.57));
@@ -125,9 +129,9 @@ void main(void) {
 	world.y -= length(sway) * 0.35 * t;
 	// Stand the blade on the terrain. Sampled at the blade's ROOT (its unswayed xz) rather than
 	// at this vertex, so the whole blade rises together instead of shearing along a slope.
-	world.y += terrain_h((l2w * vec4(in_pos, 1.0)).xz);
+	world.y += terrain_h(root.xz);
 
-	gl_Position = mvp * (inverse(l2w) * vec4(world, 1.0));
+	gl_Position = vp * vec4(world, 1.0);
 	ex_world = world;
 	ex_t = t;
 	ex_rand = rnd;

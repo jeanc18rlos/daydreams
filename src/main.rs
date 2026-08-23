@@ -333,7 +333,16 @@ impl ApplicationHandler for App {
 
         //Attempt to enalbe vsync (if failure then oh well)
         // PORT: wglSwapIntervalEXT(1) (Engine.cpp:431); the original's typo is kept above.
-        if let Err(err) = gl_surface.set_swap_interval(
+        // EXT: `--no-vsync` asks for an interval of 0 so the dev screenshot path can measure
+        // what a frame costs rather than what the display allows. It has to be an explicit
+        // request: CGL's default interval is 1, so merely skipping the call below leaves the
+        // swap throttled to the panel's refresh.
+        if self.dev.no_vsync {
+            if let Err(err) = gl_surface.set_swap_interval(&gl_context, SwapInterval::DontWait) {
+                eprintln!("Error disabling vsync: {err:?}");
+            }
+            println!("[dev] vsync off");
+        } else if let Err(err) = gl_surface.set_swap_interval(
             &gl_context,
             SwapInterval::Wait(NonZeroU32::new(1).unwrap()),
         ) {
@@ -594,6 +603,8 @@ impl ApplicationHandler for App {
 /// `--shot path.bmp` saves a screenshot after `--frames K` (default 90) frames and quits;
 /// `--yaw deg` / `--pitch deg` aim the camera. Used to iterate on shaders without a human.
 /// `--shot` on its own photographs whatever the game boots into -- the title screen.
+/// `--no-vsync` skips the swap-interval request, so the `[shot]` line's frame times measure the
+/// renderer rather than the display.
 #[derive(Clone, Debug, Default)]
 struct DevArgs {
     scene: Option<usize>,
@@ -602,6 +613,7 @@ struct DevArgs {
     yaw: f32,
     pitch: f32,
     pos: Option<[f32; 3]>,
+    no_vsync: bool,
 }
 
 /// EXT: whether the window opens fullscreen: `GH_START_FULLSCREEN` unless `--windowed` is given.
@@ -637,6 +649,12 @@ fn parse_dev_args() -> DevArgs {
                     let p: Vec<f32> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
                     (p.len() == 3).then(|| [p[0], p[1], p[2]])
                 });
+            }
+            // A bare flag: no value follows it.
+            "--no-vsync" => {
+                out.no_vsync = true;
+                i += 1;
+                continue;
             }
             _ => { i += 1; continue; }
         }

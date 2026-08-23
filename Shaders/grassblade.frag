@@ -38,14 +38,12 @@ in float ex_rand;
 out vec4 fragColor;
 
 void main(void) {
-	// Each blade is emitted with BOTH windings so it is visible from either side (the engine
-	// culls back faces and a scene cannot turn that off). Both copies carry the same vertex
-	// normal, so without this flip the far side lights as though it faced away -- which read
-	// as black spikes scattered through the field.
+	// One normal per blade, whichever side is seen. The blades are drawn with back-face
+	// culling off (ext/grassfield.rs), so half of them face away from the camera -- and they
+	// must shade exactly as they did when the patch carried both windings and culling picked
+	// the front copy, which always had gl_FrontFacing set. Flipping on gl_FrontFacing here
+	// would darken every blade seen from behind and change the look of the field.
 	vec3 n = normalize(ex_normal);
-	if (!gl_FrontFacing) {
-		n = -n;
-	}
 	// Blades are thin and translucent: light wraps around them rather than terminating hard.
 	vec3 L = normalize(LIGHT);
 
