@@ -172,7 +172,7 @@ impl Scene for Level12 {
                 if let Ok(mut c) = cube.try_borrow_mut() {
                     c.base_mut().mesh = Some(cube_mesh.clone());
                 }
-                println!("[cube] taken -- the sticker was a cube all along");
+                log::debug!("[cube] taken -- the sticker was a cube all along");
                 return;
             }
 
@@ -195,7 +195,7 @@ impl Scene for Level12 {
             }
             if solved && !was && !announced {
                 announced = true;
-                println!("[cube] on the spot -- aim at the cube (crosshair turns gold) and press E");
+                log::debug!("[cube] on the spot -- aim at the cube (crosshair turns gold) and press E");
             }
         });
         objs.push(Rc::new(RefCell::new(logic)) as Rc<RefCell<dyn ObjectT>>);

@@ -131,7 +131,7 @@ impl Gamepads {
         let gilrs = match gilrs::Gilrs::new() {
             Ok(g) => Some(g),
             Err(e) => {
-                eprintln!("[gamepad] unavailable ({e}); keyboard and mouse only");
+                log::warn!("[gamepad] unavailable ({e}); keyboard and mouse only");
                 None
             }
         };
@@ -161,10 +161,10 @@ impl Gamepads {
         self.connected = gilrs.gamepads().count();
         if self.connected > before {
             for (_id, pad) in gilrs.gamepads() {
-                println!("[gamepad] {} connected", pad.name());
+                log::info!("[gamepad] {} connected", pad.name());
             }
         } else if self.connected < before {
-            println!("[gamepad] disconnected ({} left)", self.connected);
+            log::info!("[gamepad] disconnected ({} left)", self.connected);
         }
     }
 

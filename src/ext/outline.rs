@@ -96,7 +96,7 @@ impl Outline {
                 0,
             );
             if gl.check_framebuffer_status(glow::FRAMEBUFFER) != glow::FRAMEBUFFER_COMPLETE {
-                eprintln!("[outline] mask framebuffer incomplete");
+                log::warn!("[outline] mask framebuffer incomplete");
             }
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
             self.fbo.set(Some(fbo));

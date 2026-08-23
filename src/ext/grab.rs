@@ -555,7 +555,7 @@ fn try_grab(
             .iter()
             .filter(|o| o.try_borrow().ok().map_or(false, |o| as_grabbable(&*o).is_some()))
             .count();
-        println!("[grab] nothing in reach (crosshair missed; {n} grabbable object(s) in scene, reach {GRAB_REACH})");
+        log::debug!("[grab] nothing in reach (crosshair missed; {n} grabbable object(s) in scene, reach {GRAB_REACH})");
         return;
     };
     let Ok(obj) = objects[idx].try_borrow() else { return };
@@ -568,7 +568,7 @@ fn try_grab(
     state.ratio = p_scale / dist;
     state.radius = radius;
     state.just_grabbed = true;
-    println!("[grab] picked up object #{idx} at {dist:.2} units (aim and press E again to place it)");
+    log::debug!("[grab] picked up object #{idx} at {dist:.2} units (aim and press E again to place it)");
 }
 
 fn release(objects: &[Rc<RefCell<dyn ObjectT>>], state: &mut GrabState) {
@@ -587,7 +587,7 @@ fn release(objects: &[Rc<RefCell<dyn ObjectT>>], state: &mut GrabState) {
     }
     state.held = None;
     state.just_released = true;
-    println!("[grab] released");
+    log::debug!("[grab] released");
 }
 
 /// Recover the bounding radius of an object if it is grabbable.
