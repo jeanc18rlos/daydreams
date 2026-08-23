@@ -117,7 +117,8 @@ const PARK: f32 = 200.0;
 pub enum Opening {
     /// The key has not been used: green glass.
     Locked,
-    /// Unlocked but lying on a floor or a ceiling: the portal is parked.
+    /// Unlocked but lying on a floor or a ceiling: stand it up. (The portal is parked on the
+    /// pose alone, locked or not -- `place_portals`.)
     Flat,
     /// Unlocked and upright, but under [`PASS_HEIGHT`].
     Small,
@@ -191,8 +192,10 @@ pub fn portal_transform(base: &Object) -> (Vector3, f32, Vector3, f32) {
 
 /// Place `here` at the frame and match `there` to it -- the scale, and the height
 /// ([`PARTNER`]) -- then connect the two. Run every step (module docs): both ends must agree
-/// for the warp to be rigid, and the warp is baked at connect time. A [`Opening::Flat`]
-/// frame's `here` is parked [`PARK`] below it.
+/// for the warp to be rigid, and the warp is baked at connect time. A frame lying flat has
+/// its `here` parked [`PARK`] below it, on the POSE and not on the state: the lock wins the
+/// state (`opening`), and a locked frame dropped on the carpet would otherwise keep a
+/// vertical tinted quad standing up through it.
 pub fn place_portals(
     here: &Rc<RefCell<Portal>>,
     there: &Rc<RefCell<Portal>>,
@@ -202,8 +205,7 @@ pub fn place_portals(
     let (pos, yaw, scale, p_scale) = portal_transform(base);
     {
         let mut h = here.borrow_mut();
-        h.base.pos =
-            if opening == Opening::Flat { pos - Vector3::new(0.0, PARK, 0.0) } else { pos };
+        h.base.pos = if is_flat(base.euler) { pos - Vector3::new(0.0, PARK, 0.0) } else { pos };
         h.base.euler = Vector3::new(0.0, yaw, 0.0);
         h.base.scale = scale;
         h.base.p_scale = p_scale;
@@ -640,6 +642,20 @@ mod tests {
             assert!(h.base.pos.y < -100.0, "parked: {:?}", h.base.pos);
             assert!(!h.passable && h.base.euler.x == 0.0);
         }
+        // Locked AND flat -- the first thing a player can do to the window is drop it on the
+        // carpet: the state is the lock's (tint, hint) but the portal is parked all the same.
+        assert_eq!(opening(true, true, 1.0), Opening::Locked);
+        place_portals(&here, &there, &base, Opening::Locked);
+        {
+            let h = here.borrow();
+            assert!(h.base.pos.y < -100.0, "a locked flat frame parks too: {:?}", h.base.pos);
+            assert!(!h.passable && h.base.euler.x == 0.0);
+            assert_eq!(h.tint, LOCKED_TINT);
+        }
+        // On the ceiling as well.
+        base.euler = crate::ext::grab::flat_euler(Vector3::new(0.0, -1.0, 0.0), Vector3::unit_x());
+        place_portals(&here, &there, &base, Opening::Locked);
+        assert!(here.borrow().base.pos.y < -100.0, "ceiling: {:?}", here.borrow().base.pos);
         base.euler = Vector3::zero();
         place_portals(&here, &there, &base, Opening::Locked);
         let (h, t) = (here.borrow(), there.borrow());

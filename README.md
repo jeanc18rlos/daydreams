@@ -1681,13 +1681,16 @@ stretched along it.
 in this order: locked -> `Locked`, the opening is `Portal::tint`ed greenish glass
 (`LOCKED_TINT`), `Portal::passable` is off and a collider-only rectangle over the opening
 (`Mesh::colliders_only`, `Collider::rect`) stops the player leaning into it; the frame lying
-on a floor or a ceiling -> `Flat`, the portal is parked 200 m below the frame rather than
-tilted (portals must stay vertical: `try_portal` re-aims only the yaw, `Portal::draw`
-asserts it) and the frame is a picture frame lying there; under `PASS_HEIGHT` (1.9 m) tall
+on a floor or a ceiling -> `Flat`, a picture frame lying there; under `PASS_HEIGHT` (1.9 m) tall
 -> `Small`, clear but shut; else `Open`, a door. The HUD line while the crosshair is on it
 says which: `LOCKED - IT NEEDS A KEY`, `STAND IT UP ON A WALL`, `TOO SMALL - GRAB IT AND
-STEP BACK`, nothing when open. The key is a sibling's; it raises
-`room::request_unlock_window` and the window takes the flag on its next step.
+STEP BACK`, nothing when open. The parking is the pose's, not the state's: a frame lying flat
+has its portal parked 200 m below it rather than tilted (portals must stay vertical:
+`try_portal` re-aims only the yaw, `Portal::draw` asserts it) whether or not it is locked --
+the lock wins the state, and a locked frame dropped on the carpet, the first thing a player
+can do to it, would otherwise keep a vertical tinted quad standing up through it. The key is a
+sibling's; it raises `room::request_unlock_window` and the window takes the flag on its next
+step.
 
 `ObjectT::engine_collision` is false for the window: its hit sphere is centred on the wall
 and the collision pass would push it out of the wall every step, and the portal pass must
