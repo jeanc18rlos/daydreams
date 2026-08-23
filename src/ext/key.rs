@@ -3,7 +3,10 @@
 //! A `Key` is a `Grabbable`-shaped prop (`ext/grab.rs`): a `Physical` with one hit sphere,
 //! which is what makes the grab see it, carried by the engine's own physics -- gravity and the
 //! rectangle and triangle colliders -- once it is loose. Its mesh is `Meshes/key.obj`, a flat
-//! silhouette from `tools/gen_key.py` in `gold.bmp` through the ported `texture` shader.
+//! silhouette from `tools/gen_key.py` in `gold.bmp` through the rigid-body props' `prop`
+//! shader (`ext/rigid.rs`): in the hall that is the cabin's hemisphere light and the walls'
+//! fog, and the ported `texture` light -- one fixed lamp, from above and +z -- had left the
+//! key near black from most directions.
 //!
 //! It has two lives:
 //!
@@ -124,7 +127,7 @@ impl Key {
         // and what the collision pass pushes. The mesh's own radius, so it rests on its rim.
         base.hit_spheres.push(Sphere::new_at(Vector3::zero(), mesh.bound_radius));
         base.base.mesh = Some(mesh);
-        base.base.shader = Some(res.acquire_shader("texture"));
+        base.base.shader = Some(res.acquire_shader("prop"));
         base.base.texture = Some(res.acquire_texture("gold.bmp", 1, 1));
         Rc::new_cyclic(|me| {
             RefCell::new(Key {
@@ -240,6 +243,12 @@ pub fn dev_hold(
     grab.ratio = 1.0 / HOLD_DIST;
     grab.radius = radius;
     grab.eased_scale = 1.0;
+    // The hand's last known place and time, as a real pickup's first carry leaves them:
+    // without these the first `grab::update` would measure the hand's velocity as the key's
+    // position over the seconds since launch -- thousands of units a second handed to
+    // `on_release` by an `--e-at 1`. (The key ignores the throw; a prop would not.)
+    grab.hand_pos = hold;
+    grab.hand_time = crate::ext::view::time();
     log::info!("[key] --hold-key: the key is in hand");
 }
 
@@ -290,8 +299,16 @@ impl ObjectT for Key {
         self.held = true;
         self.floating = false;
         self.taken.set(true);
+        let b = &mut self.base.base;
         // Whatever point of the emergence it was taken at, in hand it is whole.
-        self.base.base.scale = Vector3::ones();
+        b.scale = Vector3::ones();
+        // The picture plane's frame (`place`) was a rotation-matrix override, which the
+        // rotate modifier cannot add to and which would hold the key edge-on to the hall in
+        // world space however the player turned: in hand it becomes the Euler path's, as a
+        // rigid prop's does (`ext/rigid.rs`), and turns with the rest.
+        if let Some(rot) = b.rot.take() {
+            b.euler = rot.to_euler();
+        }
         // A fresh hold starts with no press pending and no scan to trust.
         take_press();
         self.scanned_at = f32::NAN;
@@ -319,7 +336,14 @@ impl ObjectT for Key {
         Some(&mut self.base)
     }
     fn draw(&self, ctx: &RenderCtx, cam: &Camera, _fbo: Option<glow::Framebuffer>) {
-        self.base.base.draw_impl(ctx, cam);
+        // The prop shader's own uniforms, as `RigidProp::draw` sets them (Shaders/prop.frag).
+        let b = &self.base.base;
+        if let Some(shader) = &b.shader {
+            shader.use_program();
+            shader.set_vec4("fog_color", crate::ext::backrooms::WALL_FOG);
+            shader.set_mat4("model", &b.local_to_world());
+        }
+        b.draw_impl(ctx, cam);
     }
 }
 

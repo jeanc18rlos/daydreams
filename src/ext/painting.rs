@@ -284,10 +284,11 @@ pub const KEY_OUT: f32 = 0.07;
 /// centred a centimetre toward the far end is what fits (`tools/gen_key.py`). THE SAME
 /// NUMBERS AS `KEY_ON_PLANE` in `Shaders/painting.frag`.
 pub const KEY_ON_PLANE: (f32, f32) = (-0.010, -0.27);
-/// The 3D key is pitched this far about its length, its face turned up toward the ported
-/// `texture` shader's fixed light (from above and +z): facing the sweet spot squarely it
-/// would be lit from behind and come out of the canvas near black. A quarter of a right
-/// angle costs a tenth of its apparent breadth from the sweet spot and doubles its light.
+/// The 3D key is pitched this far about its length, its face turned up toward the light --
+/// the `prop` shader's hemisphere is lit from above (Shaders/prop.frag): facing the sweet
+/// spot squarely, edge-on to the lamps, it would come out of the canvas dull. A quarter of a
+/// right angle costs a tenth of its apparent breadth from the sweet spot and doubles its
+/// light.
 pub const KEY_PITCH: f32 = 25.0 * std::f32::consts::PI / 180.0;
 /// What the HUD says while the player stands in the sweet spot and the key is still there.
 pub const TAKE_HINT: &str = "TAKE THE KEY";

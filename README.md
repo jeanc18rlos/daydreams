@@ -955,10 +955,11 @@ through `hint::insist`, the one line that outranks a `set`. Objects see the scen
 `UpdateCtx::scene` for this; the window is built after the paintings, so a snapshot taken at
 the painting's load could not have held it.
 
-The 3D key is drawn with the ported `texture` shader, whose one light is fixed from above and
-+z; facing the spot squarely it would come out of the canvas near black, so it is pitched a
-quarter of a right angle about its length toward the light. A prop look with a real light
-replaces that.
+The 3D key is drawn with the rigid-body props' `prop` shader -- in the hall, the cabin's
+hemisphere light and the walls' fog ([Real physics](#real-physics--extphysicsrs-extrigidrs));
+the ported `texture` shader's one fixed light had left it near black from most directions.
+The lamps are overhead, so the key is pitched a quarter of a right angle about its length
+toward them; facing the spot squarely, edge-on to the light, it came out dull.
 
 ### Per-frame room logic — `ext/room.rs`
 
