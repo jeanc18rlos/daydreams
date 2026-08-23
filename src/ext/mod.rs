@@ -44,6 +44,8 @@
 //! | `carve`    | Carving a box out of a triangle soup, generic over the vertex, for the loader |
 //! | `interior` | A glTF interior as a level: model, collider, fence, cap and respawn as one function |
 //! | `painting` | Portraits whose eyes follow the pass camera and whose faces change only unobserved |
+//! | `physics`  | A rapier3d world for props: the scene's scenery as static colliders, the player as a capsule |
+//! | `rigid`    | A prop that is a rigid body: falls, rolls, topples, is thrown, and is grabbed like any other |
 
 pub mod audio;
 pub mod backrooms;
@@ -68,7 +70,9 @@ pub mod menu;
 pub mod occlusion;
 pub mod outline;
 pub mod painting;
+pub mod physics;
 pub mod raycast;
+pub mod rigid;
 pub mod room;
 pub mod rotate;
 pub mod scenes;
