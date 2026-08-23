@@ -776,10 +776,7 @@ mod tests {
     /// top of each other. Hold BACK's whole glyph box above the footer with a line to spare.
     #[test]
     fn credits_fit_above_the_footer() {
-        assert!(
-            CREDITS_BACK_Y + ITEM_SIZE + SMALL_LINE_H < HINT_Y,
-            "BACK at {CREDITS_BACK_Y} runs into the footer at {HINT_Y}"
-        );
+        const { assert!(CREDITS_BACK_Y + ITEM_SIZE + SMALL_LINE_H < HINT_Y) }
     }
 
     #[test]
