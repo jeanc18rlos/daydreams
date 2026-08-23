@@ -18,7 +18,7 @@
 //! | `RightTrigger2` [R2]     | Grab / release (alternate)                     |
 //! | `RightTrigger` [R1]      | Hold: rotate the held object with the right stick |
 //! | `LeftTrigger` [L1]       | (reserved as a modifier; currently unbound)    |
-//! | `LeftThumb` [L3]         | Sprint: press to toggle, or hold (src/ext/sprint.rs) |
+//! | `LeftThumb` [L3]         | Run: press to start; ends when the stick returns to centre or on the next press. Holding it runs too (src/ext/sprint.rs) |
 //! | D-Pad left / right       | Previous / next scene                          |
 //! | D-Pad up / down          | Move the menu selection                        |
 //! | `East` [Circle]          | Menu: back                                     |

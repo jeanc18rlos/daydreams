@@ -55,7 +55,7 @@ collision pass is `O(objects² × hitSpheres × colliders)`, so `Cargo.toml` set
 dev profile to keep it real-time. Release is still recommended.
 
 ```sh
-cargo test        # 144 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, and the extensions' pure logic
+cargo test        # 150 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, and the extensions' pure logic
 ```
 
 ## Controls
@@ -599,7 +599,7 @@ counterpart and is not part of HackerPoet/NonEuclidean.
 
 The split is enforced by convention and visible in the source: the port carries **220
 `// PORT:` comments** citing the original line each deviation came from, while additions carry
-**`// EXT:`** comments. New code lives in `src/ext/` and `src/level7..11.rs`; the ported files
+**`// EXT:`** comments. New code lives in `src/ext/` and `src/level7..16.rs`; the ported files
 were touched only where a hook was unavoidable, and each of those is a handful of lines.
 
 ## New scenes
@@ -654,17 +654,27 @@ a frame earlier than the render pass could report it.
 ### Running — `ext/sprint.rs`
 
 CodeParade's player has one speed. Holding `Shift` raises the `GH_WALK_SPEED` cap to 1.8× and
-`GH_WALK_ACCEL` to 1.5×, and quickens the head-bob by 1.35× so the cadence reads as a run. The
-multipliers are exactly `1.0` when not sprinting, so the walk is bit-identical to the port — a
-test pins both caps.
+`GH_WALK_ACCEL` to 1.5×, and quickens the head-bob by 1.35× so the cadence reads as a run
+(the bob's amplitude rises with speed as well, by the ported formula — `bob_mag` tracks the
+distance covered per step — so a run both strides faster and bounces higher). The multipliers
+are exactly `1.0` when not sprinting, so the walk is bit-identical to the port — a test pins
+both caps.
 
-The pad gets the console idiom instead of a hold: clicking L3 toggles the run and letting the
-stick return to centre ends it, so stopping never leaves a toggle armed for the next push (a
-click while standing still is ignored for the same reason). L3 held also works, and a `Shift`
-press drops a pad toggle, so a player who switches instruments mid-run is never carried by a
-toggle they cannot see. The decision is made once per rendered frame, before the fixed-step loop
-— `Input::end_frame` zeroes the Shift edge inside it — and written to `Input::sprint`, which is
-all the ported player reads.
+Only a forward run sprints: the multipliers apply while the movement vector's forward component
+is at least 0.3 of its length (a diagonal is 0.71), so strafing and backpedalling are at walk
+speed however the key or button is held. And the speed cap eases rather than steps. `Move`
+clips the horizontal velocity to the cap every 2 ms, so a cap that fell from 1.8× to 1.0× in
+one step would brake the player at some 1,160 u/s² while the view was still easing back — a
+jolt. The cap relaxes with a 100 ms time constant instead, snapping to exactly 1.0 once within a
+thousandth so the walk stays bit-exact; acceleration and bob stay stepwise.
+
+The pad gets the console idiom instead of a hold: clicking L3 starts the run, and it ends when
+the stick returns to centre or on the next click, so stopping never leaves a toggle armed for
+the next push (a click while standing still is ignored for the same reason). L3 held also
+works, and a `Shift` press drops a pad toggle, so a player who switches instruments mid-run is
+never carried by a toggle they cannot see. The decision is made once per rendered frame, before
+the fixed-step loop — `Input::end_frame` zeroes the Shift edge inside it — and written to
+`Input::sprint`, which is all the ported player reads.
 
 Running widens the vertical field of view by 8°, eased with a frame-rate-independent exponential
 (150 ms time constant) through the same `view::set_fov` the dolly zoom was built for. The pause
@@ -681,6 +691,12 @@ The ported `Scene` trait has exactly one method, `Load` (`Scene.h:7-9`) — scen
 and then have no further say. Rather than change that trait, rooms needing behaviour push a
 `RoomLogic` object: an ordinary `ObjectT` with no mesh and no shader, so `Object::Draw` skips it
 (`Object.cpp:21` only draws when both are present) while `Engine::Update` still ticks it.
+
+The one thing such logic cannot reach is the player — `Load` receives `&mut Player`, never the
+`Rc` the engine keeps it in — so a room that needs to move them (the Backrooms, when they have
+fallen under its floor) calls `request_respawn`, and the engine applies it at the end of the
+same step, after the portal pass, through `set_position`: `prev_pos` moves with `pos`, so the
+next step's `try_portal` sees no segment that could sweep a doorway.
 
 ## Gamepad — `ext/gamepad.rs`
 
@@ -700,7 +716,7 @@ The same table is in the game, under **Options → Controls**, alongside the key
 | Control | Action |
 |---------|--------|
 | Left stick | Move (analog) |
-| L3 (stick click) | Run: press to toggle, hold to hold; ends when the stick returns to centre |
+| L3 (stick click) | Run: press to start; ends when the stick returns to centre or on the next press. Holding it runs too |
 | Right stick | Look |
 | Cross / Square / R2 | Grab / release |
 | R1 (hold) | Rotate the held object with the right stick |
@@ -853,16 +869,22 @@ Where it went, in order of effect:
 * **The door GLB is pre-shrunk** (`tools/shrink_glb.py`): its PNGs were 4096², and the loader
   was decoding ~400 MB of RGBA on three threads to resize them to its 512² `MAP` on every
   load. They are stored at 512² now, resized once with the same filter, and the file went
-  from 79 MB to 1.3 MB. Geometry and everything else in it are byte-identical.
-* **The old scene outlives the load.** `Engine::load_scene` used to clear the object and
-  portal vectors before `Scene::load`, which expired every `Weak` in the resource caches; the
-  title → NEW GAME transition therefore re-parsed the terrain, re-built the grass and re-decoded
-  the door. The vectors are moved into locals, the new scene loads against warm caches, and
-  the old objects drop afterwards.
+  from 79 MB to 1.3 MB. The geometry bufferViews are copied byte for byte; the JSON is
+  re-serialised with identical values (only the float spellings may differ).
+* **The old scene's objects outlive the load.** `Engine::load_scene` used to clear the object
+  and portal vectors before `Scene::load`, which expired every `Weak` in the resource caches;
+  the title → NEW GAME transition therefore re-parsed the terrain, re-built the grass and
+  re-decoded the door. The object vector is moved into a local, the new scene loads against
+  warm caches, and the old objects drop afterwards. The portals are the exception and are
+  dropped first: there is nothing in one worth keeping warm -- the eager framebuffers each
+  used to own (some 60 MB a portal, which keeping twelve of them across the load of twelve
+  more would have doubled) live on the engine now, shared per recursion level -- and the mesh
+  and two shaders a portal re-acquires are pinned in `ExtState`, which is what keeps the
+  reload at the `< 1 ms` above.
 * Smaller things: `Shader` memoises by-name uniform locations (six lookups per object per pass
   were each a `CString` and a driver call); the eye position is computed once per pass rather
   than inverted per object; the blade vertex shader takes `vp` and `l2w` instead of recovering
-  them with two `inverse()` calls per vertex; occlusion queries come from a pool; the collision
+  them with two `inverse()` calls per vertex; occlusion queries live for the engine's life; the collision
   pass reuses one scratch vector for hit spheres.
 
 Under vsync — the default — the game is display-limited long before it is GPU-limited, so a
@@ -877,15 +899,15 @@ Small additions, each tagged `// EXT:`:
 | File | Hook |
 |------|------|
 | `collider.rs` | read-only `mat()` accessor, so rays can transform the rectangle to world space |
-| `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`8`–`=`/`'` key mappings; `Shift` into the `VK_SHIFT` slot and the sprint levels |
+| `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`R` and the scene keys `8`–`'` (`8` `9` `0` `-` `=` `[` `]` `\` `;` `'`); `Shift` into the `VK_SHIFT` slot and the resolved sprint multipliers |
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
 | `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery |
 | `frame_buffer.rs` | sized attachments instead of `GH_FBO_SIZE` square |
-| `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene kept alive across `load_scene`; the triangle-mesh rounds in the collision pass |
+| `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects kept alive across `load_scene` (its portals dropped first); the triangle-mesh rounds in the collision pass; a room's respawn request applied after the portal pass; the `--forward`/`--strafe`/`--sprint` held keys |
 | `portal.rs` | the nested pass scissored to the quad's screen footprint |
 | `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4` |
 | `props.rs` | `Sky::draw` takes the eye from the inverse it already computes, and draws at the far plane under `GL_LEQUAL` so it can go last |
-| `main.rs` | gamepad polling in `about_to_wait`; `--no-vsync`; key levels dropped on focus loss |
+| `main.rs` | gamepad polling in `about_to_wait`; the dev flags (`--no-vsync`, `--forward`, `--strafe`, `--sprint`, …); key levels dropped on focus loss |
 
 ### One bug this surfaced
 
@@ -934,30 +956,40 @@ The new sky applies to every scene; the ported gradient-only sky is kept as
 
 ## Backrooms (scene `'`)
 
-The intro again -- same meadow, same white door -- except that through the door is
+The intro again -- same meadow, same white door, both built by `ext/meadow.rs`, which the two
+scenes share along with the far world's origin and the title screen's vantage -- except that
+through the door is
 `Meshes/backrooms_vr.glb`: a Sketchfab light-bake of the Backrooms, 29 primitives, 70k
 triangles, 27 maps, every material `KHR_materials_unlit`. Three things had to exist for it to be
 a place rather than a picture:
 
 | What | Where |
 |------|-------|
-| **A general glTF load.** The door loader fitted one model to one height and packed PBR maps at 512. `Load { fit, max_map }` now chooses between that and `Fit::Identity` (source metres, source origin -- the scan is already to scale and already Y-up once the root node's rotation is applied), and per-material `unlit` skips the PBR pack entirely: the base map goes up as shipped, at its own size and with its own wrap mode, and `baseColorFactor` / `emissiveFactor x KHR_materials_emissive_strength` are uniforms. The door's path is byte-identical. | `ext/gltf_model.rs`, `Shaders/gltfunlit.*` |
+| **A general glTF load.** The door loader fitted one model to one height and packed PBR maps at 512. `Load { fit, max_map }` now chooses between that and `Fit::Identity` (source metres, source origin -- the scan is already to scale and already Y-up once the root node's rotation is applied), and per-material `unlit` skips the PBR pack entirely: the base map goes up as shipped, at its own size and with its own wrap mode, and `baseColorFactor` / `emissiveFactor x KHR_materials_emissive_strength` are uniforms. A part is drawn with one shader, so its materials must all be unlit or all PBR -- the loader asserts it. The door's path is byte-identical. | `ext/gltf_model.rs`, `Shaders/gltfunlit.*` |
 | **Triangle-mesh collision.** The engine only knew axis-aligned rectangles declared on OBJ `c` lines. The whole scan becomes one parry3d `TriMesh`, built once in world space; the collision pass asks it for the deepest sphere penetration, applies the push exactly as it applies a rectangle's (on_hit, on_collide, matrices rebuilt), and asks again, up to eight rounds. The player walks on the carpet, is stopped by walls, skirting and armchairs, and the grab raycast sees the same surfaces. | `ext/trimesh.rs`, `ObjectT::trimesh` |
 | **Frustum culling.** The model is drawn by the meadow's main pass too, 1,000 units away. A six-plane test from the pass camera's matrix (oblique near plane included) skips the draw when the part's bounding sphere is wholly outside. | `ext/cull.rs` |
 
 The model is placed by its door: `ext/backrooms.rs` names a spot of open carpet in model
-coordinates (`DOOR_SPOT`, in the 23 m hall at the building's east end, 1.2 m clear of the end
-wall) and `Backrooms::new` takes the world point it should land on, so the level reasons about
-the return door and the placement follows. An invisible fence one metre outside the model's
-extent, and a net at its lowest point, keep the player inside whatever the scan's seams allow.
-The backrooms shader ignores the weather grade every other surface takes -- its lighting is
-painted in -- and adds a squared-distance fog toward dark yellow-brown so the far end of the
-maze fades rather than popping at the 100-unit far plane. What does take the grade past the
-split -- the return door's paint, the sky through a window pane or a gap in the scan's
-single-sided walls -- is told the far world is an **interior** (`view::set_far_mood`,
-`MOOD_INTERIOR`): the door stays white instead of sunset-pink, the sky is the near-black of an
-unlit building going on past its walls, and a dark ground cap under the whole footprint
-(`backrooms::GroundCap`) makes the void below the horizon the same darkness.
+coordinates (`DOOR_SPOT`, in the 23 m hall at the building's east end -- 3.6 m clear between
+its wall faces at z = 3.48 and 7.07 -- 1.2 m clear of the end wall) and `Backrooms::new` takes
+the world point it should land on, so the level reasons about the return door and the placement
+follows. A test measures those faces from the GLB itself (`GltfModel::probe_triangles`, no GL
+context needed) and checks the door's frame posts clear them by a player's width, so the
+constant cannot be nudged into a wall. An invisible fence one metre outside the model's extent
+keeps the player inside whatever the scan's seams allow; under the carpet there is nothing, on
+purpose. The walls are single-sided and the collider keeps a sphere on whichever side its centre
+is on, so a sphere caught inside a wall slab can be pushed out the far side, where there is no
+floor -- a net there left the player standing in the dark for ever, so instead a `RoomLogic`
+(`ext/backrooms.rs::fell_out`, `ext/room.rs::Respawn`) puts anyone half a metre under the carpet
+back at the arrival point, facing down the hall. The backrooms shader ignores the weather grade
+every other surface takes -- its lighting is painted in -- and adds a squared-distance fog toward
+dark yellow-brown so the far end of the maze fades rather than popping at the 100-unit far
+plane. What does take the grade past the split -- the return door's paint, the sky through a
+window pane or a gap in the scan's single-sided walls -- is told the far world is an
+**interior** (`view::set_far_mood`, `MOOD_INTERIOR`): the door stays white instead of
+sunset-pink, the sky is the near-black of an unlit building going on past its walls, and a dark
+ground cap under the whole footprint (`backrooms::GroundCap`, colliding with nothing) makes the
+void below the horizon the same darkness.
 
 Frame cost, measured with `glFinish` after each frame on a shared M3 Max at 2560x1440 (so
 absolute numbers are pessimistic; the comparison is what matters): meadow spawn in the intro
@@ -982,6 +1014,10 @@ menu that is the thing being looked at.
 `--pos x,y,z` places the player; `--windowed` opens a 1280×720 window instead of taking the
 display; `--no-vsync` requests a swap interval of 0 so the `[shot]` line's second half — `avg
 frame X ms, p95 Y ms over N frames`, measured over the frames after the first ten — reports what
-the renderer costs rather than what the panel allows. `[load] scene N in M ms` is printed on every
+the renderer costs rather than what the panel allows. `--forward` / `--strafe` hold `W` / `A` down for
+the whole run and `--sprint` holds `Shift`, so the `[shot]` position print shows how far the
+player walked — or, with `--forward --sprint`, ran — in the frames before the shot, and the
+shot itself shows the sprint's 68° projection. `--strafe --sprint` covers the same ground as
+`--strafe` alone: a sidestep never sprints. `[load] scene N in M ms` is printed on every
 scene load. The numbers in [Load time and frame cost](#load-time-and-frame-cost) are
 `--shot --frames 600 --no-vsync` at fullscreen.

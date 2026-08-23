@@ -30,12 +30,12 @@ pub struct Input {
     // poll by src/ext/gamepad.rs. A level like `pad_rotate_mod`; the press *edge* that flips
     // toggle mode travels separately, as `PadEvents::sprint`.
     pub pad_sprint: bool,
-    // EXT: this frame's resolved sprint level -- hold, toggle and auto-cancel already folded
-    // in by `ext::sprint::Sprint::resolve`, which the engine runs once per rendered frame
-    // before the fixed-step loop. `Player::update_player` reads only this, never the raw keys,
-    // so the ported movement code does not have to know which input produced it. The title
-    // backdrop swaps in a blank `Input`, where it is false.
-    pub sprint: bool,
+    // EXT: this frame's resolved sprint multipliers -- hold, toggle, the forward-only rule and
+    // the eased speed cap already folded in by `ext::sprint::Sprint::resolve`, which the engine
+    // runs once per rendered frame before the fixed-step loop. `Player::update_player` reads
+    // only this, never the raw keys, so the ported movement code does not have to know which
+    // input produced it. The title backdrop swaps in a blank `Input`, where it is the walk.
+    pub sprint: crate::ext::sprint::Factors,
 
     //Bindings
     //TODO:
@@ -65,7 +65,7 @@ impl Input {
             pad_rotate_mod: false,
             // EXT: sprint -- raw pad level and the engine-resolved level.
             pad_sprint: false,
-            sprint: false,
+            sprint: crate::ext::sprint::Factors::WALK,
         }
     }
 

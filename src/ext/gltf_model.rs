@@ -49,7 +49,7 @@ use std::rc::Rc;
 /// bounding box instead is the obvious thing to do and it silently throws that placement away:
 /// on this door it lost a 9.7 mm sideways offset, a 37 mm door-to-rebate gap and a 3.6 mm floor
 /// undercut, each of which then had to be guessed back as a hand-tuned constant.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Anchor<'a> {
     /// Origin at this part's low-x edge, its foot, and its z centre -- the hinge of a door leaf,
     /// which is the point `Object::euler` rotates about. Exactly one part uses this, and it
@@ -63,6 +63,12 @@ pub enum Anchor<'a> {
 }
 
 /// One drawable group, named by the caller and gathered from one or more node sub-trees.
+///
+/// Every material inside a part must agree on `unlit`: [`GltfModel::draw_part`] draws a whole
+/// part with ONE shader, and the PBR and unlit shaders read different uniforms and samplers.
+/// A part that mixed the two would have half its primitives shaded by the wrong program;
+/// `load` asserts it never happens.
+#[derive(Debug)]
 pub struct PartSpec<'a> {
     pub name: &'a str,
     /// Node names to walk from. Starting below the model's own root skips any transform that
@@ -80,7 +86,7 @@ pub struct PartSpec<'a> {
 }
 
 /// How the gathered geometry is placed in the model's object space.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Fit<'a> {
     /// ONE uniform scale and ONE origin for the whole model, both taken from `part`: scaled so
     /// that part is `height` tall, with its hinge anchor (see [`Anchor::Hinge`]) at the origin.
@@ -93,7 +99,9 @@ pub enum Fit<'a> {
     Identity,
 }
 
-/// Everything `GltfModel::acquire` needs to know about a file.
+/// Everything `GltfModel::acquire` needs to know about a file. `Debug` is load-bearing: its
+/// output is the cache key (see `acquire`).
+#[derive(Debug)]
 pub struct Load<'a> {
     pub path: &'a str,
     pub parts: &'a [PartSpec<'a>],
@@ -115,22 +123,30 @@ struct Prim {
     material: usize,
 }
 
+/// What an unlit material carries besides its map: the factors the shader applies as
+/// uniforms, so a 1024-square map is never walked on the CPU to bake in what the GPU
+/// multiplies for free. A PBR material bakes its `baseColorFactor` into the packed albedo
+/// instead (`build_material`) and has none of this.
+struct Unlit {
+    base_color: [f32; 4],
+    /// `emissiveFactor` x `KHR_materials_emissive_strength`, left unclamped here and clamped
+    /// in the shader -- there is no HDR target for a strength of 10 to mean anything more
+    /// than "saturate".
+    emissive: [f32; 3],
+}
+
+/// One glTF material's GPU state. A part's materials are all PBR or all unlit -- see
+/// [`PartSpec`] -- because the part is drawn with one shader, and `Shaders/gltfpbr.*` wants
+/// `surface` on unit 1 where `Shaders/gltfunlit.*` wants the `Unlit` uniforms instead.
 struct Material {
     /// PBR: RGB = base colour, A = ambient occlusion, packed at `max_map` square.
     /// Unlit: the base colour map exactly as shipped (or 1x1 white when there is none).
     albedo: glow::Texture,
     /// PBR only: RG = tangent-space normal xy, B = roughness, A = metalness.
     surface: Option<glow::Texture>,
-    /// `KHR_materials_unlit`: the map already contains its lighting. Drawn with per-primitive
-    /// `base_color` / `emissive` uniforms instead of the packed-surface PBR path.
-    unlit: bool,
-    /// Unlit only. Applied in the shader as uniforms, so a 1024-square map is never walked on
-    /// the CPU to bake a factor in that the GPU multiplies for free.
-    base_color: [f32; 4],
-    /// Unlit only: `emissiveFactor` x `KHR_materials_emissive_strength`, left unclamped here
-    /// and clamped in the shader -- there is no HDR target for a strength of 10 to mean
-    /// anything more than "saturate".
-    emissive: [f32; 3],
+    /// `KHR_materials_unlit`: the map already contains its lighting, and these are the
+    /// per-primitive uniforms drawn with it instead of the packed-surface PBR path.
+    unlit: Option<Unlit>,
 }
 
 /// CPU copy of a part's fitted triangles, for building colliders from.
@@ -221,96 +237,57 @@ thread_local! {
     /// `Weak`, so a model lives exactly as long as the scene objects holding it. A level with
     /// two doors decodes the GLB's ten images once rather than twice.
     ///
+    /// Keyed on the WHOLE `Load` (its `Debug` rendering), not the path: the parts gathered,
+    /// the fit and the map cap all shape what is built, so a second scene asking for the same
+    /// file under another fit must get its own model rather than silently the first one's.
+    ///
     /// A thread-local rather than a field on `Resources`, because `Resources` is ported code
     /// with no extension point, and the engine is single-threaded throughout (see view.rs).
     static CACHE: std::cell::RefCell<HashMap<String, std::rc::Weak<GltfModel>>> =
         std::cell::RefCell::new(HashMap::new());
 }
 
+/// The GL-free half of a load: the file parsed, its parts gathered and fitted. Split out so
+/// that a test can measure a model's geometry without a context (see `probe_triangles`).
+struct Parsed {
+    doc: gltf::Document,
+    blob: Vec<u8>,
+    raw: HashMap<String, Vec<Raw>>,
+    bounds: HashMap<String, [f32; 6]>,
+}
+
 impl GltfModel {
-    /// Load `spec.path` once per scene, sharing it with every later caller that asks for the
-    /// same file. The rest of `spec` is only consulted on a cache miss.
+    /// Load `spec` once per scene, sharing it with every later caller that asks for the same
+    /// spec. Two specs are the same when their `Debug` renderings are (see `CACHE`).
     pub fn acquire(gl: &Rc<glow::Context>, spec: &Load) -> Rc<GltfModel> {
-        if let Some(hit) = CACHE.with(|c| c.borrow().get(spec.path).and_then(|w| w.upgrade())) {
+        let key = format!("{spec:?}");
+        if let Some(hit) = CACHE.with(|c| c.borrow().get(&key).and_then(|w| w.upgrade())) {
             return hit;
         }
         let m = Rc::new(GltfModel::load(gl, spec));
-        CACHE.with(|c| c.borrow_mut().insert(spec.path.to_string(), Rc::downgrade(&m)));
+        CACHE.with(|c| c.borrow_mut().insert(key, Rc::downgrade(&m)));
         m
     }
 
     /// Load `spec.path`, gathering the requested parts and placing them per `spec.fit`.
     pub fn load(gl: &Rc<glow::Context>, spec: &Load) -> GltfModel {
-        let Load { path, parts, fit, max_map } = *spec;
-        let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("open {path}: {e}"));
-        let gltf = gltf::Gltf::from_slice(&bytes).unwrap_or_else(|e| panic!("parse {path}: {e}"));
-        let blob = gltf.blob.clone().unwrap_or_else(|| panic!("{path}: no BIN chunk"));
-        let doc = gltf.document;
+        let Parsed { doc, blob, raw, bounds } = parse(spec);
+        let Load { path, parts, max_map, .. } = *spec;
 
-        // ── Walk each part's sub-trees into CPU buffers.
-        let mut raw: HashMap<String, Vec<Raw>> = HashMap::new();
+        // One shader per part (see `PartSpec`): every material a part uses must be the same
+        // kind. Checked here, on the materials' own flags, so a re-exported model that mixed
+        // them fails at load rather than drawing half of itself with the wrong program.
         for spec in parts {
-            let mut out: Vec<Raw> = Vec::new();
-            let find = |name: &str| {
-                doc.nodes()
-                    .find(|n| n.name() == Some(name))
-                    .unwrap_or_else(|| panic!("{path}: no node named {name:?}"))
-            };
-            // Translation only: this brings the part back into its siblings' space without
-            // re-applying the pose rotation that walking from below the node was meant to drop.
-            let mut base = IDENT;
-            if let Some(pre) = spec.pre {
-                let t = find(pre).transform().decomposed().0;
-                base[3] = [t[0], t[1], t[2], 1.0];
-            }
-            for root in spec.roots {
-                walk(&find(root), base, &blob, &mut out);
-            }
-            assert!(!out.is_empty(), "{path}: part {:?} gathered no geometry", spec.name);
-            raw.insert(spec.name.to_string(), out);
+            let mut kinds = raw[spec.name]
+                .iter()
+                .map(|r| doc.materials().nth(r.material).is_some_and(|m| m.unlit()));
+            let first = kinds.next().expect("part gathered geometry");
+            assert!(
+                kinds.all(|k| k == first),
+                "{path}: part {:?} mixes unlit and PBR materials, and is drawn with one shader",
+                spec.name
+            );
         }
-
-        // ── Fit. Under `Fit::Part`: ONE scale and ONE origin for the whole model, both taken
-        // from the hinge part. Every other part keeps its true offset from it, so the assembly
-        // comes out of the file rather than being reassembled from constants. Under
-        // `Fit::Identity` nothing moves, and the bounds simply report where the file put things.
-        if let Fit::Part { part: scale_part, height: scale_height } = fit {
-            let sb = bbox(&raw[scale_part]);
-            let scale = scale_height / (sb[3] - sb[2]);
-            // The hinge part's own anchor: low-x edge, foot, z centre.
-            let origin = [sb[0], sb[2], 0.5 * (sb[4] + sb[5])];
-            let half_w = 0.5 * (sb[1] - sb[0]) * scale;
-
-            for spec in parts {
-                let list = raw.get_mut(spec.name).expect("part present");
-                // `Around` shifts x so the hinge part, hung by door.rs at local (-half_w, 0, 0),
-                // lands back on the origin -- i.e. exactly where the model has it.
-                let shift = match spec.anchor {
-                    Anchor::Hinge => 0.0,
-                    Anchor::Around(_) => -half_w,
-                };
-                for r in list.iter_mut() {
-                    for p in r.pos.iter_mut() {
-                        p[0] = (p[0] - origin[0]) * scale + shift;
-                        p[1] = (p[1] - origin[1]) * scale;
-                        p[2] = (p[2] - origin[2]) * scale;
-                    }
-                }
-                // A uniform scale plus a translation leaves normals and tangents untouched,
-                // which is the whole reason for insisting on one similarity for the model.
-            }
-            for spec in parts {
-                if let Anchor::Around(h) = spec.anchor {
-                    assert!(
-                        raw.contains_key(h),
-                        "{path}: part {:?} is anchored around {h:?}, which is not a declared part",
-                        spec.name
-                    );
-                }
-            }
-        }
-        let bounds: HashMap<String, [f32; 6]> =
-            raw.iter().map(|(name, list)| (name.clone(), bbox(list))).collect();
 
         // ── Materials, then geometry. Every map is decoded first, all at once, so the packing
         // loops below are pure CPU work over images that are already in hand.
@@ -328,6 +305,17 @@ impl GltfModel {
 
         GltfModel { gl: gl.clone(), materials, parts: built, bounds, geometry }
     }
+
+    /// A part's fitted triangles straight from the file, with no GL context: what a test uses
+    /// to measure a model against the constants a scene places things by. Same gather and fit
+    /// as `load`, so the answer is the one `triangles` would give.
+    #[cfg(test)]
+    pub fn probe_triangles(spec: &Load, part: &str) -> (Vec<[f32; 3]>, Vec<u32>) {
+        let parsed = parse(spec);
+        let g = gather(&parsed.raw[part]);
+        (g.pos, g.idx)
+    }
+
 
     /// Fitted bounds of a part: `[minx, maxx, miny, maxy, minz, maxz]`.
     pub fn bounds(&self, part: &str) -> [f32; 6] {
@@ -406,10 +394,9 @@ impl GltfModel {
                     // sample black.
                     self.gl.active_texture(glow::TEXTURE0);
                 }
-                if m.unlit {
-                    let [r, g, b, a] = m.base_color;
-                    shader.set_vec4("base_color", [r, g, b, a]);
-                    let [er, eg, eb] = m.emissive;
+                if let Some(u) = &m.unlit {
+                    shader.set_vec4("base_color", u.base_color);
+                    let [er, eg, eb] = u.emissive;
                     shader.set_vec4("emissive", [er, eg, eb, 0.0]);
                 }
                 self.gl.bind_texture(glow::TEXTURE_2D, Some(m.albedo));
@@ -440,6 +427,82 @@ impl Drop for GltfModel {
             }
         }
     }
+}
+
+/// Read, walk and fit. See `Parsed`.
+fn parse(spec: &Load) -> Parsed {
+    let Load { path, parts, fit, .. } = *spec;
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("open {path}: {e}"));
+    let gltf = gltf::Gltf::from_slice(&bytes).unwrap_or_else(|e| panic!("parse {path}: {e}"));
+    let blob = gltf.blob.clone().unwrap_or_else(|| panic!("{path}: no BIN chunk"));
+    let doc = gltf.document;
+
+    // ── Walk each part's sub-trees into CPU buffers.
+    let mut raw: HashMap<String, Vec<Raw>> = HashMap::new();
+    for spec in parts {
+        let mut out: Vec<Raw> = Vec::new();
+        let find = |name: &str| {
+            doc.nodes()
+                .find(|n| n.name() == Some(name))
+                .unwrap_or_else(|| panic!("{path}: no node named {name:?}"))
+        };
+        // Translation only: this brings the part back into its siblings' space without
+        // re-applying the pose rotation that walking from below the node was meant to drop.
+        let mut base = IDENT;
+        if let Some(pre) = spec.pre {
+            let t = find(pre).transform().decomposed().0;
+            base[3] = [t[0], t[1], t[2], 1.0];
+        }
+        for root in spec.roots {
+            walk(&find(root), base, &blob, &mut out);
+        }
+        assert!(!out.is_empty(), "{path}: part {:?} gathered no geometry", spec.name);
+        raw.insert(spec.name.to_string(), out);
+    }
+
+    // ── Fit. Under `Fit::Part`: ONE scale and ONE origin for the whole model, both taken
+    // from the hinge part. Every other part keeps its true offset from it, so the assembly
+    // comes out of the file rather than being reassembled from constants. Under
+    // `Fit::Identity` nothing moves, and the bounds simply report where the file put things.
+    if let Fit::Part { part: scale_part, height: scale_height } = fit {
+        let sb = bbox(&raw[scale_part]);
+        let scale = scale_height / (sb[3] - sb[2]);
+        // The hinge part's own anchor: low-x edge, foot, z centre.
+        let origin = [sb[0], sb[2], 0.5 * (sb[4] + sb[5])];
+        let half_w = 0.5 * (sb[1] - sb[0]) * scale;
+
+        for spec in parts {
+            let list = raw.get_mut(spec.name).expect("part present");
+            // `Around` shifts x so the hinge part, hung by door.rs at local (-half_w, 0, 0),
+            // lands back on the origin -- i.e. exactly where the model has it.
+            let shift = match spec.anchor {
+                Anchor::Hinge => 0.0,
+                Anchor::Around(_) => -half_w,
+            };
+            for r in list.iter_mut() {
+                for p in r.pos.iter_mut() {
+                    p[0] = (p[0] - origin[0]) * scale + shift;
+                    p[1] = (p[1] - origin[1]) * scale;
+                    p[2] = (p[2] - origin[2]) * scale;
+                }
+            }
+            // A uniform scale plus a translation leaves normals and tangents untouched,
+            // which is the whole reason for insisting on one similarity for the model.
+        }
+        for spec in parts {
+            if let Anchor::Around(h) = spec.anchor {
+                assert!(
+                    raw.contains_key(h),
+                    "{path}: part {:?} is anchored around {h:?}, which is not a declared part",
+                    spec.name
+                );
+            }
+        }
+    }
+    let bounds: HashMap<String, [f32; 6]> =
+        raw.iter().map(|(name, list)| (name.clone(), bbox(list))).collect();
+
+    Parsed { doc, blob, raw, bounds }
 }
 
 fn bbox(list: &[Raw]) -> [f32; 6] {
@@ -737,9 +800,10 @@ fn build_material(
         return Material {
             albedo,
             surface: None,
-            unlit: true,
-            base_color: bf,
-            emissive: [ef[0] * strength, ef[1] * strength, ef[2] * strength],
+            unlit: Some(Unlit {
+                base_color: bf,
+                emissive: [ef[0] * strength, ef[1] * strength, ef[2] * strength],
+            }),
         };
     }
 
@@ -788,9 +852,7 @@ fn build_material(
     Material {
         albedo: tex2d(gl, &albedo, map, map, glow::CLAMP_TO_EDGE, glow::CLAMP_TO_EDGE),
         surface: Some(tex2d(gl, &surface, map, map, glow::CLAMP_TO_EDGE, glow::CLAMP_TO_EDGE)),
-        unlit: false,
-        base_color: bf,
-        emissive: [0.0; 3],
+        unlit: None,
     }
 }
 

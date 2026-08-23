@@ -95,6 +95,11 @@ pub struct Engine {
     // EXT: dev tooling -- `--shot path` saves the next rendered frame here, then quits.
     shot_path: RefCell<Option<String>>,
     shot_after_frames: Cell<i32>,
+    // EXT: dev tooling -- key slots `--forward` / `--strafe` / `--sprint` hold down for the
+    // whole run.
+    // Re-asserted at the top of every frame rather than set once, because a focus change
+    // drops every key level (main.rs) and a headless window may never be focused at all.
+    dev_hold: RefCell<Vec<usize>>,
     // EXT: this frame's gamepad edges, handed in by main.rs before run_frame.
     pad_events: Cell<crate::ext::gamepad::PadEvents>,
     // EXT: dev tooling -- wall time per rendered frame, reported on the `[shot]` line.
@@ -213,6 +218,7 @@ impl Engine {
             quit_requested: Cell::new(false),
             shot_path: RefCell::new(None),
             shot_after_frames: Cell::new(0),
+            dev_hold: RefCell::new(Vec::new()),
             pad_events: Cell::new(crate::ext::gamepad::PadEvents::default()),
             frame_clock: RefCell::new(crate::ext::frametime::FrameClock::new()),
             occlusion: RefCell::new(crate::ext::occlusion::Occlusion::new(gl)),
@@ -265,6 +271,10 @@ impl Engine {
     pub fn run_frame(&self, i_width: i32, i_height: i32) {
         // EXT: frame clock for shaders.
         crate::ext::view::set_time(self.timer.get_ticks() as f32 * 1e-9);
+        // EXT: dev tooling -- the keys a direct run holds down (see `dev_hold`).
+        for &k in self.dev_hold.borrow().iter() {
+            self.input.borrow_mut().key[k] = true;
+        }
         // EXT: and the dev frame-time record. Ticked here, at the top, so one interval spans a
         // whole frame including the swap main.rs does after run_frame returns.
         self.frame_clock.borrow_mut().tick();
@@ -377,12 +387,13 @@ impl Engine {
 
         // EXT: sprint. Resolved once per rendered frame, here, for the same reason as the
         // rotate block: `key_press[16]` (the Shift edge) is zeroed by the first `end_frame`
-        // inside the loop below. The level is written into `Input::sprint`, which is what the
-        // ported `Player::update_player` reads on every step of this frame.
+        // inside the loop below. The multipliers are written into `Input::sprint`, which is
+        // what the ported `Player::update_player` reads on every step of this frame.
         {
             let mut input = self.input.borrow_mut();
-            let sprinting = self.ext.borrow_mut().sprint.resolve(&input, pad.sprint);
-            input.sprint = sprinting;
+            let factors =
+                self.ext.borrow_mut().sprint.resolve(&input, pad.sprint, crate::ext::view::time());
+            input.sprint = factors;
         }
 
         //Used fixed time steps for updates
@@ -479,6 +490,11 @@ impl Engine {
     /// Without a scene it only arms the screenshot and leaves the menu where it is, which is
     /// the only way to photograph the title screen and its backdrop -- loading a scene would
     /// close the menu that is the thing being looked at.
+    ///
+    /// `hold` lists key slots to keep down every frame (`--forward`, `--strafe`, `--sprint`),
+    /// so the shot can photograph the player walking or running and the `[shot]` position
+    /// print how far they travelled.
+    #[allow(clippy::too_many_arguments)] // one flag each; a struct would only rename them
     pub fn start_direct(
         &self,
         scene: Option<usize>,
@@ -487,7 +503,9 @@ impl Engine {
         yaw: f32,
         pitch: f32,
         pos: Option<[f32; 3]>,
+        hold: &[usize],
     ) {
+        *self.dev_hold.borrow_mut() = hold.to_vec();
         if let Some(scene) = scene {
             self.ext.borrow_mut().menu.close();
             if scene < self.v_scenes.len() {
@@ -544,7 +562,14 @@ impl Engine {
         match std::fs::write(&path, &out) {
             Ok(()) => {
                 let p = self.player.borrow().obj().pos;
-                println!("[shot] wrote {path} ({width}x{height}) player at ({:.2}, {:.2}, {:.2})", p.x, p.y, p.z);
+                // The FOV as well: it is how `--sprint` is checked headlessly (ext/sprint.rs).
+                println!(
+                    "[shot] wrote {path} ({width}x{height}) player at ({:.2}, {:.2}, {:.2}) fov {:.1}",
+                    p.x,
+                    p.y,
+                    p.z,
+                    crate::ext::view::fov()
+                );
                 // EXT: frame cost over the frames after the scene settled. Only meaningful with
                 // `--no-vsync`; under the display cap every frame measures the refresh period.
                 if let Some((avg, p95, n)) = self.frame_clock.borrow().stats() {
@@ -560,7 +585,7 @@ impl Engine {
     /// EXT: a frame while a menu is open. Both menus draw the world and then the menu over it;
     /// what differs is which world. The pause menu shows the game the player is standing in,
     /// frozen where they left it. The title screen shows the intro level as a backdrop from the
-    /// vantage that level composes for it (`level15::title_view`), stepped rather than frozen.
+    /// vantage composed for it (`ext::meadow::title_view`), stepped rather than frozen.
     /// The black wash between the two is drawn by `Menu::draw`, which knows how much its
     /// current screen needs.
     fn render_menu_frame(&self, i_width: i32, i_height: i32) {
@@ -678,16 +703,22 @@ impl Engine {
                 cur_scene.unload();
             }
         }
-        // EXT: the old scene's objects and portals are moved out here and dropped only AFTER
-        // the new scene has loaded (was: vObjects.clear(); vPortals.clear(), Engine.cpp:138-139).
-        // The resource caches hold `Weak` references that expire with the last object using
-        // them, so clearing first meant title -> NEW GAME -- which reloads the very scene on
-        // screen -- re-parsed every mesh, re-decoded the door and re-uploaded the lot. Kept
-        // alive across the load, every `acquire_*` upgrades instead. The RefCells are only
-        // borrowed for the length of the take, and nothing in the old vectors is touched
-        // again, so the later drop cannot collide with the load's own borrows.
+        // EXT: the old scene's objects are moved out here and dropped only AFTER the new scene
+        // has loaded (was: vObjects.clear(); vPortals.clear(), Engine.cpp:138-139). The
+        // resource caches hold `Weak` references that expire with the last object using them,
+        // so clearing first meant title -> NEW GAME -- which reloads the very scene on screen
+        // -- re-parsed every mesh, re-decoded the door and re-uploaded the lot. Kept alive
+        // across the load, every `acquire_*` upgrades instead. The RefCell is only borrowed
+        // for the length of the take, and nothing in the old vector is touched again, so the
+        // later drop cannot collide with the load's own borrows.
+        //
+        // The PORTALS are not kept: there is nothing in one worth keeping warm. The eager
+        // framebuffers each used to own (which would have doubled the scene's GPU memory for
+        // the duration of a load) live on the engine now, shared (`portal_fbos`), and the mesh
+        // and two shaders a new portal re-acquires are pinned in `ExtState`. So they go first,
+        // and the reload stays warm without them.
+        drop(std::mem::take(&mut *self.v_portals.borrow_mut()));
         let old_objects = std::mem::take(&mut *self.v_objects.borrow_mut());
-        let old_portals = std::mem::take(&mut *self.v_portals.borrow_mut());
         self.player.borrow_mut().reset();
 
         // EXT: per-scene shader state starts clean; a scene that wants it sets it in load().
@@ -729,7 +760,6 @@ impl Engine {
         // EXT: now the old scene can go. Anything the new one did not re-acquire is freed here,
         // GL objects included, while the context is current.
         drop(old_objects);
-        drop(old_portals);
         println!("[load] scene {ix} in {:.0} ms", t0.elapsed().as_secs_f32() * 1e3);
     }
 
@@ -760,9 +790,10 @@ impl Engine {
         //Collisions
         {
             let v_objects = self.v_objects.borrow();
-            // EXT: scratch copy of the current object's hit spheres, reused across objects and
-            // steps. The copy itself is forced by the borrow rules below; allocating a fresh Vec
-            // for it 500 times a second was not.
+            // EXT: scratch copy of the current object's hit spheres, reused across the objects
+            // of this step (it is a local of the step, so each step allocates it once rather
+            // than once per physical object). The copy itself is forced by the borrow rules
+            // below; allocating a fresh Vec per object 500 times a second was not.
             let mut hit_spheres: Vec<crate::sphere::Sphere> = Vec::new();
             //For each physics object
             for i in 0..v_objects.len() {
@@ -880,14 +911,16 @@ impl Engine {
             }
         }
 
-        // EXT: close the world, on scenes that declare a period (the intro meadow's flat torus,
-        // src/ext/terrain.rs). A no-op everywhere else.
+        // EXT: a room's request to move the player (src/ext/room.rs), then close the world on
+        // scenes that declare a period (the intro meadow's flat torus, src/ext/terrain.rs).
+        // Both no-ops nearly everywhere.
         //
         // LAST in the step, and specifically AFTER the portal pass: try_portal has just consumed
         // a continuous prev_pos -> pos segment, and moving the player before it would hand it a
         // segment stretching a whole period across the meadow -- which sweeps the doorway and
         // teleports the player into the sea. Collision has also finished by here, so the wrap
         // cannot fight a push out of a hillside either.
+        crate::ext::room::apply_respawn(&mut self.player.borrow_mut());
         crate::ext::terrain::wrap_player(&mut self.player.borrow_mut());
     }
 
@@ -1092,7 +1125,7 @@ impl Engine {
     ///   level just left, or a mouse swept across the window, cannot walk the shot away. The
     ///   real input is put back afterwards untouched; the menu has already read this frame's
     ///   edges from it, and `run_frame` still ends the frame on it.
-    /// * **The camera is parked, not simulated.** `level15::title_view` composes the shot, and
+    /// * **The camera is parked, not simulated.** `ext::meadow::title_view` composes the shot, and
     ///   the player is pinned there after every step. Pinning is not belt-and-braces: the door
     ///   stands on a knoll, and a player left standing on it slides gently down the slope --
     ///   over the minutes a title screen can be left up, the composed shot would drift off it.
@@ -1129,7 +1162,7 @@ impl Engine {
 
     /// EXT: put the player back on the backdrop's tripod. See `step_title_backdrop`.
     fn park_backdrop_camera(&self) {
-        let (eye, yaw, pitch) = crate::level15::title_view();
+        let (eye, yaw, pitch) = crate::ext::meadow::title_view();
         let mut player = self.player.borrow_mut();
         // set_position, not a bare write: it moves prev_pos with pos, which is what stops the
         // step counting the pin as motion -- otherwise the portal pass would see a segment from
@@ -1154,7 +1187,6 @@ impl Engine {
             let p = self.player.borrow();
             (p.cam_to_world(), p.steps())
         };
-        let sprinting = self.input.borrow().sprint;
         let objects = self.v_objects.borrow();
 
         let mut ext = self.ext.borrow_mut();
@@ -1162,7 +1194,7 @@ impl Engine {
         crate::ext::grab::update(&objects, &cam_to_world, grab_pressed, &mut ext.grab);
         ext.fire_grab_sfx();
         ext.fire_footstep_sfx(steps);
-        crate::ext::view::set_fov(ext.sprint.ease_fov(crate::ext::view::time(), sprinting));
+        crate::ext::view::set_fov(ext.sprint.ease_fov(crate::ext::view::time()));
     }
 
     /// EXT: (re)create the portal framebuffers at the drawable's size -- see `portal_fbos`.

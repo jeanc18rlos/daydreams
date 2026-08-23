@@ -40,8 +40,9 @@ impl Camera {
         self.far = f;
 
         // EXT: was `GH_FOV` (Camera.cpp:19), a compile-time constant. Read at runtime instead
-        // so the dolly-zoom effect can animate it; `ext::view::fov()` returns GH_FOV unless a
-        // scene overrides it, so ported behaviour is unchanged.
+        // so an effect can animate it -- the sprint's field-of-view kick (ext/sprint.rs) does,
+        // through `ext::view::set_fov`. `ext::view::fov()` equals GH_FOV whenever no effect is
+        // active, so ported behaviour is unchanged.
         let e: f32 = 1.0 / (crate::ext::view::fov() * GH_PI / 360.0).tan();
         let a: f32 = (self.height as f32) / (self.width as f32);
         let d: f32 = self.near - self.far;
