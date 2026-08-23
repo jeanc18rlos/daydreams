@@ -202,9 +202,9 @@ enforces the allowlist in `deny.toml` and fails CI on anything outside it.
 
 | Licence | Crates |
 |---|---|
-| MIT | 189 |
-| Apache-2.0 | 156 |
-| Zlib | 16 |
+| MIT | 191 |
+| Apache-2.0 | 158 |
+| Zlib | 18 — the two new ones are `zune-core` and `zune-jpeg`, the JPEG decoder behind `image`'s "jpeg" feature (each also MIT / Apache-2.0) |
 | MPL-2.0 | 13 — `symphonia*` (kira's decoders), `audio_thread_priority`, `option-ext`, `triple_buffer` |
 | Apache-2.0 WITH LLVM-exception | 4 — `rustix`, `linux-raw-sys` |
 | BSD-2-Clause | 4 |

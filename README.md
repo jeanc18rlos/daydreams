@@ -758,7 +758,7 @@ binary already has stdout) and the entire Win32 half of `Engine.cpp`: `CreateGLW
 ## Status
 
 `cargo build --release` — 0 errors, 0 warnings; `cargo build --profile dist` — clean.
-`cargo test --release` — 229 passed, 0 failed.
+`cargo test --release` — 246 passed, 0 failed.
 `cargo clippy --release --all-targets -- -D warnings` — clean, with an empty `[lints.clippy]` table.
 `cargo fmt --check` — clean.
 `cargo deny check` — advisories, bans, licences, sources ok.
@@ -1112,7 +1112,7 @@ Small additions, each tagged `// EXT:`:
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
 | `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery |
 | `frame_buffer.rs` | sized attachments instead of `GH_FBO_SIZE` square |
-| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn request applied after the portal pass; the `--forward`/`--strafe`/`--sprint` held keys |
+| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn request applied after the portal pass; the `--forward`/`--strafe`/`--sprint` held keys; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`) |
 | `portal.rs` | the nested pass scissored to the quad's screen footprint |
 | `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4`; `new` returns `Result<_, AssetError>` and the attribute scan is a pure, tested `scrape_attribs` |
 | `texture.rs` | `new` returns `Result<_, AssetError>`; the BMP byte walk is a pure, tested `decode_bmp` |
@@ -1177,7 +1177,7 @@ a place rather than a picture:
 
 | What | Where |
 |------|-------|
-| **A general glTF load.** The door loader fitted one model to one height and packed PBR maps at 512. `Load { fit, max_map }` now chooses between that and `Fit::Identity` (source metres, source origin -- the scan is already to scale and already Y-up once the root node's rotation is applied), and per-material `unlit` skips the PBR pack entirely: the base map goes up as shipped, at its own size and with its own wrap mode, and `baseColorFactor` / `emissiveFactor x KHR_materials_emissive_strength` are uniforms. A part is drawn with one shader, so its materials must all be unlit or all PBR -- the loader asserts it. The door's path is byte-identical. | `ext/gltf_model.rs`, `Shaders/gltfunlit.*` |
+| **A general glTF load.** The door loader fitted one model to one height and packed PBR maps at 512. `Load { fit, max_map, .. }` now chooses between that and `Fit::Identity` (source metres, source origin -- the scan is already to scale and already Y-up once the root node's rotation is applied), and per-material `unlit` skips the PBR pack entirely: the base map goes up as shipped, at its own size and with its own wrap mode, and `baseColorFactor` / `emissiveFactor x KHR_materials_emissive_strength` are uniforms. A part is drawn with one shader, so its materials must all be unlit or all PBR -- the loader asserts it. The door's path is byte-identical. What the loader has grown since is under [glTF loader](#gltf-loader). | `ext/gltf_model.rs`, `Shaders/gltfunlit.*` |
 | **Triangle-mesh collision.** The engine only knew axis-aligned rectangles declared on OBJ `c` lines. The whole scan becomes one parry3d `TriMesh`, built once in world space; the collision pass asks it for the deepest sphere penetration, applies the push exactly as it applies a rectangle's (on_hit, on_collide, matrices rebuilt), and asks again, up to eight rounds. The player walks on the carpet, is stopped by walls, skirting and armchairs, and the grab raycast sees the same surfaces. | `ext/trimesh.rs`, `ObjectT::trimesh` |
 | **Frustum culling.** The model is drawn by the meadow's main pass too, 1,000 units away. A six-plane test from the pass camera's matrix (oblique near plane included) skips the draw when the part's bounding sphere is wholly outside. | `ext/cull.rs` |
 
@@ -1208,6 +1208,28 @@ absolute numbers are pessimistic; the comparison is what matters): meadow spawn 
 **8.1 ms**, the same spawn in the Backrooms (the portal now draws the hall) **8.6 ms**, standing
 in the hall looking down it **6.1 ms**, looking back at the door (the portal draws the meadow)
 **8.0 ms**. Physics at 500 Hz with the triangle collider is inside those numbers.
+
+## glTF loader
+
+`ext/gltf_model.rs` is the one path every non-OBJ model takes: the door, the Backrooms scan,
+and the three Sketchfab assets for the next step -- EFX's animated elevator
+(`Meshes/elevator_with_animation_lowpoly.glb`) and Blenderust's overgrown room and flooded
+tiled complex (`backrooms_room_with_plants_overgrown.glb`, `level_37_flooded_tiled_complex.glb`,
+all CC-BY-4.0; see `THIRD_PARTY.md`). What it accepts and what it does with it:
+
+| | |
+|---|---|
+| **Formats** | GLB only, images embedded as PNG or JPEG; a URI image is a load error naming it, not a missing map. `KHR_materials_unlit`, `KHR_materials_emissive_strength` and `KHR_texture_transform` are honoured -- the last by baking offset, rotation and scale into the primitive's UVs at load, so the shaders never see it (assumed to match on the normal map, which `gltf` 1.4 exposes no transform for). A file without tangents gets them computed from its UVs, as the spec asks. Clearcoat, specular and the second UV set are ignored. |
+| **Materials** | PBR maps are packed into three RGBA textures per material -- base colour + alpha, normal xy + roughness + metalness, emissive + occlusion -- each at the size of the largest map feeding it (1x1 for a factor-only material); factors, emissive strength and occlusion strength are baked in. Unlit materials go up as shipped. A part is drawn with one shader, so it is all PBR or all unlit. |
+| **Alpha** | A policy, not the file's word. `OPAQUE` is opaque. `MASK` is alpha-tested at the file's cutoff; `BLEND` is alpha-tested at 0.5 too -- foliage cards want crisp, depth-correct edges, not sorting artefacts -- *unless* the material is named in `Load::translucent` (`"Water.002"`), when it is drawn in a second pass after the part's other primitives: blended `SRC_ALPHA, ONE_MINUS_SRC_ALPHA`, depth-tested, not depth-writing, both faces. A name the file lacks is an error. |
+| **Interior lighting** | `Shaders/gltfpbr.frag` under `mood > 1.5` (`view::MOOD_INTERIOR`) drops the sun for a hemisphere -- warm white from above, a dim brown bounce from the floor -- plus a small ambient, a damped overhead specular, the same hemisphere as the metals' environment, and the material's emission, saturating (no HDR target). The Backrooms' return door takes it through the meadow split; a scene that is an interior from the first step calls `view::set_scene_mood(MOOD_INTERIOR)`, which answers for every eye and is cleared on the next load. |
+| **Animation** | Translation channels only (`LINEAR`, `STEP`; `CUBICSPLINE` reduced to its keys), by node name: `GltfModel::animation(name)`, `Animation::translation(node, t)` in the node's local space, clamped to the clip, and `GltfModel::node_delta(anim, node, t)` -- the node's displacement from rest in the model's fitted space, parent chain and fit scale applied. A moving node is gathered as its own part with `PartSpec { roots: &["Door1"], frame: Frame::Scene, .. }`, left out of the body with `skip`, and drawn at the elevator's `Object` plus the delta. `ext/gltf_prop.rs` does exactly that for any `Load`: every part at one `Object`, optional triangle collision, a clip playing on the parts that follow a node. |
+| **Looking at a file** | `daydreams --windowed --view-glb PATH [--view-translucent Water.002] --shot out.bmp` opens a scene of that one model at its own scale under the interior light, on a dark ground cap over an invisible floor, the player at the floor of its bounding box, the first clip looping; `--pos`, `--yaw` and `--pitch` work as with `--scene`. `cargo run --release --example glb_probe -- PATH` prints what the file holds first: images, primitives and materials, alpha modes, texture transforms, the node tree and the clips with their channels. |
+
+Every new piece of the loader is unit-tested without a GL context: the UV transform, channel
+sampling and clamping, `node_delta` through a parent chain, the generated tangents, and a
+`parse()` of each of the three shipped GLBs checking triangle counts, bounds, the elevator's
+clip and its door deltas, the foliage's alpha test, the moss and marble tiling, and the water.
 
 ### Dev tooling
 
@@ -1274,6 +1296,11 @@ parsing, so a double-clicked bundle starts clean.
 
 `daydreams gen-terrain` is the one subcommand: it rewrites `Meshes/meadow_tile.obj` under the
 asset root from `ext::terrain::height` and exits (see [Meadow](#meadow-grass-and-clouds-scene-)).
+
+Two flags are hidden from `--help` because they are tools rather than features: `--panic-test`
+(the crash dialog, below) and `--view-glb PATH` with `--view-translucent NAMES` (a scene of one
+model, see [glTF loader](#gltf-loader)). `--view-glb` excludes `--scene`; its path is taken
+under the working directory when a file is there, under the asset root otherwise.
 
 ### Logging
 
