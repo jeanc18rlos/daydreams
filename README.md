@@ -171,11 +171,15 @@ Nothing else in the shaders changed.
 times the real vertex count. The original reads two vertex-strides past the end of every buffer on
 every draw. Ported as `verts.len() / 3`.
 
-### GL objects are freed on scene switch — `frame_buffer.rs:170`, `texture.rs:171`, and the `Drop` impls in `mesh.rs` / `shader.rs`
+### GL objects are freed — the `Drop` impls in `mesh.rs`, `shader.rs`, `texture.rs` and `frame_buffer.rs`
 
-`FrameBuffer` has no destructor at all in C++, and `Mesh`, `Shader` and `Texture` never delete their
-GL objects either. Cycling the seven scenes leaks roughly 78 framebuffers — about 1.8 GiB of texture
-and renderbuffer memory. Each type gets a `Drop` impl that deletes what it owns.
+`Mesh`, `Shader` and `Texture` never delete their GL objects in C++, so every scene switch leaked
+whatever the old scene had uploaded; each gets a `Drop` impl that deletes what it owns, and the
+resource caches' `Weak` handles let that run when the last user goes. `FrameBuffer` had no
+destructor either, and the original leaked roughly 78 of them — about 1.8 GiB of texture and
+renderbuffer memory — across the seven scenes, because each portal owned three. Its `Drop` now runs
+on a window resize and at shutdown rather than per scene: the engine owns the only three, shared by
+every portal (see [Load time and frame cost](#load-time-and-frame-cost)).
 
 ### Occlusion queries no longer leak — `engine.rs:419`, `engine.rs:438`
 
