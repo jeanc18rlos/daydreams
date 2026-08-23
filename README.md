@@ -1198,9 +1198,12 @@ screenshot and exits. This is how the shaders were iterated without a human in t
 the throughput numbers above were measured (600 frames, wall-clock).
 
 The command line is `clap` (`src/app/cli.rs`); `--help` lists it in full, and a value that does
-not parse is an error rather than a silent default (`--frames ten` used to run 90 frames):
+not parse is an error rather than a silent default (`--frames ten` used to run 90 frames;
+`--scene 99` names the registry's range). What `daydreams --help` prints:
 
 ```
+DayDreams
+
 Usage: daydreams [OPTIONS] [COMMAND]
 
 Commands:
@@ -1255,7 +1258,7 @@ asset root from `ext::terrain::height` and exits (see [Meadow](#meadow-grass-and
 Every line the game has to say goes through the `log` facade (`src/app/logging.rs`) to two
 sinks: the terminal, as `[LEVEL] message`, and a file with timestamps and module paths in the
 per-user log directory -- `~/Library/Application Support/DayDreams/logs/` on macOS,
-`%LOCALAPPDATA%\DayDreams\logs\` on Windows, `$XDG_DATA_HOME/daydreams/logs/` on Linux. One
+`%LOCALAPPDATA%\DayDreams\data\logs\` on Windows, `$XDG_DATA_HOME/daydreams/logs/` on Linux. One
 file per session, named `daydreams-YYYYMMDD-HHMMSS-PID.log` (UTC in the name, local time
 inside), the newest five kept. The level is `--log-level`, else `DAYDREAMS_LOG`, else `info`;
 both sinks run at the same level. `--no-log-file` leaves the file out, for CI and for parallel
@@ -1331,8 +1334,9 @@ order, first directory containing `Shaders/` wins:
    anywhere on the machine that built it.
 
 Nothing qualifying is `AssetError::NoAssetRoot` listing every directory tried, through the
-fatal sink: `DAYDREAMS_ASSETS=/nonexistent daydreams` shows the dialog, logs the list and exits
-1. `--shot` output paths and `settings.toml` are not assets and are not resolved here.
+fatal sink: `DAYDREAMS_ASSETS=/nonexistent daydreams` shows the dialog, logs the list and
+exits with code 1. `--shot` output paths and `settings.toml` are not assets and are not
+resolved here.
 
 ### Scene registry
 

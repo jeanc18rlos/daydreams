@@ -108,7 +108,7 @@ pub fn init(flag: Option<LevelFilter>, file_sink: bool) {
 }
 
 /// The per-user log directory: `~/Library/Application Support/DayDreams/logs` on macOS,
-/// `%LOCALAPPDATA%\DayDreams\logs` on Windows, `$XDG_DATA_HOME/daydreams/logs` on Linux.
+/// `%LOCALAPPDATA%\DayDreams\data\logs` on Windows, `$XDG_DATA_HOME/daydreams/logs` on Linux.
 fn log_dir() -> Option<PathBuf> {
     directories::ProjectDirs::from("", "", "DayDreams").map(|d| d.data_local_dir().join("logs"))
 }

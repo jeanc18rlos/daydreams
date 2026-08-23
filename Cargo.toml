@@ -43,7 +43,10 @@ gltf = { version = "1.4.1", default-features = false, features = ["utils", "name
 # this drops from the default set is "spade", a Delaunay triangulator only the convex
 # decomposition and polyline-extraction routines use -- nothing here calls them.
 parry3d = { version = "0.30.2", default-features = false, features = ["required-features", "std", "alloc"] }
-clap = { version = "4.6.6", features = ["derive"] }
+# No colour, no suggestions, no wrapping: the help is sixteen flags, and the default feature
+# set brings in the anstream/anstyle terminal stack for the colour the README excerpt does
+# not show. "error-context" keeps the "invalid value ... for --scene" wording a bad value gets.
+clap = { version = "4.6.6", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 log = "0.4.34"
 simplelog = "0.12.2"
 directories = "6.0.0"

@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand};
 use log::LevelFilter;
 
 #[derive(Parser, Debug)]
-#[command(name = "daydreams", version, about = "DayDreams")]
+#[command(name = "daydreams", version, about = "DayDreams", disable_help_subcommand = true)]
 pub struct Args {
     /// Open a 1280x720 window instead of taking the whole display.
     #[arg(long)]
