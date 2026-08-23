@@ -25,9 +25,10 @@
 //! # Adding sound effects
 //!
 //! Drop files into `assets/sfx/` named after the `Sfx` variants below (`grab.wav`,
-//! `release.wav`, `portal.wav`, `land.wav`, `footstep.wav`). They are preloaded at startup and
-//! fired by name. `Grab`, `Release` and `Footstep` have call sites (src/ext/mod.rs); `Portal`
-//! and `Land` are indexed and loadable but nothing fires them yet. None of the files ship.
+//! `release.wav`, `portal.wav`, `land.wav`, `footstep.wav`, `elevator.wav`). They are
+//! preloaded at startup and fired by name. `Grab`, `Release`, `Footstep` and `Elevator` have
+//! call sites (src/ext/mod.rs); `Portal` and `Land` are indexed and loadable but nothing
+//! fires them yet. None of the files ship.
 
 use kira::sound::static_sound::StaticSoundData;
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
@@ -56,6 +57,8 @@ pub enum Sfx {
     Land,
     /// Footfall, driven by the head-bob phase (`Player::steps`, fired from `Engine::ext_update`).
     Footstep,
+    /// An elevator ride starting: the doors closing (`ext::elevator`).
+    Elevator,
 }
 
 impl Sfx {
@@ -66,10 +69,12 @@ impl Sfx {
             Sfx::Portal => "portal",
             Sfx::Land => "land",
             Sfx::Footstep => "footstep",
+            Sfx::Elevator => "elevator",
         }
     }
 
-    pub const ALL: [Sfx; 5] = [Sfx::Grab, Sfx::Release, Sfx::Portal, Sfx::Land, Sfx::Footstep];
+    pub const ALL: [Sfx; 6] =
+        [Sfx::Grab, Sfx::Release, Sfx::Portal, Sfx::Land, Sfx::Footstep, Sfx::Elevator];
 }
 
 fn tween(secs: f32) -> Tween {

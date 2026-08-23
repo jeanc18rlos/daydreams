@@ -32,12 +32,17 @@
 //!   is its bare wall. The meadow stays loaded, a kilometre away and culled, because the
 //!   title screen is still looking at it. The title's own camera never crosses, so the
 //!   backdrop keeps its door.
+//! * **The way on is the elevator.** At the dead end of the entrance corridor south of the
+//!   hall stands `ext::elevator::Elevator`, set into the end wall: the next floor is whatever
+//!   `elevator::FLOORS` names after this one. A ride INTO this level arrives in its cabin.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::ext::backrooms::{fell_out, Backrooms, GroundCap, DOOR_FACING};
+use crate::ext::backrooms::{fell_out, Backrooms, GroundCap, DOOR_FACING, DOOR_SPOT, FLOOR_Y};
 use crate::ext::bounds::bounds_box;
+use crate::ext::door::yaw_facing;
+use crate::ext::elevator::{self, Elevator, SLAB_X, THRESHOLD};
 use crate::ext::meadow::{door_with_portal, in_far_world, load_meadow, FAR};
 use crate::ext::room::{request_remove_portals, request_respawn, Respawn, RoomLogic};
 use crate::ext::view;
@@ -60,6 +65,31 @@ const FENCE_MARGIN: f32 = 1.0;
 /// face down the hall, away from the door, as they would have on arrival.
 const ARRIVAL: Vector3 = Vector3 { x: FAR.x - 1.0, y: FAR.y + GH_PLAYER_HEIGHT, z: FAR.z };
 
+/// The entrance corridor south of the hall (the scan's `Moquette_1`) dead-ends at this z, in
+/// model coordinates: a single-sided wall seen from inside, between these x, with nothing of
+/// the scan behind it. The elevator's cabin goes there.
+const CORRIDOR_END_Z: f32 = -1.89;
+const CORRIDOR_X: (f32, f32) = (-2.68, 2.38);
+/// How far the elevator's wall slab stands proud of that wall, so the two never z-fight. The
+/// slab is drawn over the scan's wall; the scan's collision is cut away behind the doorway
+/// (`Backrooms::new`, from `Elevator::wall_cut`).
+const ELEVATOR_PROUD: f32 = 0.03;
+/// Where the elevator's threshold meets the end wall, in model coordinates. The slab is
+/// 4.23 m wide and its doorway is off its centre, a metre east of it; centring the SLAB in
+/// the 5.06 m corridor -- so a hand's width of the scan's own wall shows either side of it
+/// and it reads as set into that wall -- puts the doorway east of the corridor's centre line
+/// (-0.15), at x = 0.85. That also keeps the opening clear of the armchair the scan parks
+/// against the end wall's west half: its east edge is at x = -1.01, and a doorway centred on
+/// the corridor would have had its west jamb at -1.04, in the chair. The west jamb is at
+/// -0.04 (`the_elevator_sits_in_the_corridors_end_wall` measures both).
+const ELEVATOR_SPOT: Vector3 = Vector3 {
+    x: 0.5 * (CORRIDOR_X.0 + CORRIDOR_X.1) + THRESHOLD.x - 0.5 * (SLAB_X.0 + SLAB_X.1),
+    y: FLOOR_Y,
+    z: CORRIDOR_END_Z + ELEVATOR_PROUD,
+};
+/// The doorway faces up the corridor, toward the hall (+z in the model's space).
+const ELEVATOR_FACING: Vector3 = Vector3 { x: 0.0, y: 0.0, z: 1.0 };
+
 impl Scene for Level16 {
     fn load(
         &self,
@@ -74,12 +104,36 @@ impl Scene for Level16 {
         // which turns the split on (and every load resets this to sunset).
         view::set_far_mood(view::MOOD_INTERIOR);
 
+        // ── The elevator, set into the end wall of the entrance corridor. Built before the
+        // backrooms because the scan's collision is cut away behind its doorway.
+        let arrival = elevator::take_arrival();
+        let lift = Elevator::new(
+            gl,
+            res,
+            FAR - DOOR_SPOT + ELEVATOR_SPOT,
+            yaw_facing(ELEVATOR_FACING),
+            arrival,
+        );
+        if arrival.is_some() {
+            // Delivered by a ride: in the cabin, facing its doors, which are about to open.
+            lift.board(player);
+        }
+
         // ── The backrooms: the model, placed so its door spot is FAR with the carpet at y = 0.
-        let rooms = Backrooms::new(gl, res, FAR, &[]);
-        let (lo, hi) = rooms.world_bounds();
+        let rooms = Backrooms::new(gl, res, FAR, &[lift.wall_cut()]);
+        // The building's extent and the cabin's, which stands outside it behind the wall.
+        let (lo, hi) = {
+            let ((rlo, rhi), (llo, lhi)) = (rooms.world_bounds(), lift.world_bounds());
+            (
+                Vector3::new(rlo.x.min(llo.x), rlo.y.min(llo.y), rlo.z.min(llo.z)),
+                Vector3::new(rhi.x.max(lhi.x), rhi.y.max(lhi.y), rhi.z.max(lhi.z)),
+            )
+        };
         // Darkness under and around the building, for wherever its walls let the outside show.
         objs.push(Rc::new(RefCell::new(GroundCap::new(res, &rooms))) as Rc<RefCell<dyn ObjectT>>);
         objs.push(Rc::new(RefCell::new(rooms)) as Rc<RefCell<dyn ObjectT>>);
+        objs.push(Rc::new(RefCell::new(lift.doors())) as Rc<RefCell<dyn ObjectT>>);
+        objs.push(Rc::new(RefCell::new(lift)) as Rc<RefCell<dyn ObjectT>>);
 
         // An invisible fence round the model's full extent, so nothing leaves through a
         // doorway in an outer wall. bounds_box takes the floor level and the wall height (not
@@ -119,9 +173,10 @@ impl Scene for Level16 {
         // Walk in here, walk out there...
         connect(&meadow.here, &there);
 
-        // ...and that is all. The first step past the split -- the step after the warp --
-        // takes both doors and both portals away for good (see the module docs). The title
-        // backdrop's camera is parked on the meadow and never gets here.
+        // ...and that is all. The first step past the split -- the step after the warp, or
+        // the first step of a level entered by elevator -- takes both doors and both portals
+        // away for good (see the module docs). The title backdrop's camera is parked on the
+        // meadow and never gets here.
         let portal_ids = [meadow.here.borrow().id, there.borrow().id];
         objs.push(Rc::new(RefCell::new(RoomLogic::new(move |ctx| {
             if !link.vanished() && in_far_world(ctx.player_pos) {
@@ -135,11 +190,104 @@ impl Scene for Level16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ext::backrooms::DOOR_SPOT;
-    use crate::ext::door::{portal_placement, yaw_facing};
+    use crate::ext::door::portal_placement;
+    use crate::ext::elevator::OPENING_X;
+    use crate::ext::gltf_model::{Anchor, Fit, Frame, GltfModel, Load, PartSpec};
     use crate::ext::meadow::DOOR_POS;
-    use crate::game_header::GH_PI;
+    use crate::game_header::{GH_PI, GH_PLAYER_RADIUS};
     use crate::object::Object;
+
+    /// The entrance corridor's dead end, measured from the scan (no GL): the end wall's z and
+    /// x extent, its ceiling, and the east-most furniture standing against it.
+    struct CorridorEnd {
+        wall_z: f32,
+        wall_x: (f32, f32),
+        ceiling_y: f32,
+        /// Largest x of anything within a metre of the end wall that is not wall, floor or
+        /// ceiling: the armchair.
+        furniture_east: f32,
+    }
+
+    fn measure_corridor_end() -> CorridorEnd {
+        const PARTS: [PartSpec<'static>; 1] = [PartSpec {
+            name: "all",
+            roots: &["Sketchfab_model"],
+            skip: &[],
+            frame: Frame::Local,
+            anchor: Anchor::Hinge,
+        }];
+        let spec = Load {
+            path: "Meshes/backrooms_vr.glb",
+            parts: &PARTS,
+            fit: Fit::Identity,
+            max_map: 1024,
+            translucent: &[],
+        };
+        let (pos, idx) = GltfModel::probe_triangles(&spec, "all");
+        let v = |i: u32| Vector3::from_slice(&pos[i as usize]);
+        // The corridor, generously: the tests below only need what is near ELEVATOR_SPOT.
+        let near = |p: Vector3| (p.x - ELEVATOR_SPOT.x).abs() < 4.0 && p.z > -2.5 && p.z < -0.5;
+        let (mut wall_z, mut wall_x, mut ceiling_y, mut furniture_east) =
+            (f32::MAX, (f32::MAX, f32::MIN), f32::MAX, f32::MIN);
+        for t in idx.chunks_exact(3) {
+            let (a, b, c) = (v(t[0]), v(t[1]), v(t[2]));
+            if !(near(a) && near(b) && near(c)) {
+                continue;
+            }
+            let n = (b - a).cross(c - a);
+            let area = n.mag() * 0.5;
+            let n = n.normalized_safe();
+            let (lo_x, hi_x) = (a.x.min(b.x).min(c.x), a.x.max(b.x).max(c.x));
+            let (lo_y, hi_y) = (a.y.min(b.y).min(c.y), a.y.max(b.y).max(c.y));
+            if area > 0.3 && n.z > 0.99 && lo_y < FLOOR_Y + 1.0 && hi_y > FLOOR_Y + 1.0 {
+                // A wall face spanning mid-height, facing into the corridor.
+                wall_z = wall_z.min(a.z);
+                wall_x = (wall_x.0.min(lo_x), wall_x.1.max(hi_x));
+            } else if area > 0.3 && n.y < -0.99 && lo_y > FLOOR_Y + 2.0 {
+                ceiling_y = ceiling_y.min(a.y);
+            } else if area < 0.3
+                && lo_y > FLOOR_Y + 0.05
+                && hi_y < FLOOR_Y + 2.0
+                && lo_x > -2.58
+                && hi_x < 2.28
+            {
+                // Small faces off the floor, below the wall's middle and clear of both side
+                // walls (whose frames and trim are small faces too): furniture.
+                furniture_east = furniture_east.max(hi_x);
+            }
+        }
+        CorridorEnd { wall_z, wall_x, ceiling_y, furniture_east }
+    }
+
+    /// The elevator's slab must fit in the corridor's end wall, its doorway must be clear
+    /// of the armchair, and its threshold must stand a hair proud of the wall -- all measured
+    /// from the scan, so the placement constants cannot drift out from under the model.
+    #[test]
+    fn the_elevator_sits_in_the_corridors_end_wall() {
+        let end = measure_corridor_end();
+        assert!((end.wall_z - CORRIDOR_END_Z).abs() < 0.01, "end wall at z = {}", end.wall_z);
+        assert!((end.wall_x.0 - CORRIDOR_X.0).abs() < 0.02, "west wall at x = {}", end.wall_x.0);
+        assert!((end.wall_x.1 - CORRIDOR_X.1).abs() < 0.02, "east wall at x = {}", end.wall_x.1);
+        assert!((end.ceiling_y - 2.75).abs() < 0.01, "ceiling at y = {}", end.ceiling_y);
+        assert!((end.furniture_east + 1.01).abs() < 0.05, "chair to x = {}", end.furniture_east);
+
+        // The slab, as `Elevator::new` places it about the threshold (its extents are the
+        // elevator's own measured constants), fits in the end wall...
+        let threshold = ELEVATOR_SPOT;
+        let slab_w = threshold.x + SLAB_X.0 - THRESHOLD.x;
+        let slab_e = threshold.x + SLAB_X.1 - THRESHOLD.x;
+        assert!(slab_w > end.wall_x.0 && slab_e < end.wall_x.1, "slab {slab_w}..{slab_e}");
+        // ...and roughly centred in it.
+        let off = 0.5 * (slab_w + slab_e) - 0.5 * (end.wall_x.0 + end.wall_x.1);
+        assert!(off.abs() < 0.05, "slab {off} m off the corridor's centre");
+        // The opening clears the chair by more than a player.
+        let jamb_w = threshold.x + OPENING_X.0 - THRESHOLD.x;
+        assert!(jamb_w - end.furniture_east > 2.0 * GH_PLAYER_RADIUS, "jamb at {jamb_w}");
+        // Proud of the wall, by less than a skirting's depth.
+        assert!(threshold.z > end.wall_z && threshold.z - end.wall_z < 0.05);
+        assert_eq!(threshold.y, FLOOR_Y, "the cabin floor meets the carpet");
+        assert!((ELEVATOR_FACING.mag() - 1.0).abs() < 1e-6 && ELEVATOR_FACING.z > 0.0);
+    }
 
     /// The carpet must be at world y = 0 where the door stands: the door's foot is at FAR.y
     /// and the model is shifted so its floor level lands there.
