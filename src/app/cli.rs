@@ -91,9 +91,10 @@ pub struct Args {
     pub ride_at: Option<u32>,
 
     /// With `--scene`: the Backrooms' window is built at this physical scale
-    /// (`ext/window.rs`), so a screenshot can show it at door size without a grab. Hidden:
-    /// dev tooling; the README's "The window" section has the commands.
-    #[arg(long, hide = true, requires = "scene", value_name = "S")]
+    /// (`ext/window.rs`), within the grab's own clamps -- a zero scale has no inverse and
+    /// would warp the portal through NaNs. So a screenshot can show it at door size without
+    /// a grab. Hidden: dev tooling; the README's "The window" section has the commands.
+    #[arg(long, hide = true, requires = "scene", value_name = "S", value_parser = window_scale)]
     pub window_scale: Option<f32>,
 
     /// With `--scene`: the window is built already unlocked, as if its key had been used.
@@ -170,6 +171,17 @@ pub struct DirectRun {
     pub hold_key: bool,
     /// The rendered frame on which E is pressed once, as a key press (`--e-at`).
     pub e_at: Option<i32>,
+}
+
+/// `--window-scale`'s parser: a scale the grab itself could produce.
+fn window_scale(s: &str) -> Result<f32, String> {
+    use crate::ext::grab::{MAX_P_SCALE, MIN_P_SCALE};
+    let v: f32 = s.parse().map_err(|e| format!("{e}"))?;
+    if (MIN_P_SCALE..=MAX_P_SCALE).contains(&v) {
+        Ok(v)
+    } else {
+        Err(format!("must be within {MIN_P_SCALE}..={MAX_P_SCALE}"))
+    }
 }
 
 /// What the game starts on instead of the title, when a dev flag says so.
@@ -441,6 +453,11 @@ mod tests {
         assert!(Args::try_from_tokens(&["--window-scale", "7"]).is_err());
         assert!(Args::try_from_tokens(&["--unlock-window"]).is_err());
         assert!(Args::try_from_tokens(&["--scene", "16", "--window-scale", "big"]).is_err());
+        // Within the grab's clamps: a zero scale has no inverse.
+        assert!(Args::try_from_tokens(&["--scene", "16", "--window-scale", "0"]).is_err());
+        assert!(Args::try_from_tokens(&["--scene", "16", "--window-scale", "-7"]).is_err());
+        assert!(Args::try_from_tokens(&["--scene", "16", "--window-scale", "26"]).is_err());
+        assert!(Args::try_from_tokens(&["--scene", "16", "--window-scale", "25"]).is_ok());
         let a = Args::try_from_tokens(&["--scene", "16"]).unwrap();
         assert_eq!(a.window_preset(), Preset::default());
         let a = Args::try_from_tokens(&["--scene", "16", "--window-scale", "7", "--unlock-window"])

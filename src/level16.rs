@@ -35,6 +35,12 @@
 //! * **The way on is the elevator.** At the dead end of the entrance corridor south of the
 //!   hall stands `ext::elevator::Elevator`, set into the end wall: the next floor is whatever
 //!   `elevator::FLOORS` names after this one. A ride INTO this level arrives in its cabin.
+//! * **The other way on is the window.** Between the second and third portraits on the
+//!   hall's north wall hangs a small locked window (`ext::window::Window`) onto the Overgrown
+//!   room, and the key to it is painted into the last portrait (`ext::painting`, `ext::key`).
+//!   Unlocked, stood on a wall and grown to a door by the grab, it is walked through: the
+//!   far copy of that room is loaded with this level (`window::FAR2`) and a `RoomLogic`
+//!   loads the real one on the far side. One way, like the door.
 
 use std::cell::RefCell;
 use std::rc::Rc;

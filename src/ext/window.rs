@@ -66,6 +66,7 @@ use crate::camera::Camera;
 use crate::collider::Collider;
 use crate::ext::door::yaw_facing;
 use crate::ext::room::take_unlock_window;
+use crate::level18::CEILING;
 use crate::mesh::Mesh;
 use crate::object::{Object, ObjectT, RenderCtx, UpdateCtx};
 use crate::physical::Physical;
@@ -111,6 +112,17 @@ pub const LOCKED_TINT: [f32; 4] = [0.55, 0.70, 0.55, 0.45];
 /// How far below its frame a parked portal goes (module docs): past the far plane, under the
 /// ground cap.
 const PARK: f32 = 200.0;
+
+/// The largest scale a window hung with its centre `y` above the floor can have: the partner
+/// stands at the same height in the far room (`place_portals`), and past this the opening
+/// rises through that room's ceiling ([`CEILING`]) or sinks through its floor and the nested
+/// pass shows the outside of the model as a black band across the opening. At the hang
+/// height of 1.35 m that is 7.2, a 2.16 m door; the grab's own `MAX_P_SCALE` (25, a 7.5 m
+/// opening) is never reached. Never under the grab's floor, so a frame dragged along the
+/// skirting is small, not inverted.
+pub fn max_scale(y: f32) -> f32 {
+    (y.min(CEILING - y) / (0.5 * OPENING.1)).max(crate::ext::grab::MIN_P_SCALE)
+}
 
 /// What the opening is, this step: the lock first, then the pose, then the size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -264,9 +276,14 @@ pub struct Preset {
     pub unlocked: bool,
 }
 
+impl Preset {
+    /// As the game builds it: unit scale, locked.
+    pub const DEFAULT: Preset = Preset { p_scale: 1.0, unlocked: false };
+}
+
 impl Default for Preset {
     fn default() -> Preset {
-        Preset { p_scale: 1.0, unlocked: false }
+        Preset::DEFAULT
     }
 }
 
@@ -281,9 +298,23 @@ pub struct Arrival {
 }
 
 thread_local! {
-    static PRESET: Cell<Preset> = const { Cell::new(Preset { p_scale: 1.0, unlocked: false }) };
+    static PRESET: Cell<Preset> = const { Cell::new(Preset::DEFAULT) };
     /// The arrival left for the Overgrown level by the crossing, if any.
     static ARRIVAL: Cell<Option<Arrival>> = const { Cell::new(None) };
+    /// Whether the key has been used on the window, for the life of the process: every
+    /// Backrooms load rebuilds the window, and a player who unlocked it, rode the elevator
+    /// away and came back would otherwise find it locked again with the key spent.
+    static UNLOCKED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether the key has been used on the window since the game started (module docs).
+pub fn unlocked() -> bool {
+    UNLOCKED.with(Cell::get)
+}
+
+/// Record that the key has been used: the window does, on taking the unlock.
+fn set_unlocked() {
+    UNLOCKED.with(|u| u.set(true));
 }
 
 /// Set the preset for every window built from now on (the command line's dev flags).
@@ -323,7 +354,9 @@ pub struct Window {
     body: Physical,
     here: Rc<RefCell<Portal>>,
     there: Rc<RefCell<Portal>>,
-    /// The frame's bars, placed in world space every step from the body.
+    /// The frame's bars: the mesh, shader and texture of each, placed from the body at
+    /// draw time (`draw`) -- the body is where the grab put it this frame, and the bars drawn
+    /// from a placement taken in the fixed step would trail the crosshair by a frame.
     bars: [Object; 4],
     /// The collider rectangle over the opening, and the same mesh without it: swapped onto the
     /// body as the opening shuts and opens. Both carry the frame's bounding radius, so the
@@ -394,33 +427,56 @@ impl Window {
             bars,
             pane,
             clear,
-            locked: !preset.unlocked,
+            locked: !(preset.unlocked || unlocked()),
             opening: Opening::Locked,
         };
         w.settle();
         w
     }
 
-    /// Bring everything that follows the body up to date: the opening's state, the body's
-    /// collider, the two portals and the bars.
+    /// Bring everything that follows the body up to date: the scale within what the far
+    /// room allows, the opening's state, the body's collider and the two portals.
     fn settle(&mut self) {
+        self.clamp_scale();
         let base = &self.body.base;
         self.opening = opening(self.locked, is_flat(base.euler), base.p_scale);
         place_portals(&self.here, &self.there, base, self.opening);
-        let to_world = base.local_to_world();
-        for (bar, (at, half, rail)) in self.bars.iter_mut().zip(bar_layout()) {
-            bar.pos = to_world.mul_point(at);
-            bar.euler = base.euler;
-            bar.scale = half * base.p_scale;
-            if rail {
-                // The roll is the innermost rotation (`Object::local_to_world`): about the
-                // bar's own depth, whatever the frame's pose.
-                bar.euler.z = std::f32::consts::FRAC_PI_2;
-                bar.scale = Vector3::new(bar.scale.y, bar.scale.x, bar.scale.z);
-            }
-        }
         let mesh = if self.opening.shut() { &self.pane } else { &self.clear };
         self.body.base.mesh = Some(Rc::clone(mesh));
+    }
+
+    /// Keep the scale under [`max_scale`] for the frame's height. The grab writes `p_scale`
+    /// once per rendered frame and its own eased value keeps growing past the clamp; this
+    /// runs after every such write (`on_rescale`) and every step (`settle`), so the drawn
+    /// frame and the portal never disagree.
+    fn clamp_scale(&mut self) {
+        let base = &mut self.body.base;
+        base.p_scale = base.p_scale.min(max_scale(base.pos.y));
+    }
+
+    /// A bar placed on the body as it stands now: `template` is the bar's mesh, shader and
+    /// texture, `at`/`half`/`rail` its slot in [`bar_layout`].
+    fn placed_bar(
+        template: &Object,
+        base: &Object,
+        at: Vector3,
+        half: Vector3,
+        rail: bool,
+    ) -> Object {
+        let mut bar = Object::new();
+        bar.mesh = template.mesh.clone();
+        bar.shader = template.shader.clone();
+        bar.texture = template.texture.clone();
+        bar.pos = base.local_to_world().mul_point(at);
+        bar.euler = base.euler;
+        bar.scale = half * base.p_scale;
+        if rail {
+            // The roll is the innermost rotation (`Object::local_to_world`): about the bar's
+            // own depth, whatever the frame's pose.
+            bar.euler.z = std::f32::consts::FRAC_PI_2;
+            bar.scale = Vector3::new(bar.scale.y, bar.scale.x, bar.scale.z);
+        }
+        bar
     }
 }
 
@@ -435,14 +491,20 @@ impl ObjectT for Window {
     fn update(&mut self, _ctx: &UpdateCtx) {
         if take_unlock_window() {
             self.locked = false;
+            set_unlocked();
         }
         self.settle();
     }
 
     fn draw(&self, ctx: &RenderCtx, cam: &Camera, _fbo: Option<glow::Framebuffer>) {
-        // The body draws nothing (no shader); the opening is drawn by the portal pass.
-        for bar in &self.bars {
-            bar.draw_impl(ctx, cam);
+        // The body draws nothing (no shader); the opening is drawn by the portal pass. The
+        // bars are placed from the body as it is NOW -- where the grab put it after the fixed
+        // steps -- so a carried frame does not trail the crosshair by a frame. The portal
+        // cannot follow: its warp is baked by `connect` in the step, and the render path
+        // holds the portals immutably; the opening is a frame behind the bars while carried.
+        let base = &self.body.base;
+        for (bar, (at, half, rail)) in self.bars.iter().zip(bar_layout()) {
+            Window::placed_bar(bar, base, at, half, rail).draw_impl(ctx, cam);
         }
     }
 
@@ -465,6 +527,11 @@ impl ObjectT for Window {
     /// step; an unlocked window takes no key.
     fn accepts_key(&self) -> bool {
         self.locked
+    }
+
+    /// The grab has just written `p_scale`: back under the clamp before the frame is drawn.
+    fn on_rescale(&mut self, _p_scale: f32) {
+        self.clamp_scale();
     }
 
     fn as_physical(&self) -> Option<&Physical> {
@@ -690,6 +757,31 @@ mod tests {
             let (y, p) = look_of(&m);
             assert!((y - yaw).abs() < 1e-5 && (p - pitch).abs() < 1e-5, "{yaw} {pitch}: {y} {p}");
         }
+    }
+
+    /// The opening fits under the far room's ceiling and over its floor at the frame's
+    /// height, whatever the grab asks for.
+    #[test]
+    fn the_scale_is_capped_by_the_far_rooms_floor_and_ceiling() {
+        // Hung at 1.35 m: the ceiling is the nearer, 1.08 m up, so a 2.16 m opening at most.
+        assert!((max_scale(1.35) - 1.08 / 0.15).abs() < 1e-4);
+        assert!(max_scale(1.35) * OPENING.1 >= PASS_HEIGHT, "still a door at the hang height");
+        // Mid-height is the most it can ever be; near the floor it is the floor's.
+        assert!(max_scale(0.5 * CEILING) > max_scale(1.35));
+        assert!((max_scale(0.3) - 2.0).abs() < 1e-4);
+        assert!(max_scale(0.3) * OPENING.1 < PASS_HEIGHT, "too low to be a door");
+        // Never under the grab's floor, even dragged along the skirting or above the ceiling.
+        assert_eq!(max_scale(0.0), crate::ext::grab::MIN_P_SCALE);
+        assert_eq!(max_scale(CEILING + 1.0), crate::ext::grab::MIN_P_SCALE);
+    }
+
+    #[test]
+    fn the_unlock_outlives_the_window() {
+        assert!(!unlocked());
+        set_unlocked();
+        assert!(unlocked(), "not consumed: every later Backrooms load builds it unlocked");
+        assert!(unlocked());
+        UNLOCKED.with(|u| u.set(false));
     }
 
     #[test]

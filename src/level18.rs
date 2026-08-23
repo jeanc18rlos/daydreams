@@ -96,6 +96,9 @@ const FACING_MODEL: Vector3 = Vector3 { x: 0.0, y: 0.0, z: -1.0 };
 /// (`interior::arrival`), and the tests below measure the wall and the floor of the file
 /// against them.
 pub const ELEVATOR_SPOT: Vector3 = Vector3 { x: 0.0, y: 0.0, z: SPAWN_AHEAD };
+/// The room's plaster ceiling, above its floor at y = 0 (module docs; a test measures it):
+/// what the window's opening has to fit under on the far side (`ext/window.rs`).
+pub const CEILING: f32 = 2.43;
 pub const ELEVATOR_YAW: f32 = GH_PI;
 
 /// Where the model stands: unturned, shifted so the arrival spot -- [`SPAWN_AHEAD`] in
@@ -183,7 +186,7 @@ mod tests {
         assert!(floor.abs() < 0.01, "floor at {floor}");
         assert!((eye.y - floor - GH_PLAYER_HEIGHT).abs() < 0.01);
         let ceiling = ceiling_over(&t, eye).expect("a ceiling");
-        assert!((ceiling - 2.43).abs() < 0.02, "ceiling at {ceiling}");
+        assert!((ceiling - CEILING).abs() < 0.02, "ceiling at {ceiling}");
     }
 
     /// The reserved wall: flat for the cabin's 4.4 m panel, nothing in front of it for the

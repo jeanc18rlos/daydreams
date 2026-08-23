@@ -175,7 +175,6 @@ thread_local! {
 
 /// Ask the engine to add `obj` to the scene at the end of this step. Requests accumulate
 /// until applied and keep their order.
-#[allow(dead_code)] // EXT: scene code calls it (the window, its key, spawned props).
 pub fn request_spawn(obj: Rc<RefCell<dyn ObjectT>>) {
     SPAWNS.with(|q| q.borrow_mut().push(obj));
 }
@@ -192,7 +191,6 @@ pub fn apply_spawns(objs: &mut PObjectVec) {
 /// Ask the engine to take `obj` out of the scene at the end of this step. Matched by
 /// `Rc::ptr_eq`, so the handle must be a clone of the one the scene was given; an object
 /// that is not in the scene is ignored. Asking twice removes it once.
-#[allow(dead_code)] // EXT: scene code calls it (the window, its key, spawned props).
 pub fn request_remove(obj: &Rc<RefCell<dyn ObjectT>>) {
     REMOVES.with(|q| q.borrow_mut().push(Rc::clone(obj)));
 }
@@ -221,13 +219,11 @@ pub fn apply_removes(objs: &mut PObjectVec) -> Vec<usize> {
 
 /// Tell the window its key has been used. Stays raised until the window takes it, so the
 /// two need not run in any particular order within a step.
-#[allow(dead_code)] // EXT: scene code calls it (the window, its key, spawned props).
 pub fn request_unlock_window() {
     UNLOCK_WINDOW.with(|c| c.set(true));
 }
 
 /// Whether the key has been used since the last call; consumed.
-#[allow(dead_code)] // EXT: scene code calls it (the window, its key, spawned props).
 pub fn take_unlock_window() -> bool {
     UNLOCK_WINDOW.with(Cell::take)
 }

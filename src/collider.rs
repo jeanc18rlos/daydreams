@@ -102,7 +102,6 @@ impl Collider {
     /// have to build corners only to have them turned back into this, so the sorting is
     /// skipped and the matrix written as `create_sorted` would: translation `centre`, X axis
     /// `half_u`, Y axis `half_v`.
-    #[allow(dead_code)] // EXT: scene code builds its in-memory colliders with it.
     pub fn rect(centre: Vector3, half_u: Vector3, half_v: Vector3) -> Collider {
         let mut col = Collider { mat: Matrix4::identity() };
         col.create_sorted(half_u, centre, half_v);

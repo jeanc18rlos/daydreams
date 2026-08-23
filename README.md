@@ -1715,9 +1715,30 @@ the room logic is handed) left for the level through `window::set_arrival` /
 copy and the level being the same model at the same placement, nothing is seen to change --
 no fade. There is no window on the far side; the elevator brings you back.
 
+**Size and height.** The partner stands at the frame's height in the far room, so the
+opening can only be as tall as the room allows there: `window::max_scale` caps the scale at
+`min(y, 2.43 - y) / 0.15` for a frame whose centre is `y` above the floor (`level18::CEILING`),
+and the window clamps itself to it after every write of the grab's (`on_rescale`) and every
+step (`settle`). At the hang height of 1.35 m that is 7.2 -- a 2.16 m door, past
+`PASS_HEIGHT` -- where the grab's own cap of 25 would have put the top of the opening
+through the far ceiling and shown the outside of the model as a black band across it; hung
+low on the wall, the cap is the floor's and the window stays small. The grab's eased scale
+keeps growing past the clamp; the clamp is reapplied after each write, so the drawn frame and
+the portal never disagree. **The unlock is the process's** (`window::unlocked`): the window
+records the key's use in a thread-local it reads on every build, so a player who unlocks it,
+rides the elevator away and comes back finds it unlocked still -- the key is single-use. **The
+bars are placed at draw time** from the body as the grab left it that frame; placed in the
+fixed step they trailed the crosshair by a frame while carried. The portal cannot follow --
+its warp is baked by `connect` in the step and the render path holds the portals immutably
+-- so the opening is one frame behind the bars while the window is in the hand. Known and
+left: the held window gets no silhouette outline (the outline draws `base.mesh`, the
+collider-only one), and the bars carry no colliders, so a head hugging a jamb on the way
+through passes through it.
+
 **Dev flags.** Two hidden ones, with `--scene`: `--window-scale S` builds the window at
-physical scale `S` and `--unlock-window` builds it as if the key had been used. They set
-`window::set_preset` for the process, so a restart gives the same window again.
+physical scale `S` (within the grab's clamps, `0.05..=25`; the window's own cap applies after)
+and `--unlock-window` builds it as if the key had been used. They set `window::set_preset`
+for the process, so a restart gives the same window again.
 
 ```sh
 # The small locked window: green-tinted grass through it, the hand cursor and the hint
