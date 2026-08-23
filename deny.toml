@@ -1,0 +1,102 @@
+# cargo-deny configuration (https://embarkstudios.github.io/cargo-deny/).
+# Run locally with `cargo deny check`; CI runs it in the `deny` job.
+
+[graph]
+# The game is built for these three. Dropping the Android/iOS/wasm/redox arms of winit,
+# cpal and gilrs from the graph keeps the licence and advisory reports about crates that
+# actually ship.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+all-features = false
+
+[advisories]
+version = 2
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = [
+    # ttf-parser is declared unmaintained. It reaches the tree only through winit's
+    # sctk-adwaita (client-side window decorations on Wayland), which no released winit
+    # has moved off yet; there is no upgrade to take. Revisit when winit bumps
+    # sctk-adwaita or ab_glyph moves to skrifa.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser via winit -> sctk-adwaita -> ab_glyph; no released alternative" },
+]
+
+[licenses]
+version = 2
+# Permissive licences only; every entry below is one that at least one crate in the tree
+# actually carries. Anything copyleft or unknown fails the check and is decided by hand.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unlicense",
+    "Unicode-3.0",
+    # symphonia (kira's decoders), option-ext, triple_buffer. File-level copyleft: their
+    # sources must stay available under MPL, which is the case as they are used unmodified.
+    "MPL-2.0",
+]
+# Not listed because no crate carries them and cargo-deny warns about unused entries:
+# Unicode-DFS-2016 (superseded by Unicode-3.0 in unicode-ident) and OFL-1.1, which is the
+# licence of the Roboto Condensed face under assets/ -- a shipped asset, not a crate; see
+# THIRD_PARTY.md.
+confidence-threshold = 0.8
+exceptions = []
+
+[licenses.private]
+ignore = true
+
+[bans]
+# Several crates are legitimately present twice (bitflags 1 and 2, objc2 0.5 and 0.6,
+# thiserror 1 and 2 ...) because the windowing and audio stacks moved at different
+# times. Warn rather than fail on those; fail on the ones that matter below.
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+deny = [
+    # A second copy of the windowing stack would mean two event loops' worth of types
+    # that do not interconvert and a raw-window-handle mismatch at the glutin boundary.
+    # Any version other than the one Cargo.toml names is a duplicate.
+    { crate = "winit:<0.30", reason = "one winit: the GL context and the event loop must agree on handle types" },
+    { crate = "glutin:<0.32", reason = "one glutin, matched to the single winit above" },
+    { crate = "glutin-winit:<0.5", reason = "one glutin-winit, matched to the glutin above" },
+    # glow <= 0.17 panics on macOS in get_query_parameter_u32 (see Cargo.toml).
+    { crate = "glow:<0.18", reason = "glow <= 0.17 panics in the occlusion-query path on macOS" },
+]
+# The duplicates known today, by their older line, so the report stays quiet about them and
+# loud about any new one. Each is a transitive pin from the windowing/audio stacks: the
+# 0.2 objc2 family and bitflags 1 from winit's macOS backend and core-graphics, thiserror 1
+# from gltf, syn 2 from the derive macros, windows-sys at three versions from winit, cpal
+# and gilrs. They fall out on their own as those crates release.
+skip = [
+    { crate = "bitflags:1.3.2" },
+    { crate = "block2:0.5.1" },
+    { crate = "downcast-rs:1.2.1" },
+    { crate = "linux-raw-sys:0.4.15" },
+    { crate = "mach2:0.4.3" },
+    { crate = "objc2:0.5.2" },
+    { crate = "objc2-app-kit:0.2.2" },
+    { crate = "objc2-foundation:0.2.2" },
+    { crate = "rustix:0.38.44" },
+    { crate = "syn:2.0.119" },
+    { crate = "thiserror:1.0.69" },
+    { crate = "thiserror-impl:1.0.69" },
+    { crate = "windows-sys:0.52.0" },
+    { crate = "windows-sys:0.59.0" },
+]
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

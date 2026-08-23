@@ -1,0 +1,5 @@
+# `ui.rs`'s `draw_quad(&self, tex, x, y, w, h, uv, color)` takes eight: a quad really is a
+# texture, a rectangle, its UVs and a tint, and packing those into a struct for one private
+# method would move the noise rather than remove it. Nine leaves one of headroom; anything
+# beyond that is a genuine smell and should trip the lint.
+too-many-arguments-threshold = 9

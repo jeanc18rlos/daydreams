@@ -1,3 +1,18 @@
+# Line endings: let git normalise text on the way in and check out native endings, so a
+# Windows clone does not dirty every shader and .obj. Binaries are listed so git never
+# tries to diff, merge or normalise them.
+* text=auto
+*.glb binary
+*.mp3 binary
+*.ttf binary
+*.png binary
+*.bmp binary
+
+# Git LFS for the large assets. The two GLBs, the soundtrack, the font and the larger
+# OBJ meshes (escher_relativity.obj alone is 47 MB) are 150 MB of binary that should not
+# live in the packfile. These lines only govern files added from now on: the files
+# already in history stay ordinary blobs until `git lfs migrate import` rewrites them --
+# see README, "Shipping", for the one-time command to run before the first push.
 *.glb filter=lfs diff=lfs merge=lfs -text
 *.mp3 filter=lfs diff=lfs merge=lfs -text
 *.ttf filter=lfs diff=lfs merge=lfs -text

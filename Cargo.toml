@@ -2,6 +2,11 @@
 name = "daydreams"
 version = "0.1.0"
 edition = "2021"
+# The floor the code needs: `Option::is_none_or` (engine.rs, raycast.rs, trimesh.rs) is 1.82.
+# The committed Cargo.lock resolves to crates that ask for more (ordered-float 5.5 via
+# parry3d wants 1.90), so an older toolchain would have to re-resolve; CI builds on stable.
+rust-version = "1.82"
+authors = ["Jean Rojas <jeanc16rlos@gmail.com>"]
 description = "DayDreams -- a game built on a Rust port of CodeParade's NonEuclidean rendering engine (HackerPoet/NonEuclidean)"
 license = "MIT"
 
@@ -44,12 +49,85 @@ simplelog = "0.12.2"
 directories = "6.0.0"
 rfd = "0.17.2"
 thiserror = "2.0.20"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.4"
+
+[dev-dependencies]
+# Temp directories for the settings round-trip and migration tests.
+tempfile = "3.27.0"
 
 [profile.release]
 opt-level = 3
+lto = "fat"
+codegen-units = 1
+# The crash dialog runs in a panic hook and needs the stack to unwind past it; "abort"
+# would kill the process before it could show anything.
+panic = "unwind"
+# Line tables only: a crash log can name the source line without shipping full DWARF.
+debug = 1
+
+# What actually ships. Same code as release, minus the symbol table the crash log does not
+# need once the line tables are gone (`cargo build --profile dist`).
+[profile.dist]
+inherits = "release"
+strip = "symbols"
+debug = false
 
 # The fixed-step loop runs at 500 Hz (GH_DT = 0.002) and the collision pass is
 # O(objects^2 * hitSpheres * colliders), so a debug build cannot keep up with real time.
 # Give the dev profile enough optimization to remain playable.
 [profile.dev]
 opt-level = 2
+
+# Dependencies do not change between edits, so they can take the full optimisation once
+# and stay cached; the per-edit rebuild is only the crate itself at opt-level 2.
+[profile.dev.package."*"]
+opt-level = 3
+
+[lints.rust]
+# Nothing here is allowed beyond the defaults; the section exists so a future `deny` has
+# somewhere to go without a second audit of the clippy one below.
+
+[lints.clippy]
+# The engine files are transcriptions of the C++ (see README, "What port means here") and
+# are not edited for style: each lint below asks for an idiomatic rewrite of a line that
+# exists in the shape it has because the original has that shape.
+# GameHeader.h's `GH_PI = 3.141592653589793` -- the original's literal, truncated to f32 by
+# the compiler exactly as the C++ one was.
+approx_constant = "allow"
+excessive_precision = "allow"
+# Mesh.cpp's line parser tests `line[0..2]` and then reads from `line[2..]`.
+manual_strip = "allow"
+# Index loops over `lb`, `hit_spheres`, `v`: the C++ indexes, and the ported loop bodies
+# use the index for more than the element.
+needless_range_loop = "allow"
+# `a = a * b` over Matrix4/Vector3, as Vector.h writes it (it defines no compound operators).
+assign_op_pattern = "allow"
+# Player.cpp:87's two-branch pitch limit.
+manual_clamp = "allow"
+# Mesh.cpp's explicit empty constructor and Resources.cpp's map-insert idiom.
+derivable_impls = "allow"
+unwrap_or_default = "allow"
+# Engine.cpp's BMP row padding loop and the ported `match` shapes in the render path.
+manual_repeat_n = "allow"
+redundant_pattern_matching = "allow"
+collapsible_match = "allow"
+# The level files' tests assert on layout constants on purpose (door hysteresis, the room
+# enclosing its model, the far world past the weather split): a compile-time check that a
+# tuned constant still satisfies a relation it was tuned for. `const { assert!() }` would
+# need const float methods the MSRV does not have.
+assertions_on_constants = "allow"
+
+# cargo-bundle (`cargo bundle --profile dist`) -- a .app on macOS, .deb on Linux. The four
+# resource directories are read by relative path at runtime, so they ship inside the bundle
+# next to the binary and the asset-root resolution finds them there.
+[package.metadata.bundle]
+name = "DayDreams"
+# Placeholder: no domain is registered for the project yet.
+identifier = "com.daydreams.game"
+category = "public.app-category.games"
+short_description = "A game built on a non-Euclidean rendering engine."
+resources = ["Meshes", "Textures", "Shaders", "assets"]
+osx_minimum_system_version = "11.0"
+# No icon exists yet; an empty list keeps cargo-bundle from failing on a missing file.
+icon = []
