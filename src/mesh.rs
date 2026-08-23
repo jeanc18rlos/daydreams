@@ -134,6 +134,9 @@ fn char_at(b: &[u8], i: usize) -> u8 {
 
 impl ParsedMesh {
     // Mesh::AddFace (Mesh.cpp:171-215)
+    // Ten with `self`: the C++ signature's nine -- the two palettes, three vertex/uv index pairs
+    // and the 3D-texture flag -- kept as they are because the body mutates the six indices by
+    // name; a struct would only move them.
     #[allow(clippy::too_many_arguments)]
     fn add_face(
         &mut self,

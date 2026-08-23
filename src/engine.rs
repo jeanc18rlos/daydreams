@@ -472,7 +472,6 @@ impl Engine {
     /// `hold` lists key slots to keep down every frame (`--forward`, `--strafe`, `--sprint`),
     /// so the shot can photograph the player walking or running and the `[shot]` position
     /// print how far they travelled.
-    #[allow(clippy::too_many_arguments)] // one flag each; a struct would only rename them
     pub fn start_direct(
         &self,
         scene: Option<usize>,
