@@ -33,13 +33,23 @@
 //! * [`request_scene_load`] asks for another scene (the elevator's ride). Applied by
 //!   `Engine::run_frame` once the fixed-step loop is over -- never mid-step, because the load
 //!   replaces the object vector the step is iterating.
+//! * [`request_spawn`] and [`request_remove`] add an object to the scene and take one out of
+//!   it (a key that has been used, a prop a puzzle conjures). Applied by `Engine::update` after
+//!   the portal pass, like the respawn, for the same reason the scene load waits: the object
+//!   vector is iterated by index through the whole step. Removal shifts the indices of
+//!   everything after the removed object, and the grab holds one of those indices across
+//!   frames, so `apply_removes` reports what went and the engine hands that to
+//!   `grab::GrabState::on_removed`.
+//! * [`request_unlock_window`] is a one-shot flag between two objects that cannot see each
+//!   other: the key raises it, the window takes it with [`take_unlock_window`].
 
 use crate::camera::Camera;
 use crate::object::{Object, ObjectT, RenderCtx, UpdateCtx};
 use crate::player::Player;
-use crate::scene::PPortalVec;
+use crate::scene::{PObjectVec, PPortalVec};
 use crate::vector::Vector3;
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 /// An invisible object that runs a closure every fixed step.
 pub struct RoomLogic {
@@ -154,6 +164,74 @@ pub fn take_scene_load() -> Option<usize> {
     SCENE_LOAD.with(|c| c.take())
 }
 
+thread_local! {
+    /// EXT: objects a room has asked to have added to the scene, in request order.
+    static SPAWNS: RefCell<Vec<Rc<RefCell<dyn ObjectT>>>> = const { RefCell::new(Vec::new()) };
+    /// EXT: objects a room has asked to have taken out of the scene, by identity.
+    static REMOVES: RefCell<Vec<Rc<RefCell<dyn ObjectT>>>> = const { RefCell::new(Vec::new()) };
+    /// EXT: whether the window's key has been used since the window last looked.
+    static UNLOCK_WINDOW: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Ask the engine to add `obj` to the scene at the end of this step. Requests accumulate
+/// until applied and keep their order.
+#[allow(dead_code)] // EXT: scene code calls it (the window, its key, spawned props).
+pub fn request_spawn(obj: Rc<RefCell<dyn ObjectT>>) {
+    SPAWNS.with(|q| q.borrow_mut().push(obj));
+}
+
+/// Carry out pending spawns: the objects are appended to the scene's object vector in the
+/// order they were asked for. Called by `Engine::update` after the portal pass, once per
+/// step. Appended, not inserted before the player: `load_scene` pushes the player last, but
+/// nothing reads the vector's tail as the player -- every pass walks the whole vector and
+/// dispatches on `as_physical`, and the grab and the room closures keep `Rc`s, not positions.
+pub fn apply_spawns(objs: &mut PObjectVec) {
+    SPAWNS.with(|q| objs.append(&mut q.borrow_mut()));
+}
+
+/// Ask the engine to take `obj` out of the scene at the end of this step. Matched by
+/// `Rc::ptr_eq`, so the handle must be a clone of the one the scene was given; an object
+/// that is not in the scene is ignored. Asking twice removes it once.
+#[allow(dead_code)] // EXT: scene code calls it (the window, its key, spawned props).
+pub fn request_remove(obj: &Rc<RefCell<dyn ObjectT>>) {
+    REMOVES.with(|q| q.borrow_mut().push(Rc::clone(obj)));
+}
+
+/// Carry out pending removals on the scene's object vector; the rest keep their order.
+/// Called by `Engine::update` after the portal pass, once per step. Returns the indices the
+/// removed objects HAD, ascending, so the engine can fix whatever still names objects by
+/// index (`grab::GrabState::on_removed`); empty when nothing went.
+pub fn apply_removes(objs: &mut PObjectVec) -> Vec<usize> {
+    let asked = REMOVES.with(|q| std::mem::take(&mut *q.borrow_mut()));
+    if asked.is_empty() {
+        return Vec::new();
+    }
+    let gone: Vec<usize> = objs
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| asked.iter().any(|a| Rc::ptr_eq(a, o)))
+        .map(|(i, _)| i)
+        .collect();
+    // Back to front, so each removal leaves the indices still to go untouched.
+    for &i in gone.iter().rev() {
+        objs.remove(i);
+    }
+    gone
+}
+
+/// Tell the window its key has been used. Stays raised until the window takes it, so the
+/// two need not run in any particular order within a step.
+#[allow(dead_code)] // EXT: scene code calls it (the window, its key, spawned props).
+pub fn request_unlock_window() {
+    UNLOCK_WINDOW.with(|c| c.set(true));
+}
+
+/// Whether the key has been used since the last call; consumed.
+#[allow(dead_code)] // EXT: scene code calls it (the window, its key, spawned props).
+pub fn take_unlock_window() -> bool {
+    UNLOCK_WINDOW.with(Cell::take)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,5 +294,59 @@ mod tests {
         request_scene_load(7);
         assert_eq!(take_scene_load(), Some(7));
         assert_eq!(take_scene_load(), None);
+    }
+
+    /// A scene of bare objects, each told apart by its x position.
+    fn scene(n: usize) -> PObjectVec {
+        (0..n)
+            .map(|i| {
+                let mut o = Object::new();
+                o.pos.x = i as f32;
+                Rc::new(RefCell::new(o)) as Rc<RefCell<dyn ObjectT>>
+            })
+            .collect()
+    }
+
+    fn xs(v: &PObjectVec) -> Vec<f32> {
+        v.iter().map(|o| o.borrow().base().pos.x).collect()
+    }
+
+    #[test]
+    fn spawns_are_appended_in_request_order_and_once() {
+        let mut v = scene(2);
+        apply_spawns(&mut v);
+        assert_eq!(v.len(), 2, "nothing asked for, nothing added");
+        let new = scene(3);
+        request_spawn(Rc::clone(&new[2]));
+        request_spawn(Rc::clone(&new[0]));
+        apply_spawns(&mut v);
+        assert_eq!(xs(&v), [0.0, 1.0, 2.0, 0.0]);
+        assert!(Rc::ptr_eq(&v[2], &new[2]) && Rc::ptr_eq(&v[3], &new[0]));
+        apply_spawns(&mut v);
+        assert_eq!(v.len(), 4, "consumed");
+    }
+
+    #[test]
+    fn removes_match_by_identity_keep_order_and_report_old_indices() {
+        let mut v = scene(5);
+        assert!(apply_removes(&mut v).is_empty());
+        let stranger = scene(1);
+        request_remove(&v[3]);
+        request_remove(&v[1]);
+        request_remove(&v[1]); // twice: once is enough
+        request_remove(&stranger[0]); // not in the scene: ignored
+        assert_eq!(apply_removes(&mut v), [1, 3]);
+        assert_eq!(xs(&v), [0.0, 2.0, 4.0]);
+        assert!(apply_removes(&mut v).is_empty(), "consumed");
+        assert_eq!(v.len(), 3);
+    }
+
+    #[test]
+    fn the_unlock_flag_is_one_shot_and_sticks_until_taken() {
+        assert!(!take_unlock_window());
+        request_unlock_window();
+        request_unlock_window();
+        assert!(take_unlock_window());
+        assert!(!take_unlock_window());
     }
 }

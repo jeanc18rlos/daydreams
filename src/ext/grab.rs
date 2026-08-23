@@ -226,6 +226,20 @@ impl GrabState {
         self.just_released = false;
         self.fit_shrunk = false;
     }
+
+    /// Objects at these indices (ascending, as they were before the removal) have just been
+    /// taken out of the object vector (`room::apply_removes`). The held index moves down by
+    /// the number removed in front of it; a held object that went is simply no longer held --
+    /// no release sound, no `on_release`, there is nothing left to let go of. `hover` needs no
+    /// fixing: it is recomputed from scratch every frame.
+    pub fn on_removed(&mut self, gone: &[usize]) {
+        let Some(held) = self.held else { return };
+        if gone.contains(&held) {
+            self.clear();
+        } else {
+            self.held = Some(held - gone.iter().filter(|&&i| i < held).count());
+        }
+    }
 }
 
 /// Scale an object would have at centre distance `d`, with the engine's hard clamps applied.
@@ -817,6 +831,20 @@ mod tests {
         let (k, r) = (0.5f32, 0.5f32);
         let (d, _) = fit_distance(10.0, k, r, |_, _| true, eye(), dir);
         assert!((d - player_floor(k, r)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_removal_shifts_or_drops_the_held_index() {
+        let mut s = GrabState { held: Some(5), ..GrabState::default() };
+        s.on_removed(&[1, 3]);
+        assert_eq!(s.held, Some(3), "two removed in front");
+        s.on_removed(&[7, 9]);
+        assert_eq!(s.held, Some(3), "none in front");
+        s.on_removed(&[0, 3]);
+        assert_eq!(s.held, None, "the held object itself went");
+        assert!(!s.just_released, "nothing to let go of");
+        s.on_removed(&[0]);
+        assert_eq!(s.held, None, "holding nothing stays nothing");
     }
 
     #[test]
