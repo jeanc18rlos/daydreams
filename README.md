@@ -692,6 +692,12 @@ and then have no further say. Rather than change that trait, rooms needing behav
 `RoomLogic` object: an ordinary `ObjectT` with no mesh and no shader, so `Object::Draw` skips it
 (`Object.cpp:21` only draws when both are present) while `Engine::Update` still ticks it.
 
+The one thing such logic cannot reach is the player — `Load` receives `&mut Player`, never the
+`Rc` the engine keeps it in — so a room that needs to move them (the Backrooms, when they have
+fallen under its floor) calls `request_respawn`, and the engine applies it at the end of the
+same step, after the portal pass, through `set_position`: `prev_pos` moves with `pos`, so the
+next step's `try_portal` sees no segment that could sweep a doorway.
+
 ## Gamepad — `ext/gamepad.rs`
 
 CodeParade *registered* joystick and gamepad raw-input devices in `Engine::SetupInputs`
@@ -829,12 +835,17 @@ Where it went, in order of effect:
 * **The door GLB is pre-shrunk** (`tools/shrink_glb.py`): its PNGs were 4096², and the loader
   was decoding ~400 MB of RGBA on three threads to resize them to its 512² `MAP` on every
   load. They are stored at 512² now, resized once with the same filter, and the file went
-  from 79 MB to 1.3 MB. Geometry and everything else in it are byte-identical.
-* **The old scene outlives the load.** `Engine::load_scene` used to clear the object and
-  portal vectors before `Scene::load`, which expired every `Weak` in the resource caches; the
-  title → NEW GAME transition therefore re-parsed the terrain, re-built the grass and re-decoded
-  the door. The vectors are moved into locals, the new scene loads against warm caches, and
-  the old objects drop afterwards.
+  from 79 MB to 1.3 MB. The geometry bufferViews are copied byte for byte; the JSON is
+  re-serialised with identical values (only the float spellings may differ).
+* **The old scene's objects outlive the load.** `Engine::load_scene` used to clear the object
+  and portal vectors before `Scene::load`, which expired every `Weak` in the resource caches;
+  the title → NEW GAME transition therefore re-parsed the terrain, re-built the grass and
+  re-decoded the door. The object vector is moved into a local, the new scene loads against
+  warm caches, and the old objects drop afterwards. The portals are the exception and are
+  dropped first: each owns eager 2048² framebuffers (some 60 MB a portal) that nothing reuses,
+  so keeping twelve of them across the load of twelve more would double GPU memory for the
+  duration. The mesh and two shaders a portal re-acquires are pinned in `ExtState` instead,
+  which is what keeps the reload at the `< 1 ms` above.
 * Smaller things: `Shader` memoises by-name uniform locations (six lookups per object per pass
   were each a `CString` and a driver call); the eye position is computed once per pass rather
   than inverted per object; the blade vertex shader takes `vp` and `l2w` instead of recovering
@@ -856,10 +867,10 @@ Small additions, each tagged `// EXT:`:
 | `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`R` and the scene keys `8`–`'` (`8` `9` `0` `-` `=` `[` `]` `\` `;` `'`); `Shift` into the `VK_SHIFT` slot and the resolved sprint multipliers |
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
 | `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum and eye, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery |
-| `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and query pool; the old scene kept alive across `load_scene`; the triangle-mesh rounds in the collision pass |
+| `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and query pool; the old scene's objects kept alive across `load_scene` (its portals dropped first); the triangle-mesh rounds in the collision pass; a room's respawn request applied after the portal pass; the `--forward`/`--strafe`/`--sprint` held keys |
 | `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4` |
 | `props.rs` | `Sky::draw` takes the eye from the inverse it already computes |
-| `main.rs` | gamepad polling in `about_to_wait`; `--no-vsync`; key levels dropped on focus loss |
+| `main.rs` | gamepad polling in `about_to_wait`; the dev flags (`--no-vsync`, `--forward`, `--strafe`, `--sprint`, …); key levels dropped on focus loss |
 
 ### One bug this surfaced
 

@@ -93,6 +93,17 @@ pub struct ExtState {
     /// cache warm. Dropped with the engine, while the GL context is still current.
     #[allow(dead_code)] // held, never read: its whole job is to keep the Rc count above zero
     pub grass: std::rc::Rc<grassfield::GrassMesh>,
+    /// What `Portal::new` acquires -- `double_quad.obj` and the `portal` / `pink` shaders --
+    /// pinned for the same reason as the grass. `Engine::load_scene` drops the old portals
+    /// BEFORE loading the new scene (their framebuffers are the one thing worth not holding
+    /// twice), and without a holder these three would expire with them and be re-parsed and
+    /// re-compiled on every reload.
+    #[allow(dead_code)] // held, never read
+    pub portal_pins: (
+        std::rc::Rc<crate::mesh::Mesh>,
+        std::rc::Rc<crate::shader::Shader>,
+        std::rc::Rc<crate::shader::Shader>,
+    ),
     pub sprint: Sprint,
     /// `Player::steps()` as of the last footstep fired, so each footfall sounds once. Never
     /// reset: the counter only ever grows, and equality is the test, so a scene load (which
@@ -112,6 +123,11 @@ impl ExtState {
             ghost_shader: res.acquire_shader("ghost"),
             sky: skybake::SkyBake::new(gl, res),
             grass: grassfield::GrassMesh::acquire(gl),
+            portal_pins: (
+                res.acquire_mesh("double_quad.obj"),
+                res.acquire_shader("portal"),
+                res.acquire_shader("pink"),
+            ),
             sprint: Sprint::new(crate::ext::view::time()),
             footsteps_heard: 0,
         }

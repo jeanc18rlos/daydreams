@@ -683,16 +683,22 @@ impl Engine {
                 cur_scene.unload();
             }
         }
-        // EXT: the old scene's objects and portals are moved out here and dropped only AFTER
-        // the new scene has loaded (was: vObjects.clear(); vPortals.clear(), Engine.cpp:138-139).
-        // The resource caches hold `Weak` references that expire with the last object using
-        // them, so clearing first meant title -> NEW GAME -- which reloads the very scene on
-        // screen -- re-parsed every mesh, re-decoded the door and re-uploaded the lot. Kept
-        // alive across the load, every `acquire_*` upgrades instead. The RefCells are only
-        // borrowed for the length of the take, and nothing in the old vectors is touched
-        // again, so the later drop cannot collide with the load's own borrows.
+        // EXT: the old scene's objects are moved out here and dropped only AFTER the new scene
+        // has loaded (was: vObjects.clear(); vPortals.clear(), Engine.cpp:138-139). The
+        // resource caches hold `Weak` references that expire with the last object using them,
+        // so clearing first meant title -> NEW GAME -- which reloads the very scene on screen
+        // -- re-parsed every mesh, re-decoded the door and re-uploaded the lot. Kept alive
+        // across the load, every `acquire_*` upgrades instead. The RefCell is only borrowed
+        // for the length of the take, and nothing in the old vector is touched again, so the
+        // later drop cannot collide with the load's own borrows.
+        //
+        // The PORTALS are not kept: each owns GH_MAX_RECURSION - 1 eager 2048-square
+        // framebuffers that no cache reuses, so holding twelve of them across a load of twelve
+        // more would double the scene's GPU memory for the duration. They go first. The mesh
+        // and shaders a new portal re-acquires are pinned in `ExtState` instead, so the reload
+        // stays warm without them.
+        drop(std::mem::take(&mut *self.v_portals.borrow_mut()));
         let old_objects = std::mem::take(&mut *self.v_objects.borrow_mut());
-        let old_portals = std::mem::take(&mut *self.v_portals.borrow_mut());
         self.player.borrow_mut().reset();
 
         // EXT: per-scene shader state starts clean; a scene that wants it sets it in load().
@@ -730,7 +736,6 @@ impl Engine {
         // EXT: now the old scene can go. Anything the new one did not re-acquire is freed here,
         // GL objects included, while the context is current.
         drop(old_objects);
-        drop(old_portals);
         println!("[load] scene {ix} in {:.0} ms", t0.elapsed().as_secs_f32() * 1e3);
     }
 
@@ -761,9 +766,10 @@ impl Engine {
         //Collisions
         {
             let v_objects = self.v_objects.borrow();
-            // EXT: scratch copy of the current object's hit spheres, reused across objects and
-            // steps. The copy itself is forced by the borrow rules below; allocating a fresh Vec
-            // for it 500 times a second was not.
+            // EXT: scratch copy of the current object's hit spheres, reused across the objects
+            // of this step (it is a local of the step, so each step allocates it once rather
+            // than once per physical object). The copy itself is forced by the borrow rules
+            // below; allocating a fresh Vec per object 500 times a second was not.
             let mut hit_spheres: Vec<crate::sphere::Sphere> = Vec::new();
             //For each physics object
             for i in 0..v_objects.len() {
