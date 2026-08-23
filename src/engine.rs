@@ -505,10 +505,13 @@ impl Engine {
     /// so the shot can photograph the player walking or running and the `[shot]` position
     /// print how far they travelled. `arrive` loads the scene as an elevator ride would, and
     /// then the look is the cabin's unless a yaw or pitch was asked for; `ride_at` presses E
-    /// on that rendered frame (`--arrive`, `--ride-at`, src/ext/elevator.rs).
+    /// on that rendered frame (`--arrive`, `--ride-at`, src/ext/elevator.rs). `drop_props`
+    /// lifts every rigid-body prop by that many metres once the scene is loaded
+    /// (`--drop-props`, src/ext/physics.rs).
     pub fn start_direct(&self, run: crate::app::cli::DirectRun) {
         use crate::app::cli::{DirectRun, DirectScene};
-        let DirectRun { scene, shot, frames, yaw, pitch, pos, hold, arrive, ride_at } = run;
+        let DirectRun { scene, shot, frames, yaw, pitch, pos, hold, arrive, ride_at, drop_props } =
+            run;
         *self.dev_hold.borrow_mut() = hold;
         self.dev_ride_at.set(ride_at);
         if let Some(scene) = scene {
@@ -536,6 +539,9 @@ impl Engine {
                     .borrow_mut()
                     .base
                     .set_position(crate::vector::Vector3::new(p[0], p[1], p[2]));
+            }
+            if let Some(h) = drop_props {
+                crate::ext::physics::with(|w| w.lift_all(h));
             }
         }
         *self.shot_path.borrow_mut() = shot;
@@ -599,6 +605,9 @@ impl Engine {
                 if let Some((avg, p95, n)) = self.frame_clock.borrow().stats() {
                     log::info!("[shot] avg frame {avg:.2} ms, p95 {p95:.2} ms over {n} frames");
                 }
+                // EXT: and the rigid-body world's step cost and where its props are
+                // (src/ext/physics.rs).
+                crate::ext::physics::log_report();
             }
             Err(e) => log::error!("[shot] could not write {}: {e}", path.display()),
         }
@@ -764,6 +773,10 @@ impl Engine {
         // equivalent of pushing a shared_ptr<Player> into a vector<shared_ptr<Object>>
         // (was: vObjects.push_back(player), Engine.cpp:143).
         self.v_objects.borrow_mut().push(Rc::clone(&self.player) as Rc<RefCell<dyn ObjectT>>);
+        // EXT: the rigid-body world's static colliders are this scene's scenery
+        // (src/ext/physics.rs): the object list is complete now, and the old scene's props,
+        // still alive below, unregister themselves when it is dropped.
+        crate::ext::physics::rebuild_static(&self.v_objects.borrow());
 
         // EXT: drop anything being carried (the object vector was just replaced, so a held
         // index would dangle) and cross-fade to this scene's music.
@@ -904,6 +917,12 @@ impl Engine {
                 }
             }
         }
+
+        // EXT: one step of the rigid-body world (src/ext/physics.rs), with the player's eye
+        // for its capsule. After the collision pass, so the capsule goes where the player
+        // has been pushed to this step; before the portal pass, so a prop the next object
+        // update reads is where the solver left it and not a step stale.
+        crate::ext::physics::step(self.player.borrow().obj().pos);
 
         //Portals
         {

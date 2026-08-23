@@ -34,10 +34,12 @@
 //! as it is parsed (`Load::cut_boxes`, `ext/carve.rs`), so the triangles a collider is built
 //! from are the ones that are drawn -- a wall is gone from both or from neither.
 
+use std::sync::Arc;
+
 use crate::vector::{Matrix4, Vector3};
 use parry3d::math::Vector as PVec;
 use parry3d::query::{PointQuery, Ray, RayCast};
-use parry3d::shape::TriMesh;
+use parry3d::shape::{TriMesh, TriMeshFlags};
 
 /// Rounds of `push_sphere` the engine runs per hit sphere per step. Eight is more than any
 /// corner needs -- three mutually perpendicular faces resolve in three -- and bounds the cost of
@@ -50,7 +52,10 @@ pub const MAX_PUSHES: usize = 8;
 const DEGENERATE_AREA_SQ: f32 = 1e-16;
 
 pub struct TriMeshCollider {
-    mesh: TriMesh,
+    /// Shared, because the rigid-body world (`ext/physics.rs`) collides its props with the
+    /// same mesh: one BVH build per scene load serves both, where a second copy would cost
+    /// as much again (16 ms for the Backrooms' 70k triangles).
+    mesh: Arc<TriMesh>,
 }
 
 fn to_p(v: Vector3) -> PVec {
@@ -86,14 +91,25 @@ impl TriMeshCollider {
                 (b - a).cross(c - a).length_squared() > DEGENERATE_AREA_SQ
             })
             .collect();
-        let mesh = TriMesh::new(vertices, tris).expect("trimesh collider: no triangles survived");
-        TriMeshCollider { mesh }
+        // FIX_INTERNAL_EDGES is for the rigid bodies (`ext/physics.rs`): it gives every
+        // triangle the pseudo-normals of its edges, so a body rolling across a flat floor of
+        // many triangles is not bumped at each shared edge by that triangle's own normal. It
+        // merges duplicate vertices on the way (the same geometry, fewer vertices) and costs
+        // about half as much again as the BVH alone. Nothing here reads the pseudo-normals:
+        // `push_sphere` projects onto triangles one at a time, and a ray cast never did.
+        let mesh = TriMesh::with_flags(vertices, tris, TriMeshFlags::FIX_INTERNAL_EDGES)
+            .expect("trimesh collider: no triangles survived");
+        TriMeshCollider { mesh: Arc::new(mesh) }
     }
 
-    /// Test-only: how many triangles survived the build.
-    #[cfg(test)]
+    /// How many triangles survived the build.
     pub fn num_triangles(&self) -> usize {
         self.mesh.num_triangles()
+    }
+
+    /// The mesh itself, shared: what the rigid-body world's fixed collider is built on.
+    pub fn shape(&self) -> Arc<TriMesh> {
+        Arc::clone(&self.mesh)
     }
 
     /// The push that moves a sphere out of its deepest penetration, or `None` if it touches
