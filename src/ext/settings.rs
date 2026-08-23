@@ -31,7 +31,7 @@
 //! # Degrading
 //!
 //! Like `audio.rs`, everything here is a no-op on failure. An unreadable or corrupt settings
-//! file leaves the defaults in place (and says so on stderr, once), a bad value keeps that one
+//! file leaves the defaults in place (and says so in the log, once), a bad value keeps that one
 //! field's default, an out-of-range notch is clamped, and an unwritable file loses the change
 //! at exit rather than interrupting the game to say so. A game must not refuse to run over its
 //! own preferences.
@@ -183,7 +183,7 @@ fn path() -> Option<PathBuf> {
 pub fn load() {
     match path() {
         Some(p) => load_from(&p, Path::new(LEGACY_FILE)),
-        None => eprintln!("[settings] no config directory; settings will not be saved"),
+        None => log::warn!("[settings] no config directory; settings will not be saved"),
     }
 }
 
@@ -204,7 +204,7 @@ fn load_from(path: &Path, legacy: &Path) {
                 write(path);
             }
         }
-        Err(e) => eprintln!("[settings] could not read {}: {e}; using defaults", path.display()),
+        Err(e) => log::warn!("[settings] could not read {}: {e}; using defaults", path.display()),
     }
 }
 
@@ -214,7 +214,14 @@ fn apply(text: &str, path: &Path) {
     match toml::from_str::<Settings>(text) {
         Ok(s) => s.apply(),
         Err(e) => {
-            eprintln!("[settings] {} is not valid TOML; using defaults: {e}", path.display());
+            // `message()`, not `{e}`: Display renders the offending line with a caret under it,
+            // three lines where the log wants one. The position is in the span the message
+            // already names.
+            log::warn!(
+                "[settings] {} is not valid TOML; using defaults: {}",
+                path.display(),
+                e.message()
+            );
             Settings::default().apply();
         }
     }
@@ -351,6 +358,55 @@ mod tests {
         adjust_mouse(-99);
         load_from(&file, &legacy);
         assert_eq!(mouse_level(), 7, "the migrated file should stand on its own");
+    }
+
+    /// The new file, when it exists, is the one that counts: a legacy `./settings.cfg` left
+    /// behind in the working directory must not override it on every launch, or a developer
+    /// who tunes a setting in the menu sees it snap back the next run.
+    #[test]
+    fn new_file_wins_over_a_lingering_legacy_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(FILE);
+        let legacy = dir.path().join(LEGACY_FILE);
+        std::fs::write(&file, "mouse_sensitivity = 9
+muted = false
+").unwrap();
+        std::fs::write(&legacy, "mouse_sensitivity = 2
+muted = 1
+").unwrap();
+
+        load_from(&file, &legacy);
+        assert_eq!((mouse_level(), muted()), (9, false));
+        assert!(legacy.exists(), "the legacy file is left alone, not consumed");
+    }
+
+    /// A read error that is not "no such file" -- here, the path is a directory -- takes the
+    /// third branch of `load_from`: defaults, no migration, no panic. The legacy file beside
+    /// it must NOT be read in that case; that branch is for a missing file only.
+    #[test]
+    fn unreadable_file_gives_defaults_without_migrating() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(FILE);
+        let legacy = dir.path().join(LEGACY_FILE);
+        std::fs::create_dir(&file).unwrap();
+        std::fs::write(&legacy, "mouse_sensitivity = 2
+").unwrap();
+
+        adjust_mouse(3);
+        let before = mouse_level();
+        load_from(&file, &legacy);
+        assert_eq!(mouse_level(), before, "a read error leaves the values as they were");
+        assert!(file.is_dir(), "nothing was written over the directory");
+    }
+
+    /// A float where a notch is expected is a wrong type, not a rounding question: `3.5`
+    /// keeps the default rather than becoming 3 or 4 by a rule nobody wrote down.
+    #[test]
+    fn float_level_keeps_the_default() {
+        apply("mouse_sensitivity = 3.5
+pad_sensitivity = 2
+", Path::new("test"));
+        assert_eq!((mouse_level(), pad_level()), (DEFAULT_LEVEL, 2));
     }
 
     /// A file that is not TOML at all leaves every default in place and does not panic.
