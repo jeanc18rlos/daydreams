@@ -38,7 +38,7 @@ void main(void) {
 	vec3 n = normalize(ex_normal);
 	vec3 V = normalize(cam_pos.xyz - ex_world);
 
-	// The ported renderer re-draws the whole scene into each portal's 2048x2048 framebuffer, up
+	// The ported renderer re-draws the whole scene into each portal's framebuffer, up
 	// to four levels deep (engine.cpp:207-270), so anything done here is paid for several times
 	// over for a result that ends up a small quad on screen. Normal mapping and the specular
 	// lobe are the two costly parts and the two least visible there, so a portal pass skips

@@ -83,7 +83,7 @@ pub fn glow() -> [f32; 4] {
 }
 
 /// EXT: detail level for the render pass in flight. The ported renderer re-draws the whole
-/// scene into every portal's 2048x2048 framebuffer, up to four levels deep (Engine.cpp:207-270),
+/// scene into every portal's framebuffer, up to four levels deep (Engine.cpp:207-270),
 /// so anything expensive costs several times what the main view suggests. Materials use this to
 /// take a cheap path in portal passes, where the result is a small quad on screen anyway.
 pub fn detail() -> f32 {

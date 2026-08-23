@@ -3,8 +3,8 @@
 //! # The performance trick
 //!
 //! A procedural cloud shader evaluated per pixel per frame is expensive anywhere, and ruinous
-//! here: the ported renderer draws the sky at the start of **every** render pass, including each
-//! portal's 2048x2048 framebuffer, up to four levels deep (Engine.cpp:209-211, Portal.cpp:42).
+//! here: the ported renderer draws the sky in **every** render pass, including each portal's
+//! screen-sized framebuffer, up to four levels deep (Engine.cpp:209-211, Portal.cpp:42).
 //! Six-octave FBM times several million pixels times several passes is not a 60 fps budget.
 //!
 //! So the clouds are computed once, into an equirectangular panorama texture, by a single

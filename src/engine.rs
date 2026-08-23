@@ -20,8 +20,8 @@ use glow::HasContext;
 
 use crate::camera::Camera;
 use crate::game_header::{
-    gh_clamp, gh_min, GH_DT, GH_FAR, GH_MAX_PORTALS, GH_MAX_RECURSION, GH_MAX_STEPS, GH_NEAR_MAX,
-    GH_NEAR_MIN, GH_USE_SKY,
+    gh_clamp, gh_min, GH_DT, GH_FAR, GH_FBO_SIZE, GH_MAX_PORTALS, GH_MAX_RECURSION, GH_MAX_STEPS,
+    GH_NEAR_MAX, GH_NEAR_MIN, GH_USE_SKY,
 };
 use crate::input::Input;
 use crate::level1::Level1;
@@ -107,6 +107,15 @@ pub struct Engine {
     // which is what the occlusion slots are keyed on. ROOT for the main view; pushed and
     // popped around each nested `Portal::draw` in `render`.
     pass_path: Cell<crate::ext::occlusion::Path>,
+    // EXT: the portal framebuffers, one per recursion level, shared by every portal in the
+    // scene. The C++ gives each Portal its own three 2048-square FrameBuffers (Portal.h:43):
+    // ~20 MB apiece, 360 MB for the floorplan's six portals, a gigabyte for a twelve-portal
+    // scene -- and on a drawable wider than 2048 the door was under-sampled. One per level
+    // suffices because a portal renders its framebuffer and draws from it before any sibling
+    // at the same level renders, and the nested levels use the other indices. Sized to the
+    // drawable (capped at GH_FBO_SIZE a side) by `ensure_portal_fbos`, which recreates them on
+    // a resize; borrowed immutably through the RenderCtx, since `render` is re-entrant.
+    portal_fbos: RefCell<Vec<crate::frame_buffer::FrameBuffer>>,
 }
 
 impl Engine {
@@ -208,6 +217,7 @@ impl Engine {
             frame_clock: RefCell::new(crate::ext::frametime::FrameClock::new()),
             occlusion: RefCell::new(crate::ext::occlusion::Occlusion::new(gl)),
             pass_path: Cell::new(crate::ext::occlusion::ROOT),
+            portal_fbos: RefCell::new(Vec::new()),
         };
 
         // EXT: the title screen draws the intro level behind it (`render_menu_frame`), so the
@@ -258,6 +268,8 @@ impl Engine {
         // EXT: and the dev frame-time record. Ticked here, at the top, so one interval spans a
         // whole frame including the swap main.rs does after run_frame returns.
         self.frame_clock.borrow_mut().tick();
+        // EXT: portal framebuffers at the drawable's size, before either render path below.
+        self.ensure_portal_fbos(i_width, i_height);
         // EXT: surface any error the streamed music has queued. Here rather than further down
         // because the menu branch below returns early, and music plays under the menus too.
         self.ext.borrow_mut().audio.tick();
@@ -890,12 +902,15 @@ impl Engine {
         crate::ext::view::set_detail(if self.rec_level.get() >= GH_MAX_RECURSION { 1.0 } else { 0.0 });
 
         let gl: &glow::Context = &self.gl;
-        // EXT: one frustum and one eye per pass, shared by every draw below.
+        // EXT: one frustum and one eye per pass, shared by every draw below; and the shared
+        // portal framebuffers (a nested `render` takes its own shared borrow of them).
+        let portal_fbos = self.portal_fbos.borrow();
         let ctx = RenderCtx {
             gl,
             engine: self,
             frustum: crate::ext::cull::Frustum::from_view_proj(&cam.matrix()),
             eye: cam.world_view.inverse().translation(),
+            portal_fbos: &portal_fbos,
         };
 
         //Clear buffers
@@ -1030,8 +1045,10 @@ impl Engine {
         }
         self.v_objects.borrow_mut().clear();
         self.v_portals.borrow_mut().clear();
-        // EXT: the occlusion queries go with them, while the context is still current.
+        // EXT: the occlusion queries and the portal framebuffers go with them, while the
+        // context is still current.
         self.occlusion.borrow_mut().destroy();
+        self.portal_fbos.borrow_mut().clear();
     }
 
     // float Engine::NearestPortalDist() const   (Engine.cpp:477-483)
@@ -1141,6 +1158,25 @@ impl Engine {
         ext.fire_grab_sfx();
         ext.fire_footstep_sfx(steps);
         crate::ext::view::set_fov(ext.sprint.ease_fov(crate::ext::view::time(), sprinting));
+    }
+
+    /// EXT: (re)create the portal framebuffers at the drawable's size -- see `portal_fbos`.
+    /// A no-op on every frame the size has not changed. The old set is dropped before the new
+    /// one is built so the two never coexist.
+    fn ensure_portal_fbos(&self, width: i32, height: i32) {
+        let w = width.clamp(1, GH_FBO_SIZE);
+        let h = height.clamp(1, GH_FBO_SIZE);
+        let mut fbos = self.portal_fbos.borrow_mut();
+        if fbos.first().is_some_and(|f| f.width == w && f.height == h) {
+            return;
+        }
+        fbos.clear();
+        // PORT: `GH_MAX_RECURSION <= 1 ? 1 : GH_MAX_RECURSION - 1` (Portal.h:43): level 1's
+        // portals draw pink and need no target.
+        let n = if GH_MAX_RECURSION <= 1 { 1 } else { GH_MAX_RECURSION - 1 };
+        for _ in 0..n {
+            fbos.push(crate::frame_buffer::FrameBuffer::new(&self.gl, w, h));
+        }
     }
 
     /// EXT: reach the ported `Input` so the platform layer can write gamepad axes into it.
