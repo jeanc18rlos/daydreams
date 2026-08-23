@@ -46,6 +46,7 @@
 //! | `painting` | Portraits whose eyes follow the pass camera and whose faces change only unobserved |
 //! | `physics`  | A rapier3d world for props: the scene's scenery as static colliders, the player as a capsule |
 //! | `rigid`    | A prop that is a rigid body: falls, rolls, topples, is thrown, and is grabbed like any other |
+//! | `window`   | A grabbable, resizable, locked window-portal into a far copy of another level's room |
 
 pub mod audio;
 pub mod backrooms;
@@ -86,6 +87,7 @@ pub mod ui;
 pub mod ui_atlas;
 pub mod view;
 pub mod visibility;
+pub mod window;
 
 use audio::{Audio, Sfx};
 use grab::GrabState;

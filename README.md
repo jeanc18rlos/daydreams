@@ -1265,7 +1265,7 @@ Small additions, each tagged `// EXT:`:
 | `mesh.rs` | `new` returns `Result<_, AssetError>`: a missing `.obj` is an error, not an empty mesh; `Mesh::colliders_only(gl, colliders)`, a mesh with no faces and only rectangles -- the in-memory `intro_door_collide.obj` |
 | `resources.rs` | every `acquire_*` turns a loader's `Err` into `app::crash::fatal` |
 | `props.rs` | `Sky::draw` takes the eye from the inverse it already computes, and draws at the far plane under `GL_LEQUAL` so it can go last |
-| `main.rs` | gamepad polling in `about_to_wait`; the platform layer's startup order (panic hook, command line, logging, asset root -- all in `src/app/`); the hidden `--panic-test`; key levels dropped on focus loss |
+| `main.rs` | gamepad polling in `about_to_wait`; the platform layer's startup order (panic hook, command line, logging, asset root -- all in `src/app/`); the hidden `--panic-test`; key levels dropped on focus loss; the window's dev preset (`--window-scale`, `--unlock-window`) set before the engine builds a scene |
 
 ### One bug this surfaced
 
@@ -1359,7 +1359,8 @@ five on the north wall, three on the south, each 0.8 x 1.0 m with its centre at 
 back two centimetres off the scan's wall face so the two never z-fight. Their eyes follow
 whichever camera is drawing them, door included, and their faces change only while nobody is
 looking. Eight of them add nothing measurable to the frame: with vsync off the hall views stay
-at 1.0 ms and the meadow spawn (the door drawing the hall) within noise of its 2.2 ms.
+at 1.0 ms and the meadow spawn (the door drawing the hall) within noise of its 2.2 ms. Between
+the second and third of the north wall's portraits hangs [the window](#the-window).
 
 Frame cost, measured with `glFinish` after each frame on a shared M3 Max at 2560x1440 (so
 absolute numbers are pessimistic; the comparison is what matters): meadow spawn in the intro
@@ -1554,6 +1555,108 @@ Screenshots, for the record of the look: `--scene 17` and `--scene 18` at the fo
 shows the whole maze from above (the pool's roof is not; its plan was a throwaway occupancy
 raster, not shipped -- the tests re-measure every number the level is placed by).
 
+## The window
+
+`ext/window.rs`: a small framed window hangs on the Backrooms' hall wall between the second
+and third portraits, and through it is the Overgrown room -- green and dim, behind glass. It
+is locked. It is also a prop: pick it up (E), and it rides the crosshair like the cube or the
+teapot, laid flat against whatever the crosshair hits and resized by perspective; walk back
+from a wall with it and it grows. Unlocked by its key, stood on a wall and grown to a door,
+it is one.
+
+**How it works.** The far side has to exist for the ported renderer to draw it: the level
+loads the Overgrown room a second time, two kilometres east of the hall (`window::FAR2`,
+a kilometre past the Backrooms' own far world), from `level18.rs`'s own `load_spec` and
+`placement` shifted by that much, with its own fence, ground cap and fall-out respawn
+(`interior::build`, the objects-only half of `interior::load`: no word about the player or
+the scene's mood, and the whole of it stood somewhere else). The copy is the level to the
+bit: the elevator's doorway is cut out of its wall exactly as the level cuts it, because the
+glTF cache keys on the whole `Load`, cut boxes included, and the same cut means one parse
+shared by the copy and the level -- which is what makes the crossing below cost nothing
+(`[load] scene 18 in 2 ms`). A cut wants a cabin in it, and a second `Elevator` in the scene
+would overwrite the hall's own ambient channels from its update, so the cabin is built where
+the level builds its own, for the same cut, moved to the copy and drawn from a wrapper that
+never updates it (`window::Still`). The copy is past the mood split, so it grades as the
+interior it is; the meadow, the sea and the title's backdrop never reach it.
+
+The window itself is a `Physical` with one hit sphere, which is how the grab recognises a
+prop, and its opening is a `Portal` in the scene's portal vector, with a partner in the copy
+on the west wall of the corridor that runs south along it (`window::PARTNER`, measured from
+the file by a test: a quarter of a metre off the wall so the arriving head sphere is never
+inside it, a maze wall 1.5 m to one side, the room open 5.8 m ahead). **Every fixed step the
+window re-places and re-connects the pair**: the opening at the frame's outer face, at the
+frame's yaw and the opening's half-size times the frame's `p_scale`, the partner at the same
+scale and at the same height as the frame -- so whatever height the window is hung at, an eye
+that goes in so far above the frame's centre comes out the same height above the partner's
+-- and then `portal::connect`, which bakes both transforms into the warp; a window carried or
+rescaled since the last connect would otherwise warp to a stale place. Two matrix products,
+500 times a second.
+
+The frame is a box, not a flat frame, and the opening is its outer face, `window::DEPTH`
+(4.5 cm at unit scale) out from the wall: the player's head is a sphere of 0.2 round the eye
+and the collision pass keeps it out of the wall, so an opening flush with the wall could
+never be walked through. The depth scales with the window, and the size gate is what makes a
+passable window deep enough -- 28.5 cm at the smallest passable scale. Four `cube.obj` bars
+in `Textures/window_frame.bmp` (painted wood from `tools/gen_window.py`, an unlit look
+through the `cutout` shader, since the bake around it is unlit too), every bar with its
+length along the cube's y so the texture's darkened edge runs along the bar and nothing is
+stretched along it.
+
+**Lock, size and pose.** `window::Opening` is the state, a pure function of three things,
+in this order: locked -> `Locked`, the opening is `Portal::tint`ed greenish glass
+(`LOCKED_TINT`), `Portal::passable` is off and a collider-only rectangle over the opening
+(`Mesh::colliders_only`, `Collider::rect`) stops the player leaning into it; the frame lying
+on a floor or a ceiling -> `Flat`, the portal is parked 200 m below the frame rather than
+tilted (portals must stay vertical: `try_portal` re-aims only the yaw, `Portal::draw`
+asserts it) and the frame is a picture frame lying there; under `PASS_HEIGHT` (1.9 m) tall
+-> `Small`, clear but shut; else `Open`, a door. The HUD line while the crosshair is on it
+says which: `LOCKED - IT NEEDS A KEY`, `STAND IT UP ON A WALL`, `TOO SMALL - GRAB IT AND
+STEP BACK`, nothing when open. The key is a sibling's; it raises
+`room::request_unlock_window` and the window takes the flag on its next step.
+
+`ObjectT::engine_collision` is false for the window: its hit sphere is centred on the wall
+and the collision pass would push it out of the wall every step, and the portal pass must
+never warp it through its own opening; nor is its body ever integrated. So nothing of the
+engine moves a placed window, on a wall, a floor or a ceiling -- the grab reads the hit
+sphere and writes its position itself -- while it still blocks through its rectangle and is
+still picked, carried and resized.
+
+**One way.** Through the opening is the copy, and a `RoomLogic` in `level16.rs` loads the
+real Overgrown level the moment the player is east of `window::CROSSING_X`, with their
+position brought back by `FAR2` and their look (yaw and pitch, read off the camera transform
+the room logic is handed) left for the level through `window::set_arrival` /
+`window::take_arrival`; `Level18::load` stands them there instead of at its elevator. The
+copy and the level being the same model at the same placement, nothing is seen to change --
+no fade. There is no window on the far side; the elevator brings you back.
+
+**Dev flags.** Two hidden ones, with `--scene`: `--window-scale S` builds the window at
+physical scale `S` and `--unlock-window` builds it as if the key had been used. They set
+`window::set_preset` for the process, so a restart gives the same window again.
+
+```sh
+# The small locked window: green-tinted grass through it, the hand cursor and the hint
+daydreams --windowed --mute --scene 16 --pos 987,1.5,0.5 --yaw 180 --frames 60 --shot w1.bmp
+# Unlocked and grown to a door (2.1 m): the room through it, clear
+daydreams --windowed --mute --scene 16 --unlock-window --window-scale 7 --pos 987,1.5,0.5 --yaw 180 --frames 60 --shot w2.bmp
+# Walk through: expect `[load] scene 18`, the shot from inside the Overgrown room, the
+# `[shot]` position in that level's coordinates (walked on from x = -8.86, z = -9.3)
+daydreams --windowed --mute --scene 16 --unlock-window --window-scale 7 --pos 987,1.5,1.0 --yaw 180 --forward --frames 240 --shot w3.bmp
+# Locked, or unlocked but small: no load, the walk stops at the pane (z = 1.82)
+daydreams --windowed --mute --scene 16 --pos 987,1.5,1.0 --yaw 180 --forward --frames 240 --shot w4.bmp
+daydreams --windowed --mute --scene 16 --unlock-window --pos 987,1.5,1.0 --yaw 180 --forward --frames 240 --shot w5.bmp
+# Carried: E on the first frame picks it up, the strafe walks it along the wall
+daydreams --windowed --mute --scene 16 --unlock-window --pos 987,1.5,-0.5 --yaw 180 --ride-at 1 --strafe --frames 100 --shot w6.bmp
+```
+
+The window hangs with its centre at 1.35 m rather than eye height: grown to a door it must
+still fit under the far room's 2.43 m ceiling, and the partner hangs at the frame's height.
+The Backrooms' load grows by the copy, about 90 ms (`[load] scene 16 in 255 ms`, from 165);
+the crossing itself, with the model shared, is the 2 ms above. The rules -- the state from
+lock, pose and size; what is passable, tinted and said; the portal's transform from the
+frame; the partner's match and the warp's rigidity; the parked portal; the arrival channel
+-- are unit tested with detached portals, and `level16.rs` measures the window's wall and
+the partner's from the two files.
+
 ## glTF loader
 
 `ext/gltf_model.rs` is the one path every non-OBJ model takes: the door, the Backrooms scan,
@@ -1648,14 +1751,16 @@ parsing, so a double-clicked bundle starts clean.
 `daydreams gen-terrain` is the one subcommand: it rewrites `Meshes/meadow_tile.obj` under the
 asset root from `ext::terrain::height` and exits (see [Meadow](#meadow-grass-and-clouds-scene-)).
 
-Four flags are hidden from `--help` because they are tools rather than features: `--panic-test`
+Seven flags are hidden from `--help` because they are tools rather than features: `--panic-test`
 (the crash dialog, below), `--view-glb PATH` with `--view-translucent NAMES` (a scene of one
-model, see [glTF loader](#gltf-loader)), and `--arrive` and `--ride-at FRAME` (with `--scene`:
+model, see [glTF loader](#gltf-loader)), `--arrive` and `--ride-at FRAME` (with `--scene`:
 load it as an elevator ride would, and press E once on that frame; see
-[Elevator](#elevator)). `--view-glb` excludes `--scene`; its path is taken under the working
-directory when a file is there, under the asset root otherwise. A fifth, `--drop-props H`
-(with `--scene`), lifts the rigid-body props by `H` metres at the start; see
-[Real physics](#real-physics--extphysicsrs-extrigidrs).
+[Elevator](#elevator)), `--window-scale S` and `--unlock-window` (with `--scene`: how the
+Backrooms' window is built; see [The window](#the-window)), and `--drop-props H` (with
+`--scene`: lift the rigid-body props by `H` metres at the start; see
+[Real physics](#real-physics--extphysicsrs-extrigidrs)). `--view-glb` excludes `--scene`; its
+path is taken under the working directory when a file is there, under the asset root
+otherwise.
 
 ### Logging
 

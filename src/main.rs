@@ -384,6 +384,8 @@ impl ApplicationHandler for App {
         // (Engine.cpp:70-73). SetupInputs (Engine.cpp:440-467) has no equivalent: winit's
         // DeviceEvent::MouseMotion already delivers what RegisterRawInputDevices asked for.
         if self.engine.is_none() {
+            // EXT: dev flags -- how the Backrooms' window is built, before any scene is.
+            ext::window::set_preset(self.args.window_preset());
             let engine = Engine::new(self.gl.as_ref().unwrap());
             engine.start_run();
             // EXT: dev flags -- direct scene start and/or screenshot-and-quit.
