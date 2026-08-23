@@ -26,7 +26,7 @@ impl Scene for Level6 {
         // PORT: `floorplan->AddPortals(portals)` -> a free function that also takes `gl`/`res`,
         // because it constructs six Portals and the C++ reaches the caches through globals
         // (was: Level6.cpp:7).
-        floorplan_add_portals(&floorplan1.borrow(), gl, res, portals);
+        floorplan_add_portals(&floorplan1.borrow(), res, portals);
 
         player
             .base

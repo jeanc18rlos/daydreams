@@ -95,15 +95,15 @@ impl Scene for Level3 {
         objs.push(statue3);
 
         //Portals
-        let portal1 = Rc::new(RefCell::new(Portal::new(gl, res)));
+        let portal1 = Rc::new(RefCell::new(Portal::new(res)));
         pillar_room_set_portal(&pillar_room1.borrow(), &mut portal1.borrow_mut());
         portals.push(portal1.clone());
 
-        let portal2 = Rc::new(RefCell::new(Portal::new(gl, res)));
+        let portal2 = Rc::new(RefCell::new(Portal::new(res)));
         pillar_room_set_portal(&pillar_room2.borrow(), &mut portal2.borrow_mut());
         portals.push(portal2.clone());
 
-        let portal3 = Rc::new(RefCell::new(Portal::new(gl, res)));
+        let portal3 = Rc::new(RefCell::new(Portal::new(res)));
         pillar_room_set_portal(&pillar_room3.borrow(), &mut portal3.borrow_mut());
         portals.push(portal3.clone());
 

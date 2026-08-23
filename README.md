@@ -422,9 +422,9 @@ because the original keeps it.
 
 The resource caches are function-local statics in `Resources.cpp`; they become an `Engine` member so
 scenes can reach them without a global (`engine.rs:47`). Consequently `Scene::Load` gains `gl` and
-`res` parameters (`scene.rs:27`), and so do the prop constructors and
-`floorplan_add_portals` (`level6.rs:26`), `Portal::new` (`portal.rs:75`), and `Sky::draw`
-(`props.rs:312`).
+`res` parameters (`scene.rs:27`), and so do the prop constructors and `Sky::draw`
+(`props.rs:312`); `floorplan_add_portals` and `Portal::new` take `res` alone, since the portal
+framebuffers `Portal::new` once built from `gl` live on the engine now.
 
 `Resources` itself: `map[std::string(name)]` default-inserts an empty `weak_ptr` and returns a
 reference to it, which is exactly `entry(..).or_insert_with(Weak::new)` (`resources.rs:43`), and

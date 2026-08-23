@@ -118,7 +118,7 @@ pub fn door_with_portal(
     let (centre, euler, scale) = door.portal_transform();
     objs.push(Rc::new(RefCell::new(door)) as Rc<RefCell<dyn ObjectT>>);
 
-    let portal = Rc::new(RefCell::new(Portal::new(gl, res)));
+    let portal = Rc::new(RefCell::new(Portal::new(res)));
     {
         let mut p = portal.borrow_mut();
         p.base.pos = centre;

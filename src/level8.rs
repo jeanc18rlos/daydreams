@@ -73,12 +73,12 @@ impl Scene for Level8 {
             objs.push(g);
 
             // door1 is the high end of the slope, door2 the low end (Tunnel.h:33-45).
-            let top = Rc::new(RefCell::new(Portal::new(gl, res)));
+            let top = Rc::new(RefCell::new(Portal::new(res)));
             tunnel_set_door1(&t.borrow(), &mut top.borrow_mut());
             portals.push(top.clone());
             tops.push(top);
 
-            let bottom = Rc::new(RefCell::new(Portal::new(gl, res)));
+            let bottom = Rc::new(RefCell::new(Portal::new(res)));
             tunnel_set_door2(&t.borrow(), &mut bottom.borrow_mut());
             portals.push(bottom.clone());
             bottoms.push(bottom);

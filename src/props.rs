@@ -243,18 +243,14 @@ pub fn floorplan(_gl: &Rc<glow::Context>, res: &Resources) -> Object {
     o
 }
 
-pub fn floorplan_add_portals(
-    fp: &Object,
-    gl: &Rc<glow::Context>,
-    res: &Resources,
-    pvec: &mut PPortalVec,
-) {
-    let p1 = Rc::new(RefCell::new(Portal::new(gl, res)));
-    let p2 = Rc::new(RefCell::new(Portal::new(gl, res)));
-    let p3 = Rc::new(RefCell::new(Portal::new(gl, res)));
-    let p4 = Rc::new(RefCell::new(Portal::new(gl, res)));
-    let p5 = Rc::new(RefCell::new(Portal::new(gl, res)));
-    let p6 = Rc::new(RefCell::new(Portal::new(gl, res)));
+// PORT: `gl` went with Portal::new's; nothing here reaches GL.
+pub fn floorplan_add_portals(fp: &Object, res: &Resources, pvec: &mut PPortalVec) {
+    let p1 = Rc::new(RefCell::new(Portal::new(res)));
+    let p2 = Rc::new(RefCell::new(Portal::new(res)));
+    let p3 = Rc::new(RefCell::new(Portal::new(res)));
+    let p4 = Rc::new(RefCell::new(Portal::new(res)));
+    let p5 = Rc::new(RefCell::new(Portal::new(res)));
+    let p6 = Rc::new(RefCell::new(Portal::new(res)));
 
     {
         let mut p = p1.borrow_mut();

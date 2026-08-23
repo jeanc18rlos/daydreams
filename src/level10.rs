@@ -111,7 +111,7 @@ impl Scene for Level10 {
                 objs.push(s);
             }
 
-            let portal = Rc::new(RefCell::new(Portal::new(gl, res)));
+            let portal = Rc::new(RefCell::new(Portal::new(res)));
             pillar_room_set_portal(&room.borrow(), &mut portal.borrow_mut());
             portals.push(portal.clone());
             chamber_portals.push(portal);

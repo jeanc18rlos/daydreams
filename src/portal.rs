@@ -72,11 +72,11 @@ pub struct Portal {
 }
 
 impl Portal {
-    // PORT: the ctor takes `gl` and `res`. C++ reaches the resource caches through the
-    // file-scope AquireXxx() functions (was: Portal::Portal() : front(this), back(this),
-    // Portal.cpp:6). `gl` is no longer read -- the FrameBuffers it constructed live on the
-    // engine now -- and is kept so the scene code's call sites stay as they were.
-    pub fn new(_gl: &Rc<glow::Context>, res: &Resources) -> Portal {
+    // PORT: the ctor takes `res`. C++ reaches the resource caches through the file-scope
+    // AquireXxx() functions (was: Portal::Portal() : front(this), back(this), Portal.cpp:6).
+    // It took the GL context too while it built its own FrameBuffers; those live on the
+    // engine now (`Engine::portal_fbos`) and nothing here touches GL.
+    pub fn new(res: &Resources) -> Portal {
         let id = NEXT_PORTAL_ID.fetch_add(1, Ordering::Relaxed);
 
         let mut base = Object::new();

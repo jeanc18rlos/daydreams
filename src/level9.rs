@@ -91,19 +91,19 @@ impl Scene for Level9 {
         }
         objs.push(ground2);
 
-        let portal1 = Rc::new(RefCell::new(Portal::new(gl, res)));
+        let portal1 = Rc::new(RefCell::new(Portal::new(res)));
         tunnel_set_door1(&tunnel1.borrow(), &mut portal1.borrow_mut());
         portals.push(portal1.clone());
 
-        let portal2 = Rc::new(RefCell::new(Portal::new(gl, res)));
+        let portal2 = Rc::new(RefCell::new(Portal::new(res)));
         tunnel_set_door1(&tunnel2.borrow(), &mut portal2.borrow_mut());
         portals.push(portal2.clone());
 
-        let portal3 = Rc::new(RefCell::new(Portal::new(gl, res)));
+        let portal3 = Rc::new(RefCell::new(Portal::new(res)));
         tunnel_set_door2(&tunnel1.borrow(), &mut portal3.borrow_mut());
         portals.push(portal3.clone());
 
-        let portal4 = Rc::new(RefCell::new(Portal::new(gl, res)));
+        let portal4 = Rc::new(RefCell::new(Portal::new(res)));
         tunnel_set_door2(&tunnel2.borrow(), &mut portal4.borrow_mut());
         portals.push(portal4.clone());
 

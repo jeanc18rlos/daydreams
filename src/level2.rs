@@ -46,31 +46,31 @@ impl Scene for Level2 {
         }
 
         if self.num_rooms == 1 {
-            let portal1 = Rc::new(RefCell::new(Portal::new(gl, res)));
+            let portal1 = Rc::new(RefCell::new(Portal::new(res)));
             house_set_door1(&house1.borrow(), &mut portal1.borrow_mut());
             portals.push(portal1.clone());
 
-            let portal2 = Rc::new(RefCell::new(Portal::new(gl, res)));
+            let portal2 = Rc::new(RefCell::new(Portal::new(res)));
             house_set_door4(&house1.borrow(), &mut portal2.borrow_mut());
             portals.push(portal2.clone());
 
             connect(&portal1, &portal2);
         } else if self.num_rooms == 2 {
-            let portal1 = Rc::new(RefCell::new(Portal::new(gl, res)));
+            let portal1 = Rc::new(RefCell::new(Portal::new(res)));
             house_set_door2(&house1.borrow(), &mut portal1.borrow_mut());
             portals.push(portal1.clone());
 
-            let portal2 = Rc::new(RefCell::new(Portal::new(gl, res)));
+            let portal2 = Rc::new(RefCell::new(Portal::new(res)));
             house_set_door4(&house1.borrow(), &mut portal2.borrow_mut());
             portals.push(portal2.clone());
 
             connect(&portal1, &portal2);
         } else if self.num_rooms == 3 {
-            let portal1 = Rc::new(RefCell::new(Portal::new(gl, res)));
+            let portal1 = Rc::new(RefCell::new(Portal::new(res)));
             house_set_door3(&house1.borrow(), &mut portal1.borrow_mut());
             portals.push(portal1.clone());
 
-            let portal2 = Rc::new(RefCell::new(Portal::new(gl, res)));
+            let portal2 = Rc::new(RefCell::new(Portal::new(res)));
             house_set_door4(&house1.borrow(), &mut portal2.borrow_mut());
             portals.push(portal2.clone());
 
@@ -82,15 +82,15 @@ impl Scene for Level2 {
             // this branch; the Option is unwrapped for the same reason (Level2.cpp:53/57).
             let house2 = house2.as_ref().expect("house2 is null");
 
-            let portal1 = Rc::new(RefCell::new(Portal::new(gl, res)));
+            let portal1 = Rc::new(RefCell::new(Portal::new(res)));
             house_set_door4(&house1.borrow(), &mut portal1.borrow_mut());
             portals.push(portal1.clone());
 
-            let portal2 = Rc::new(RefCell::new(Portal::new(gl, res)));
+            let portal2 = Rc::new(RefCell::new(Portal::new(res)));
             house_set_door2(&house2.borrow(), &mut portal2.borrow_mut());
             portals.push(portal2.clone());
 
-            let portal3 = Rc::new(RefCell::new(Portal::new(gl, res)));
+            let portal3 = Rc::new(RefCell::new(Portal::new(res)));
             house_set_door1(&house2.borrow(), &mut portal3.borrow_mut());
             portals.push(portal3.clone());
 
@@ -102,15 +102,15 @@ impl Scene for Level2 {
         } else if self.num_rooms == 6 {
             let house2 = house2.as_ref().expect("house2 is null");
 
-            let portal1 = Rc::new(RefCell::new(Portal::new(gl, res)));
+            let portal1 = Rc::new(RefCell::new(Portal::new(res)));
             house_set_door4(&house1.borrow(), &mut portal1.borrow_mut());
             portals.push(portal1.clone());
 
-            let portal2 = Rc::new(RefCell::new(Portal::new(gl, res)));
+            let portal2 = Rc::new(RefCell::new(Portal::new(res)));
             house_set_door3(&house2.borrow(), &mut portal2.borrow_mut());
             portals.push(portal2.clone());
 
-            let portal3 = Rc::new(RefCell::new(Portal::new(gl, res)));
+            let portal3 = Rc::new(RefCell::new(Portal::new(res)));
             house_set_door1(&house2.borrow(), &mut portal3.borrow_mut());
             portals.push(portal3.clone());
 
