@@ -473,7 +473,7 @@ mod tests {
     /// into the ground rather than as an obvious bug. Check the copy.
     #[test]
     fn terrain_constants_match_the_shader() {
-        let src = std::fs::read_to_string("Shaders/grassblade.vert").expect("blade shader");
+        let src = std::fs::read_to_string(crate::app::assets::path("Shaders/grassblade.vert")).expect("blade shader");
         for (name, want) in [
             ("#define T_AMP", AMP),
             ("#define T_CLEAR_R", CLEAR_R),

@@ -369,7 +369,7 @@ mod tests {
     /// the frame popping as its blades wave -- is the kind a screenshot does not show.
     #[test]
     fn sway_bound_matches_the_shader() {
-        let src = std::fs::read_to_string("Shaders/grassblade.vert").expect("blade shader");
+        let src = std::fs::read_to_string(crate::app::assets::path("Shaders/grassblade.vert")).expect("blade shader");
         for term in [
             "(g1 - 0.5) * 1.5 + (g2 - 0.5) * 0.7",
             "* 0.12;",

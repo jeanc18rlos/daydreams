@@ -336,7 +336,7 @@ mod tests {
     /// through the frame or bumps into thin air beside it.
     #[test]
     fn collider_posts_match_half_w() {
-        let src = std::fs::read_to_string("Meshes/intro_door_collide.obj").expect("proxy mesh");
+        let src = std::fs::read_to_string(crate::app::assets::path("Meshes/intro_door_collide.obj")).expect("proxy mesh");
         let xs: Vec<f32> = src
             .lines()
             .filter(|l| l.starts_with("v "))
