@@ -177,6 +177,7 @@ impl Door {
                 fit: Fit::Part { part: "leaf", height: HALF_H * 2.0 },
                 max_map: MAP,
                 translucent: &[],
+                metallic_override: &[],
             },
         );
 

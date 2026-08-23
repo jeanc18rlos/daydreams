@@ -29,7 +29,8 @@ pub struct SceneEntry {
 }
 
 /// Every scene, in key order: CodeParade's seven first, in their registration order
-/// (Engine.cpp:41-47), then the extensions along the top row of the keyboard.
+/// (Engine.cpp:41-47), then the extensions along the top row of the keyboard and on past
+/// the quote key (`,` `.`).
 pub const SCENES: &[SceneEntry] = &[
     SceneEntry { key: b'1', name: "Tunnels", make: || Rc::new(Level1) },
     SceneEntry { key: b'2', name: "Three Rooms", make: || Rc::new(Level2::new(3)) },
@@ -48,6 +49,8 @@ pub const SCENES: &[SceneEntry] = &[
     SceneEntry { key: b'\\', name: "Meadow", make: || Rc::new(crate::level14::Level14) },
     SceneEntry { key: b';', name: "Intro", make: || Rc::new(crate::level15::Level15) },
     SceneEntry { key: b'\'', name: "Backrooms", make: || Rc::new(crate::level16::Level16) },
+    SceneEntry { key: b',', name: "Pool Rooms", make: || Rc::new(crate::level17::Level17) },
+    SceneEntry { key: b'.', name: "Overgrown", make: || Rc::new(crate::level18::Level18) },
 ];
 
 /// Index of the intro scene: where NEW GAME begins and what the title screen shows behind
@@ -61,8 +64,8 @@ mod tests {
     use winit::keyboard::KeyCode;
 
     #[test]
-    fn seventeen_scenes() {
-        assert_eq!(SCENES.len(), 17);
+    fn nineteen_scenes() {
+        assert_eq!(SCENES.len(), 19);
     }
 
     #[test]

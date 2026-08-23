@@ -18,10 +18,16 @@
 //!
 //! The collider is built from the parts at rest and does not follow the animation: an open
 //! elevator door still blocks like a closed one. A scene that needs otherwise builds its own
-//! (`ext::trimesh`).
+//! (`ext::trimesh`). Only solid triangles go into it (`GltfModel::solid_triangles`): a
+//! foliage card or a water surface is walked through, not into.
+//!
+//! # Drawing
+//!
+//! Every part's opaque pass is drawn before any part's translucent pass, so that a pool's
+//! water blends over the whole model and not just over the part it happens to belong to.
 
 use crate::camera::Camera;
-use crate::ext::gltf_model::{GltfModel, Load};
+use crate::ext::gltf_model::{GltfModel, Load, Pass};
 use crate::ext::trimesh::TriMeshCollider;
 use crate::game_header::GH_DT;
 use crate::object::{Object, ObjectT, RenderCtx, UpdateCtx};
@@ -42,6 +48,19 @@ struct Playing {
     looping: bool,
 }
 
+impl Playing {
+    /// Advance the clip by `dt` seconds: past the end, a looping clip wraps (keeping the
+    /// overshoot, so a 10 s clip stepped at 0.4 s does not drift) and a one-shot holds its
+    /// last frame. A clip of no length stays at 0 either way.
+    fn advance(&mut self, dt: f32, duration: f32) {
+        self.time += dt;
+        if self.time > duration {
+            self.time =
+                if self.looping && duration > 0.0 { self.time % duration } else { duration };
+        }
+    }
+}
+
 pub struct GltfProp {
     base: Object,
     model: Rc<GltfModel>,
@@ -59,8 +78,8 @@ pub struct GltfProp {
 impl GltfProp {
     /// Load `spec` and stand it at `pos` with yaw `yaw`. `followers` pairs a part name with the
     /// node whose animated translation it is drawn at (see the module docs). With `solid`, every
-    /// part's triangles become one world-space collider, built here and fixed: move the prop
-    /// afterwards and the collision stays behind.
+    /// part's solid triangles become one world-space collider, built here and fixed: move the
+    /// prop afterwards and the collision stays behind.
     pub fn new(
         gl: &Rc<glow::Context>,
         res: &Resources,
@@ -80,7 +99,7 @@ impl GltfProp {
             let mut pos: Vec<[f32; 3]> = Vec::new();
             let mut idx: Vec<u32> = Vec::new();
             for part in &parts {
-                let (p, i) = model.triangles(part);
+                let (p, i) = model.solid_triangles(part);
                 let off = pos.len() as u32;
                 pos.extend_from_slice(p);
                 idx.extend(i.iter().map(|k| k + off));
@@ -156,26 +175,78 @@ impl ObjectT for GltfProp {
     fn update(&mut self, _ctx: &UpdateCtx) {
         let Some(p) = &mut self.playing else { return };
         let duration = self.model.animation(&p.clip).map_or(0.0, |a| a.duration());
-        p.time += GH_DT;
-        if p.time > duration {
-            p.time = if p.looping && duration > 0.0 { p.time % duration } else { duration };
-        }
+        p.advance(GH_DT, duration);
     }
 
     fn draw(&self, ctx: &RenderCtx, cam: &Camera, _fbo: Option<glow::Framebuffer>) {
-        for part in &self.parts {
-            let obj = self.placement(part);
-            if self.model.unlit(part) {
-                self.unlit.use_program();
-                self.unlit.set_vec4("fog_color", self.fog_color);
-                self.model.draw_part(part, &obj, &self.unlit, cam, ctx);
-            } else {
-                self.model.draw_part(part, &obj, &self.pbr, cam, ctx);
+        for pass in [Pass::Opaque, Pass::Translucent] {
+            for part in &self.parts {
+                let obj = self.placement(part);
+                if self.model.unlit(part) {
+                    self.unlit.use_program();
+                    self.unlit.set_vec4("fog_color", self.fog_color);
+                    self.model.draw_part_pass(part, &obj, &self.unlit, cam, ctx, pass);
+                } else {
+                    self.model.draw_part_pass(part, &obj, &self.pbr, cam, ctx, pass);
+                }
             }
         }
     }
 
     fn trimesh(&self) -> Option<Rc<TriMeshCollider>> {
         self.collider.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn playing(looping: bool) -> Playing {
+        Playing { clip: "clip".into(), time: 0.0, looping }
+    }
+
+    #[test]
+    fn a_looping_clip_wraps_and_keeps_its_overshoot() {
+        let mut p = playing(true);
+        for _ in 0..3 {
+            p.advance(0.4, 1.0);
+        }
+        assert!((p.time - 0.2).abs() < 1e-6, "1.2 s into a 1 s loop is 0.2 s: {}", p.time);
+        // Many steps never drift past the clip.
+        for _ in 0..10_000 {
+            p.advance(0.013, 1.0);
+            assert!((0.0..=1.0).contains(&p.time));
+        }
+    }
+
+    #[test]
+    fn a_one_shot_clip_holds_its_last_frame() {
+        let mut p = playing(false);
+        for _ in 0..5 {
+            p.advance(0.4, 1.0);
+        }
+        assert_eq!(p.time, 1.0);
+        p.advance(0.4, 1.0);
+        assert_eq!(p.time, 1.0);
+    }
+
+    #[test]
+    fn a_clip_of_no_length_stays_at_zero_without_dividing_by_it() {
+        for looping in [true, false] {
+            let mut p = playing(looping);
+            p.advance(0.4, 0.0);
+            assert_eq!(p.time, 0.0);
+        }
+    }
+
+    #[test]
+    fn stepping_at_the_fixed_rate_reaches_the_end_on_time() {
+        let mut p = playing(false);
+        let steps = (2.0 / GH_DT).round() as usize;
+        for _ in 0..steps {
+            p.advance(GH_DT, 10.0);
+        }
+        assert!((p.time - 2.0).abs() < 1e-3, "{}", p.time);
     }
 }

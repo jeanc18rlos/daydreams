@@ -139,6 +139,9 @@ pub fn key_index(k: winit::keyboard::KeyCode) -> Option<usize> {
         KeyCode::Backslash => b'\\',
         KeyCode::Semicolon => b';',
         KeyCode::Quote => b'\'',
+        // EXT: the two interiors, on past the quote key.
+        KeyCode::Comma => b',',
+        KeyCode::Period => b'.',
         // EXT: grab / release the held object.
         KeyCode::KeyE => b'E',
         // EXT: mute toggle.
@@ -171,7 +174,7 @@ mod tests {
     /// indexes with `wParam & 0xFF`, the Win32 virtual-key numbers for the rest.
     #[test]
     fn every_key_the_game_reads_lands_in_its_slot() {
-        let table: [(KeyCode, usize); 36] = [
+        let table: [(KeyCode, usize); 38] = [
             (KeyCode::KeyW, b'W' as usize),
             (KeyCode::KeyA, b'A' as usize),
             (KeyCode::KeyS, b'S' as usize),
@@ -193,6 +196,8 @@ mod tests {
             (KeyCode::Backslash, b'\\' as usize),
             (KeyCode::Semicolon, b';' as usize),
             (KeyCode::Quote, b'\'' as usize),
+            (KeyCode::Comma, b',' as usize),
+            (KeyCode::Period, b'.' as usize),
             (KeyCode::KeyE, b'E' as usize),
             (KeyCode::KeyM, b'M' as usize),
             (KeyCode::KeyR, b'R' as usize),
@@ -236,8 +241,6 @@ mod tests {
             KeyCode::ControlLeft,
             KeyCode::AltLeft,
             KeyCode::F1,
-            KeyCode::Comma,
-            KeyCode::Period,
             KeyCode::Slash,
             KeyCode::Backquote,
             KeyCode::Numpad1,

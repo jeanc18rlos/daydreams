@@ -19,8 +19,11 @@
 //! GLB only, with every image embedded (PNG or JPEG); an image referenced by URI is an error
 //! rather than a silently missing map. `KHR_materials_unlit`, `KHR_materials_emissive_strength`
 //! and `KHR_texture_transform` are honoured; the texture transform is **baked into the UVs at
-//! load** (see `walk`), so the shaders never see it. Clearcoat, specular and the other material
-//! extensions are ignored, as is the second UV set.
+//! load** (see `walk`), so the shaders never see it -- and only the base colour texture's
+//! transform is read, applied to every map of that material, since a primitive has one UV
+//! stream here. Clearcoat, specular and the other material extensions are ignored, as is the
+//! second UV set. A primitive that names no material gets the spec's default one (white,
+//! opaque, fully metallic) rather than the file's first.
 //!
 //! # Alpha
 //!
@@ -132,6 +135,14 @@ pub struct PartSpec<'a> {
     pub anchor: Anchor<'a>,
 }
 
+/// The two halves of drawing a part (see [`GltfModel::draw_part`]): everything opaque or
+/// alpha-tested, and then what blends over it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pass {
+    Opaque,
+    Translucent,
+}
+
 /// How the gathered geometry is placed in the model's object space.
 #[derive(Clone, Copy, Debug)]
 pub enum Fit<'a> {
@@ -167,6 +178,19 @@ pub struct Load<'a> {
     /// `alphaMode` says. Every other material is alpha-tested or opaque. A name the file does
     /// not have is an error, so a typo cannot leave a pool without its water.
     pub translucent: &'a [&'a str],
+    /// `(material name, metalness)` pairs that replace the named materials' `metallicFactor`.
+    /// A name ending in `*` matches every material with that prefix (`"Bush_*"`). A pattern
+    /// that matches nothing is an error, like a translucent name the file lacks.
+    ///
+    /// Why this exists: glTF's default `metallicFactor` is **1.0** -- a material that ships
+    /// no factor and no metallic-roughness map is a fully metallic one, and a metal has no
+    /// diffuse term, so a foliage card exported that way (the overgrown room's bushes, with
+    /// nothing but a base colour map) renders as a dark, roughly-reflective cut-out of itself
+    /// under any lighting model, this engine's included. The fix belongs to the asset, but
+    /// the asset is someone else's: naming the materials here renders them as the dielectric
+    /// (0.0) they were meant to be without re-exporting the file. Applied to PBR materials
+    /// only; an unlit material has no metalness to override.
+    pub metallic_override: &'a [(&'a str, f32)],
 }
 
 struct Prim {
@@ -211,6 +235,16 @@ struct Unlit {
 ///
 /// Occlusion used to ride in `albedo.A`; it moved when the base colour's alpha had to reach
 /// the shader for the alpha test and the translucent pass.
+///
+/// # The metalness default
+///
+/// A glTF material that writes no `metallicFactor` is **metallic** -- the spec's default is
+/// 1.0, and the default `roughnessFactor` is 1.0 too, so an exporter that only wrote a base
+/// colour map has described a rough metal. That is what `surface.A` packs, and a metal has no
+/// diffuse term in any shader that takes the word seriously, so such a material renders dark
+/// and faintly reflective: the overgrown room's `Bush_Texture_1` and `_2` ship exactly this
+/// way. The `image` of the leaf is fine; the lighting response is wrong in the file.
+/// [`Load::metallic_override`] names the materials to render as dielectrics instead.
 struct Material {
     /// PBR: packed as above. Unlit: the base colour map exactly as shipped (or 1x1 white when
     /// there is none).
@@ -231,7 +265,10 @@ struct Material {
 /// CPU copy of a part's fitted triangles, for building colliders from.
 struct Geometry {
     pos: Vec<[f32; 3]>,
+    /// Every triangle, three indices each.
     idx: Vec<u32>,
+    /// The subset of `idx` belonging to opaque materials -- see [`GltfModel::solid_triangles`].
+    solid: Vec<u32>,
 }
 
 /// One translation channel of an [`Animation`], keyed by the node it moves.
@@ -250,16 +287,18 @@ enum Interp {
 }
 
 impl Channel {
-    /// The channel's value at `t`, held at its first and last keys beyond them.
+    /// The channel's value at `t`, held at its first and last keys beyond them. A `t` that
+    /// is not a number is the first key: it compares false against everything, and the
+    /// partition below would otherwise hand back index 0 and wrap on the `- 1`.
     fn sample(&self, t: f32) -> [f32; 3] {
         let last = self.times.len() - 1;
-        if t <= self.times[0] {
+        if t.is_nan() || t <= self.times[0] {
             return self.values[0];
         }
         if t >= self.times[last] {
             return self.values[last];
         }
-        // The key at or before `t`; `t` is strictly inside the range, so `i < last`.
+        // The key at or before `t`; `t` is strictly inside the range, so `1 <= i < last`.
         let i = self.times.partition_point(|&k| k <= t) - 1;
         match self.interpolation {
             Interp::Step => self.values[i],
@@ -280,7 +319,7 @@ impl Channel {
 /// Rotation, scale and morph-weight channels are not read.
 pub struct Animation {
     name: String,
-    /// The last key time over every channel: the clip's length in seconds.
+    /// The last key time over the kept channels: the clip's length in seconds.
     duration: f32,
     channels: Vec<Channel>,
 }
@@ -290,7 +329,10 @@ impl Animation {
         &self.name
     }
 
-    /// Seconds from the first sample to the last.
+    /// The clip's length in seconds: the last key time over the translation channels that
+    /// were kept (see the type docs). A rotation or scale channel that ran on longer in the
+    /// file does not count, because it is not read; the first key is not subtracted, so a
+    /// clip whose keys start late is as long as its last key says.
     pub fn duration(&self) -> f32 {
         self.duration
     }
@@ -302,10 +344,13 @@ impl Animation {
 
     /// The node's animated translation at `t` seconds, in the node's own local space (the
     /// units and axes of its parent -- what the file's `translation` property is in). `t` is
-    /// clamped to `[0, duration]`. `None` when the clip has no translation channel for `node`.
+    /// clamped to `[0, duration]`; a `t` that is not a number (a clip time poisoned by a
+    /// zero-length division somewhere upstream) reads as 0, the rest pose, rather than
+    /// indexing the keys with it. `None` when the clip has no translation channel for `node`.
     pub fn translation(&self, node: &str, t: f32) -> Option<[f32; 3]> {
         let ch = self.channels.iter().find(|c| c.node == node)?;
-        Some(ch.sample(t.clamp(0.0, self.duration)))
+        let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, self.duration) };
+        Some(ch.sample(t))
     }
 }
 
@@ -473,6 +518,9 @@ struct MaterialPolicy {
     /// pool's marble, scaled x5 by a texture transform), so the packed textures must take the
     /// sampler's wrap mode rather than the clamp an atlas-addressed material gets.
     tiles: bool,
+    /// `Load::metallic_override` for this material, if a pattern named it: what the packed
+    /// surface map's metalness is scaled by in place of the file's `metallicFactor`.
+    metallic: Option<f32>,
 }
 
 /// The GL-free half of a load: the file parsed, its parts gathered and fitted. Split out so
@@ -514,7 +562,7 @@ impl GltfModel {
         for spec in parts {
             let mut kinds = raw[spec.name]
                 .iter()
-                .map(|r| doc.materials().nth(r.material).is_some_and(|m| m.unlit()));
+                .map(|r| material(&doc, r.material).is_some_and(|m| m.unlit()));
             let first = kinds.next().expect("part gathered geometry");
             if !kinds.all(|k| k == first) {
                 return Err(bad(format!(
@@ -540,7 +588,7 @@ impl GltfModel {
                 name.clone(),
                 list.iter().map(|r| upload(gl, r)).collect::<Result<_, _>>()?,
             );
-            geometry.insert(name.clone(), gather(list));
+            geometry.insert(name.clone(), gather(list, &policies));
         }
 
         Ok(GltfModel { gl: gl.clone(), materials, parts: built, bounds, geometry, rig })
@@ -552,8 +600,36 @@ impl GltfModel {
     #[cfg(test)]
     pub fn probe_triangles(spec: &Load, part: &str) -> (Vec<[f32; 3]>, Vec<u32>) {
         let parsed = parse(spec).unwrap_or_else(|e| panic!("{e}"));
-        let g = gather(&parsed.raw[part]);
+        let g = gather(&parsed.raw[part], &parsed.policies);
         (g.pos, g.idx)
+    }
+
+    /// A part's fitted bounds straight from the file, with no GL context (see `bounds`).
+    #[cfg(test)]
+    pub fn probe_bounds(spec: &Load, part: &str) -> [f32; 6] {
+        parse(spec).unwrap_or_else(|e| panic!("{e}")).bounds[part]
+    }
+
+    /// What `spec.metallic_override` made of the material called `name`: the metalness it
+    /// will be packed with, or `None` where the file's own factor stands.
+    #[cfg(test)]
+    pub fn probe_metallic(spec: &Load, name: &str) -> Option<f32> {
+        let parsed = parse(spec).unwrap_or_else(|e| panic!("{e}"));
+        let i = parsed
+            .doc
+            .materials()
+            .position(|m| m.name() == Some(name))
+            .unwrap_or_else(|| panic!("no material {name:?}"));
+        parsed.policies[i].metallic
+    }
+
+    /// `probe_triangles` for the part's solid triangles only (see `solid_triangles`): what a
+    /// test measures a floor or a wall from, with the foliage cards out of the way.
+    #[cfg(test)]
+    pub fn probe_solid_triangles(spec: &Load, part: &str) -> (Vec<[f32; 3]>, Vec<u32>) {
+        let parsed = parse(spec).unwrap_or_else(|e| panic!("{e}"));
+        let g = gather(&parsed.raw[part], &parsed.policies);
+        (g.pos, g.solid)
     }
 
     /// The file's clips and the nodes each one moves, `(clip, nodes)` in file order, read
@@ -579,10 +655,21 @@ impl GltfModel {
     }
 
     /// A part's fitted triangles in the model's object space, as `(positions, indices)` with
-    /// three indices per triangle and each triangle listed once. What a collider is built from.
+    /// three indices per triangle and each triangle listed once.
     pub fn triangles(&self, part: &str) -> (&[[f32; 3]], &[u32]) {
         let g = self.geometry.get(part).unwrap_or_else(|| panic!("no part {part:?}"));
         (&g.pos, &g.idx)
+    }
+
+    /// [`GltfModel::triangles`] restricted to the triangles of **opaque** materials: neither
+    /// alpha-tested (`MASK`, or `BLEND` under the alpha policy) nor translucent. What a
+    /// collider is built from. A foliage card is a picture of a bush on a quad, and a player
+    /// must walk through the quad's transparent corners as freely as its leaves; a pool's
+    /// water is something to wade through, not a floor. Positions are the whole part's --
+    /// the indices simply never name the others.
+    pub fn solid_triangles(&self, part: &str) -> (&[[f32; 3]], &[u32]) {
+        let g = self.geometry.get(part).unwrap_or_else(|| panic!("no part {part:?}"));
+        (&g.pos, &g.solid)
     }
 
     /// Whether a part's materials are `KHR_materials_unlit` -- and so whether it is drawn with
@@ -628,19 +715,14 @@ impl GltfModel {
     /// samplers on top.
     ///
     /// Opaque and alpha-tested primitives go first, then the part's translucent ones blended
-    /// over them (see the module docs), in file order within each group. The blend state is
-    /// restored to the ported renderer's (BLEND off, depth writes on, back faces culled) before
-    /// returning. Translucent surfaces are ordered against the rest of the scene only by what
-    /// was drawn before this part: a scene that wants its water over everything draws the
-    /// model that owns it last.
+    /// over them (see the module docs), in file order within each group. Translucent surfaces
+    /// are ordered against the rest of the scene only by what was drawn before this part: a
+    /// scene that wants its water over everything draws the model that owns it last. A model
+    /// of several parts wants every part's opaque pass before any part's translucent one --
+    /// [`GltfModel::draw_part_pass`] draws the two separately for that.
     ///
     /// Takes `&self`: `ObjectT::draw` is re-entrant through portal recursion (Portal::Draw
     /// re-enters Engine::Render), so a draw path must never mutate.
-    ///
-    /// Skipped outright when the part's bounding sphere lies wholly outside the pass frustum
-    /// (`ext::cull`). The backrooms sits 1,000 units from the meadow and is drawn by the
-    /// meadow's main pass too; without this its 70k triangles would be transformed and clipped
-    /// in every pass that cannot see it.
     pub fn draw_part(
         &self,
         part: &str,
@@ -649,7 +731,33 @@ impl GltfModel {
         cam: &Camera,
         ctx: &RenderCtx,
     ) {
+        self.draw_part_pass(part, obj, shader, cam, ctx, Pass::Opaque);
+        self.draw_part_pass(part, obj, shader, cam, ctx, Pass::Translucent);
+    }
+
+    /// One of the two passes of [`GltfModel::draw_part`]. [`Pass::Translucent`] leaves the
+    /// blend state as the ported renderer expects it (BLEND off, depth writes on, back faces
+    /// culled) before returning, and costs nothing for a part with no translucent material.
+    ///
+    /// Either pass is skipped outright when the part's bounding sphere lies wholly outside
+    /// the pass frustum (`ext::cull`). The backrooms sits 1,000 units from the meadow and is
+    /// drawn by the meadow's main pass too; without this its 70k triangles would be
+    /// transformed and clipped in every pass that cannot see it.
+    pub fn draw_part_pass(
+        &self,
+        part: &str,
+        obj: &Object,
+        shader: &Shader,
+        cam: &Camera,
+        ctx: &RenderCtx,
+        pass: Pass,
+    ) {
         let Some(prims) = self.parts.get(part) else { return };
+        let wanted =
+            |p: &&Prim| self.materials[p.material].translucent == (pass == Pass::Translucent);
+        if !prims.iter().any(|p| wanted(&p)) {
+            return;
+        }
         let local_to_world = obj.local_to_world();
         let (centre, radius) = self.bounding_sphere(part);
         let world_centre = local_to_world.mul_point(centre);
@@ -681,25 +789,28 @@ impl GltfModel {
         shader.set_i32("tex2", 1);
         shader.set_i32("tex3", 2);
 
-        let translucent = |p: &&Prim| self.materials[p.material].translucent;
         unsafe {
-            for p in prims.iter().filter(|p| !translucent(p)) {
-                self.draw_prim(p, shader, p.count);
-            }
-            if prims.iter().any(|p| translucent(&p)) {
-                let gl = &self.gl;
-                gl.enable(glow::BLEND);
-                gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
-                gl.depth_mask(false);
-                // Both sides of a see-through surface show, and the double-sided copy of the
-                // winding must not draw: culling off, source winding only.
-                gl.disable(glow::CULL_FACE);
-                for p in prims.iter().filter(translucent) {
-                    self.draw_prim(p, shader, p.front);
+            match pass {
+                Pass::Opaque => {
+                    for p in prims.iter().filter(wanted) {
+                        self.draw_prim(p, shader, p.count);
+                    }
                 }
-                gl.enable(glow::CULL_FACE);
-                gl.depth_mask(true);
-                gl.disable(glow::BLEND);
+                Pass::Translucent => {
+                    let gl = &self.gl;
+                    gl.enable(glow::BLEND);
+                    gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+                    gl.depth_mask(false);
+                    // Both sides of a see-through surface show, and the double-sided copy of
+                    // the winding must not draw: culling off, source winding only.
+                    gl.disable(glow::CULL_FACE);
+                    for p in prims.iter().filter(wanted) {
+                        self.draw_prim(p, shader, p.front);
+                    }
+                    gl.enable(glow::CULL_FACE);
+                    gl.depth_mask(true);
+                    gl.disable(glow::BLEND);
+                }
             }
             self.gl.bind_vertex_array(None);
         }
@@ -759,12 +870,17 @@ impl Drop for GltfModel {
 /// Read, walk and fit. See `Parsed`. Anything wrong with the file, or with what the spec
 /// asks of it, is a `Gltf` error naming the file.
 fn parse(spec: &Load) -> Result<Parsed, AssetError> {
-    let Load { path: rel, parts, fit, translucent, .. } = *spec;
-    let path = assets::path(rel);
-    let bad = |reason: String| AssetError::Gltf { path: path.clone(), reason };
+    let path = assets::path(spec.path);
     let bytes =
         std::fs::read(&path).map_err(|source| AssetError::Io { path: path.clone(), source })?;
-    let gltf = gltf::Gltf::from_slice(&bytes).map_err(|e| bad(format!("parse: {e}")))?;
+    parse_bytes(&bytes, spec, path)
+}
+
+/// `parse` on a GLB already in memory; `path` only names it in errors.
+fn parse_bytes(bytes: &[u8], spec: &Load, path: std::path::PathBuf) -> Result<Parsed, AssetError> {
+    let Load { parts, fit, translucent, metallic_override, .. } = *spec;
+    let bad = |reason: String| AssetError::Gltf { path: path.clone(), reason };
+    let gltf = gltf::Gltf::from_slice(bytes).map_err(|e| bad(format!("parse: {e}")))?;
     let blob = gltf.blob.clone().ok_or_else(|| bad("no BIN chunk".to_string()))?;
     let doc = gltf.document;
 
@@ -783,7 +899,9 @@ fn parse(spec: &Load) -> Result<Parsed, AssetError> {
             .ok_or_else(|| bad(format!("no node named {name:?}")))
     };
 
-    // ── Walk each part's sub-trees into CPU buffers.
+    // ── Walk each part's sub-trees into CPU buffers. A primitive without a material takes
+    // the slot one past the file's materials (see `material`).
+    let n_materials = doc.materials().count();
     let mut raw: HashMap<String, Vec<Raw>> = HashMap::new();
     for spec in parts {
         let mut out: Vec<Raw> = Vec::new();
@@ -806,7 +924,7 @@ fn parse(spec: &Load) -> Result<Parsed, AssetError> {
                 }
                 Frame::Scene => parents[root.index()],
             };
-            walk(root, base, spec.skip, &blob, &mut out);
+            walk(root, base, spec.skip, &blob, n_materials, &mut out);
         }
         if out.is_empty() {
             return Err(bad(format!("part {:?} gathered no geometry", spec.name)));
@@ -859,24 +977,34 @@ fn parse(spec: &Load) -> Result<Parsed, AssetError> {
     let bounds: HashMap<String, [f32; 6]> =
         raw.iter().map(|(name, list)| (name.clone(), bbox(list))).collect();
 
-    // ── Alpha policy per material, and whether its UVs tile.
+    // ── Alpha policy and metalness per material, and whether its UVs tile. One slot past
+    // the file's materials is the default material, for primitives that declare none; it is
+    // only built when some primitive uses it.
     for name in translucent {
         if !doc.materials().any(|m| m.name() == Some(name)) {
             return Err(bad(format!("no material named {name:?} to draw translucent")));
         }
     }
-    let mut tiles = vec![false; doc.materials().count()];
+    for (pattern, _) in metallic_override {
+        if !doc.materials().any(|m| m.name().is_some_and(|n| pattern_matches(pattern, n))) {
+            return Err(bad(format!("no material matches {pattern:?} to override its metalness")));
+        }
+    }
+    let mut tiles = vec![false; n_materials + 1];
     for r in raw.values().flatten() {
         if r.uv.iter().any(|uv| uv.iter().any(|&c| !(-1e-4..=1.0 + 1e-4).contains(&c))) {
             tiles[r.material] = true;
         }
     }
-    let policies = doc
-        .materials()
-        .zip(tiles)
-        .map(|(m, tiles)| {
+    let uses_default = raw.values().flatten().any(|r| r.material == n_materials);
+    let policies = (0..n_materials + usize::from(uses_default))
+        .map(|i| {
+            let m = material(&doc, i).expect("in range, or the default some primitive uses");
             let named = m.name().is_some_and(|n| translucent.contains(&n));
-            material_policy(&m, named, tiles)
+            let metallic = m.name().and_then(|n| {
+                metallic_override.iter().find(|(p, _)| pattern_matches(p, n)).map(|&(_, f)| f)
+            });
+            material_policy(&m, named, tiles[i], metallic)
         })
         .collect();
 
@@ -894,27 +1022,53 @@ fn parse(spec: &Load) -> Result<Parsed, AssetError> {
     Ok(Parsed { doc, blob, raw, bounds, policies, rig: Rig { animations, nodes, fit_scale } })
 }
 
-/// The alpha policy (module docs) for one material.
-fn material_policy(m: &gltf::Material, named_translucent: bool, tiles: bool) -> MaterialPolicy {
+/// The alpha policy (module docs) for one material, plus its metalness override.
+fn material_policy(
+    m: &gltf::Material,
+    named_translucent: bool,
+    tiles: bool,
+    metallic: Option<f32>,
+) -> MaterialPolicy {
     use gltf::material::AlphaMode;
+    let policy = |alpha_cutoff: f32, translucent: bool, keeps_alpha: bool| MaterialPolicy {
+        alpha_cutoff,
+        translucent,
+        keeps_alpha,
+        tiles,
+        metallic,
+    };
     if named_translucent {
-        return MaterialPolicy { alpha_cutoff: -1.0, translucent: true, keeps_alpha: true, tiles };
+        return policy(-1.0, true, true);
     }
     match m.alpha_mode() {
-        AlphaMode::Opaque => {
-            MaterialPolicy { alpha_cutoff: -1.0, translucent: false, keeps_alpha: false, tiles }
-        }
+        AlphaMode::Opaque => policy(-1.0, false, false),
         // The spec's default cutoff is 0.5 when the file leaves it out.
-        AlphaMode::Mask => MaterialPolicy {
-            alpha_cutoff: m.alpha_cutoff().unwrap_or(0.5),
-            translucent: false,
-            keeps_alpha: true,
-            tiles,
-        },
-        AlphaMode::Blend => {
-            MaterialPolicy { alpha_cutoff: 0.5, translucent: false, keeps_alpha: true, tiles }
-        }
+        AlphaMode::Mask => policy(m.alpha_cutoff().unwrap_or(0.5), false, true),
+        AlphaMode::Blend => policy(0.5, false, true),
     }
+}
+
+/// Whether a `Load::metallic_override` pattern names `material`: exact, or a prefix when the
+/// pattern ends in `*`.
+fn pattern_matches(pattern: &str, material: &str) -> bool {
+    match pattern.strip_suffix('*') {
+        Some(prefix) => material.starts_with(prefix),
+        None => pattern == material,
+    }
+}
+
+/// The file's material `i`, or the default material for `i` one past the file's count --
+/// the slot `walk` gives a primitive that declares none (see `default_material`).
+fn material(doc: &gltf::Document, i: usize) -> Option<gltf::Material<'_>> {
+    doc.materials().nth(i).or_else(|| default_material(doc))
+}
+
+/// The spec's default material, as the `gltf` crate hands it to a primitive without one:
+/// white, metalness 1, roughness 1, opaque, no maps. There is no way to construct it
+/// directly, so it is borrowed from the first such primitive; `None` when every primitive
+/// names a material and nothing needs it.
+fn default_material(doc: &gltf::Document) -> Option<gltf::Material<'_>> {
+    doc.meshes().flat_map(|m| m.primitives()).map(|p| p.material()).find(|m| m.index().is_none())
 }
 
 /// Fill `parents[i]` with the world matrix of node `i`'s parent, for every node under `node`.
@@ -999,7 +1153,17 @@ fn uv_transform(prim: &gltf::Primitive) -> Option<UvTransform> {
     Some(UvTransform { offset: t.offset(), rotation: t.rotation(), scale: t.scale() })
 }
 
-fn walk(node: &gltf::Node, parent: M, skip: &[&str], blob: &[u8], out: &mut Vec<Raw>) {
+/// Gather the primitives under `node` into `out`; `default_material` is the material slot a
+/// primitive that declares none is given (one past the file's own -- see `material`), so it
+/// never aliases the file's first material, and a file with no materials at all still loads.
+fn walk(
+    node: &gltf::Node,
+    parent: M,
+    skip: &[&str],
+    blob: &[u8],
+    default_material: usize,
+    out: &mut Vec<Raw>,
+) {
     if node.name().is_some_and(|n| skip.contains(&n)) {
         return;
     }
@@ -1065,12 +1229,12 @@ fn walk(node: &gltf::Node, parent: M, skip: &[&str], blob: &[u8], out: &mut Vec<
                 tan,
                 idx,
                 front,
-                material: prim.material().index().unwrap_or(0),
+                material: prim.material().index().unwrap_or(default_material),
             });
         }
     }
     for c in node.children() {
-        walk(&c, world, skip, blob, out);
+        walk(&c, world, skip, blob, default_material, out);
     }
 }
 
@@ -1150,16 +1314,24 @@ fn perpendicular(n: [f32; 3]) -> [f32; 3] {
     )
 }
 
-/// Concatenate a part's primitives into one triangle list, each triangle once.
-fn gather(list: &[Raw]) -> Geometry {
+/// Concatenate a part's primitives into one triangle list, each triangle once, and note
+/// which of them are solid (`GltfModel::solid_triangles`: the material neither alpha-tested
+/// nor translucent).
+fn gather(list: &[Raw], policies: &[MaterialPolicy]) -> Geometry {
     let mut pos = Vec::new();
     let mut idx = Vec::new();
+    let mut solid = Vec::new();
     for r in list {
         let base = pos.len() as u32;
         pos.extend_from_slice(&r.pos);
-        idx.extend(r.idx[..r.front].iter().map(|i| i + base));
+        let own = r.idx[..r.front].iter().map(|i| i + base);
+        let policy = &policies[r.material];
+        if policy.alpha_cutoff < 0.0 && !policy.translucent {
+            solid.extend(own.clone());
+        }
+        idx.extend(own);
     }
-    Geometry { pos, idx }
+    Geometry { pos, idx, solid }
 }
 
 fn upload(gl: &Rc<glow::Context>, r: &Raw) -> Result<Prim, AssetError> {
@@ -1397,7 +1569,7 @@ fn build_material(
     i: usize,
     policy: &MaterialPolicy,
 ) -> Result<Material, AssetError> {
-    let m = doc.materials().nth(i).expect("material index in range");
+    let m = material(doc, i).expect("material index in range, or the default");
     let pbr = m.pbr_metallic_roughness();
 
     let [base_src, mr_src, nrm_src, occ_src, emis_src] = material_sources(&m);
@@ -1408,7 +1580,7 @@ fn build_material(
     let bf = pbr.base_color_factor();
     let strength = m.emissive_strength().unwrap_or(1.0);
     let ef = m.emissive_factor();
-    let &MaterialPolicy { alpha_cutoff, translucent, keeps_alpha, tiles } = policy;
+    let &MaterialPolicy { alpha_cutoff, translucent, keeps_alpha, tiles, metallic } = policy;
     let sampler_wrap = pbr
         .base_color_texture()
         .map(|t| {
@@ -1441,7 +1613,8 @@ fn build_material(
         });
     }
 
-    let metal_f = pbr.metallic_factor();
+    // The file's factor unless the load overrides it (`Load::metallic_override`).
+    let metal_f = metallic.unwrap_or_else(|| pbr.metallic_factor());
     let rough_f = pbr.roughness_factor();
     let occ_str = m.occlusion_texture().map(|t| t.strength()).unwrap_or(1.0);
     let unit = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u8;
@@ -1459,13 +1632,18 @@ fn build_material(
 
     // Normal xy; z is reconstructed in the shader, so the blue channel is free for roughness.
     // glTF metallic-roughness: G = roughness, B = metalness, each scaled by its factor.
+    // The normal map's `scale` is baked into xy here (the spec: scale the xy components,
+    // then renormalise -- which the shader's reconstruction of z does). A file can wear a
+    // normal map at scale 0, which is how the overgrown room turns the moss's bumps off on
+    // the wallpaper that shares them; ignoring it grained every wall.
     let (sw, sh) = pack_size(&[nrm, mr]);
+    let nscale = m.normal_texture().map_or(1.0, |t| t.scale());
     let surface = pack(sw, sh, |px| {
         let nv = px(nrm);
         let mrv = px(mr);
         let rough = mrv.map(|p| p[1] as f32 / 255.0).unwrap_or(1.0) * rough_f;
         let metal = mrv.map(|p| p[2] as f32 / 255.0).unwrap_or(1.0) * metal_f;
-        [nv.map(|p| p[0]).unwrap_or(128), nv.map(|p| p[1]).unwrap_or(128), unit(rough), unit(metal)]
+        [normal_xy(nv, 0, nscale), normal_xy(nv, 1, nscale), unit(rough), unit(metal)]
     });
 
     // Emissive, factor and strength applied and saturated here -- there is no HDR target for
@@ -1493,6 +1671,18 @@ fn build_material(
         alpha_cutoff,
         translucent,
     })
+}
+
+/// One of a normal map texel's xy components, its `scale` applied about the flat value 128:
+/// the byte untouched at scale 1, so an unscaled map packs bit for bit, and flat at 0. A
+/// missing map is flat.
+fn normal_xy(texel: Option<image::Rgba<u8>>, c: usize, scale: f32) -> u8 {
+    let Some(p) = texel else { return 128 };
+    if scale == 1.0 {
+        return p[c];
+    }
+    let v = (p[c] as f32 / 255.0 * 2.0 - 1.0) * scale;
+    ((v * 0.5 + 0.5).clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 fn tex2d(
@@ -1694,6 +1884,47 @@ mod tests {
         assert_eq!(a.nodes().collect::<Vec<_>>(), vec!["n"]);
     }
 
+    /// A time that is not a number, or infinite, must not wrap an index: NaN is the rest
+    /// pose, the infinities are the ends.
+    #[test]
+    fn animation_survives_nan_and_infinite_times() {
+        let a =
+            Animation { name: "clip".into(), duration: 4.0, channels: vec![ramp(Interp::Linear)] };
+        assert_eq!(a.translation("n", f32::NAN), Some([0.0, 0.0, 0.0]));
+        assert_eq!(a.translation("n", f32::INFINITY), Some([3.0, 0.0, 0.0]));
+        assert_eq!(a.translation("n", f32::NEG_INFINITY), Some([0.0, 0.0, 0.0]));
+        // And the channel itself, which a clip could hand an unclamped value.
+        assert_eq!(ramp(Interp::Step).sample(f32::NAN), [0.0, 0.0, 0.0]);
+        // A clip whose keys start late is as long as its last key: no first-key subtraction.
+        assert_eq!(a.duration(), 4.0);
+    }
+
+    #[test]
+    fn normal_scale_is_baked_about_flat() {
+        let px = |r: u8, g: u8| Some(image::Rgba([r, g, 255, 255]));
+        // Scale 1: bit for bit.
+        assert_eq!(normal_xy(px(37, 200), 0, 1.0), 37);
+        assert_eq!(normal_xy(px(37, 200), 1, 1.0), 200);
+        // Scale 0: flat, whatever the map says.
+        assert_eq!(normal_xy(px(37, 200), 0, 0.0), 128);
+        assert_eq!(normal_xy(px(0, 255), 1, 0.0), 128);
+        // Scale 0.5 halves the tilt; 2 doubles it and saturates.
+        assert_eq!(normal_xy(px(255, 0), 0, 0.5), 191);
+        assert_eq!(normal_xy(px(255, 0), 1, 0.5), 64);
+        assert_eq!(normal_xy(px(200, 0), 0, 2.0), 255);
+        // No map: flat.
+        assert_eq!(normal_xy(None, 0, 1.0), 128);
+    }
+
+    #[test]
+    fn metallic_patterns_match_exactly_or_by_prefix() {
+        assert!(pattern_matches("Bush_*", "Bush_Texture_1"));
+        assert!(pattern_matches("Thick_Moss", "Thick_Moss"));
+        assert!(!pattern_matches("Bush_*", "Grass_Realistic_1"));
+        assert!(!pattern_matches("Bush", "Bush_Texture_1"), "no star, no prefix");
+        assert!(!pattern_matches("Thick_Moss", "Thick_Moss_2"));
+    }
+
     /// The rig carries a local displacement through the parent's linear part and the fit.
     #[test]
     fn node_delta_applies_the_parent_chain_and_the_fit_scale() {
@@ -1743,7 +1974,14 @@ mod tests {
     }];
 
     fn whole(path: &'static str, translucent: &'static [&'static str]) -> Parsed {
-        let spec = Load { path, parts: &WHOLE, fit: Fit::Identity, max_map: 1024, translucent };
+        let spec = Load {
+            path,
+            parts: &WHOLE,
+            fit: Fit::Identity,
+            max_map: 1024,
+            translucent,
+            metallic_override: &[],
+        };
         parse(&spec).unwrap_or_else(|e| panic!("{e}"))
     }
 
@@ -1823,6 +2061,7 @@ mod tests {
             fit: Fit::Identity,
             max_map: 1024,
             translucent: &[],
+            metallic_override: &[],
         };
         let p = parse(&spec).unwrap_or_else(|e| panic!("{e}"));
         // The leaf's triangles are in one part or the other, never both.
@@ -1889,6 +2128,190 @@ mod tests {
         assert!(!w.translucent && (w.alpha_cutoff - 0.5).abs() < 1e-6);
     }
 
+    /// The smallest GLB there is: one triangle, no materials, no indices. What an exporter
+    /// writes for a bare mesh, and what used to alias material 0 -- which here does not
+    /// exist.
+    fn bare_triangle_glb() -> Vec<u8> {
+        let json = br#"{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0,"name":"tri"}],"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}],"bufferViews":[{"buffer":0,"byteLength":36}],"buffers":[{"byteLength":36}]}"#;
+        let mut json = json.to_vec();
+        while json.len() % 4 != 0 {
+            json.push(b' ');
+        }
+        let mut bin = Vec::new();
+        for v in [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
+            bin.extend_from_slice(&v.to_le_bytes());
+        }
+        let total = 12 + 8 + json.len() + 8 + bin.len();
+        let mut out = Vec::new();
+        out.extend_from_slice(b"glTF");
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+        out.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"JSON");
+        out.extend_from_slice(&json);
+        out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"BIN\0");
+        out.extend_from_slice(&bin);
+        out
+    }
+
+    #[test]
+    fn a_primitive_without_a_material_gets_the_default_one() {
+        let spec = Load {
+            path: "bare.glb",
+            parts: &WHOLE,
+            fit: Fit::Identity,
+            max_map: 1024,
+            translucent: &[],
+            metallic_override: &[],
+        };
+        let p = parse_bytes(&bare_triangle_glb(), &spec, "bare.glb".into())
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(p.doc.materials().count(), 0);
+        // The one primitive names the slot past the file's (none) materials, and a policy
+        // was built for it: opaque, as the spec's default material is.
+        assert_eq!(p.raw["all"].len(), 1);
+        assert_eq!(p.raw["all"][0].material, 0);
+        assert_eq!(p.policies.len(), 1);
+        assert!(p.policies[0].alpha_cutoff < 0.0 && !p.policies[0].translucent);
+        assert!(!p.policies[0].keeps_alpha);
+        // It is PBR (not unlit), and has the default's maps: none.
+        let m = material(&p.doc, 0).expect("the default");
+        assert!(m.index().is_none() && !m.unlit());
+        assert_eq!(material_sources(&m), [None; 5]);
+        // A file whose primitives all name a material builds no default slot.
+        let q = whole("Meshes/backrooms_room_with_plants_overgrown.glb", &[]);
+        assert_eq!(q.policies.len(), q.doc.materials().count());
+    }
+
+    /// The elevator embeds both formats: nine images, JPEG and PNG (two of them paletted),
+    /// every one decoded to RGBA at its own size under a cap it fits in, and shrunk about its
+    /// longer side under one it does not.
+    #[test]
+    fn decode_maps_reads_the_elevators_jpeg_and_png_images() {
+        let path = assets::path("Meshes/elevator_with_animation_lowpoly.glb");
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let gltf = gltf::Gltf::from_slice(&bytes).unwrap_or_else(|e| panic!("{e}"));
+        let blob = gltf.blob.as_deref().expect("BIN");
+        let doc = &gltf.document;
+        let kinds: Vec<&str> = doc
+            .images()
+            .map(|i| match i.source() {
+                gltf::image::Source::View { mime_type, .. } => mime_type,
+                gltf::image::Source::Uri { .. } => "uri",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "image/jpeg",
+                "image/jpeg",
+                "image/jpeg",
+                "image/jpeg",
+                "image/png",
+                "image/jpeg",
+                "image/png",
+                "image/png",
+                "image/jpeg"
+            ]
+        );
+        let maps = decode_maps(doc, blob, 1024).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(maps.len(), 9, "every image is referenced by a material");
+        let sizes = [
+            (1024, 512),
+            (256, 128),
+            (512, 256),
+            (512, 1024),
+            (512, 1024),
+            (512, 1024),
+            (512, 256),
+            (512, 512),
+            (256, 256),
+        ];
+        for (i, &size) in sizes.iter().enumerate() {
+            assert_eq!(maps[&i].dimensions(), size, "image {i}");
+        }
+        // The paletted PNG (image 7, the wallpaper) expanded to straight RGBA: not one colour.
+        let wallpaper = &maps[&7];
+        let first = wallpaper.get_pixel(0, 0);
+        assert!(wallpaper.pixels().any(|p| p != first));
+        // Under a smaller cap the oversize maps shrink about their longer side and the rest
+        // are untouched.
+        let small = decode_maps(doc, blob, 256).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(small[&0].dimensions(), (256, 128));
+        assert_eq!(small[&3].dimensions(), (128, 256));
+        assert_eq!(small[&1].dimensions(), (256, 128));
+        assert_eq!(small[&8].dimensions(), (256, 256));
+    }
+
+    /// The solid subset leaves out what is alpha-tested or translucent: the pool's water, the
+    /// overgrown room's foliage cards.
+    #[test]
+    fn solid_triangles_leave_out_water_and_foliage() {
+        let p = whole("Meshes/level_37_flooded_tiled_complex.glb", &["Water.002"]);
+        let g = gather(&p.raw["all"], &p.policies);
+        assert_eq!(g.idx.len() / 3, 15095);
+        assert_eq!(g.solid.len() / 3, 15095 - 10, "the two water sheets are ten triangles");
+        // Water alpha-tested instead (not named) is still not solid.
+        let p = whole("Meshes/level_37_flooded_tiled_complex.glb", &[]);
+        let g = gather(&p.raw["all"], &p.policies);
+        assert_eq!(g.solid.len() / 3, 15095 - 10);
+
+        let p = whole("Meshes/backrooms_room_with_plants_overgrown.glb", &[]);
+        let g = gather(&p.raw["all"], &p.policies);
+        let foliage: usize = p.raw["all"]
+            .iter()
+            .filter(|r| p.policies[r.material].alpha_cutoff >= 0.0)
+            .map(|r| r.front / 3)
+            .sum();
+        assert!(foliage > 7000, "the grass and bushes are most of the file: {foliage}");
+        assert_eq!(g.solid.len() / 3, 8566 - foliage);
+        // The elevator is all opaque: nothing left out.
+        let p = whole("Meshes/elevator_with_animation_lowpoly.glb", &[]);
+        let g = gather(&p.raw["all"], &p.policies);
+        assert_eq!(g.solid.len(), g.idx.len());
+    }
+
+    #[test]
+    fn metallic_override_names_materials_by_pattern() {
+        let spec = Load {
+            path: "Meshes/backrooms_room_with_plants_overgrown.glb",
+            parts: &WHOLE,
+            fit: Fit::Identity,
+            max_map: 1024,
+            translucent: &[],
+            metallic_override: &[("Bush_*", 0.0), ("Thick_Moss", 0.25)],
+        };
+        let p = parse(&spec).unwrap_or_else(|e| panic!("{e}"));
+        let at = |name: &str| p.policies[material_index(&p, name)].metallic;
+        // The file's own factors: bushes 1 and 2 ship none, so the spec's default of 1.0 --
+        // the gotcha the override exists for.
+        let bush = p.doc.materials().find(|m| m.name() == Some("Bush_Texture_1")).unwrap();
+        assert_eq!(bush.pbr_metallic_roughness().metallic_factor(), 1.0);
+        assert_eq!(at("Bush_Texture_1"), Some(0.0));
+        assert_eq!(at("Bush_Texture_4"), Some(0.0));
+        assert_eq!(at("Thick_Moss"), Some(0.25));
+        assert_eq!(at("Grass_Realistic_1"), None);
+        assert_eq!(at("Backrooms_Wallpaper"), None);
+        // Nothing named: nothing overridden.
+        let q = whole("Meshes/backrooms_room_with_plants_overgrown.glb", &[]);
+        assert!(q.policies.iter().all(|m| m.metallic.is_none()));
+    }
+
+    #[test]
+    fn a_metallic_pattern_matching_nothing_is_an_error() {
+        let spec = Load {
+            path: "Meshes/backrooms_room_with_plants_overgrown.glb",
+            parts: &WHOLE,
+            fit: Fit::Identity,
+            max_map: 1024,
+            translucent: &[],
+            metallic_override: &[("Shrub_*", 0.0)],
+        };
+        let err = parse(&spec).err().expect("rejected");
+        assert!(err.to_string().contains("Shrub_*"), "{err}");
+    }
+
     #[test]
     fn a_translucent_name_the_file_lacks_is_an_error() {
         let spec = Load {
@@ -1897,6 +2320,7 @@ mod tests {
             fit: Fit::Identity,
             max_map: 1024,
             translucent: &["Water.003"],
+            metallic_override: &[],
         };
         let err = parse(&spec).err().expect("rejected");
         assert!(err.to_string().contains("Water.003"), "{err}");

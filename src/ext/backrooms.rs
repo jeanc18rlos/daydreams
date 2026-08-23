@@ -85,7 +85,14 @@ const PARTS: [PartSpec<'static>; 1] = [PartSpec {
 }];
 
 fn load_spec() -> Load<'static> {
-    Load { path: MODEL, parts: &PARTS, fit: Fit::Identity, max_map: MAP, translucent: &[] }
+    Load {
+        path: MODEL,
+        parts: &PARTS,
+        fit: Fit::Identity,
+        max_map: MAP,
+        translucent: &[],
+        metallic_override: &[],
+    }
 }
 
 /// Whether a player whose position (eye height, as `Player` keeps it) is `pos` has fallen

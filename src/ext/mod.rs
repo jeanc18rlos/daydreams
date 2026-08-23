@@ -55,6 +55,7 @@ pub mod grab;
 pub mod grassfield;
 pub mod grassgen;
 pub mod hud;
+pub mod interior;
 pub mod meadow;
 pub mod menu;
 pub mod occlusion;
