@@ -535,7 +535,7 @@ impl Engine {
         out.extend_from_slice(&[0u8; 24]);
         for y in 0..height as usize {
             out.extend_from_slice(&px[y * row..(y + 1) * row]);
-            out.extend(std::iter::repeat(0u8).take(pad));
+            out.extend(std::iter::repeat_n(0u8, pad));
         }
         match std::fs::write(&path, &out) {
             Ok(()) => {
@@ -793,9 +793,8 @@ impl Engine {
                         mesh.as_ref().map_or(&[], |m| &m.colliders);
 
                     //For each hit sphere
-                    for s in 0..hit_spheres.len() {
+                    for &sphere in &hit_spheres {
                         //Brings point from collider's local coordinates to hits's local coordinates.
-                        let sphere = hit_spheres[s];
                         let mut world_to_unit = sphere.local_to_unit() * world_to_local;
                         let mut local_to_unit =
                             world_to_unit * v_objects[j].borrow().base().local_to_world();

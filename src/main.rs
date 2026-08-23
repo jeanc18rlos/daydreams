@@ -186,8 +186,10 @@ fn confine_cursor(window: &Window, cursor_locked: bool) {
 // PORT: the glutin `DisplayBuilder`/`Init` two-phase dance. On most platforms `resumed` fires
 // once, but Android tears the surface down and re-creates it, so the display and the context are
 // built only the first time through.
+// The builder is boxed: it is a few hundred bytes that exist until the first `resumed`, and
+// `Init` is what the field holds for the rest of the run.
 enum GlDisplayCreationState {
-    Builder(DisplayBuilder),
+    Builder(Box<DisplayBuilder>),
     Init,
 }
 
@@ -240,7 +242,7 @@ impl App {
             state: None,
             gl_context: None,
             template,
-            display_state: GlDisplayCreationState::Builder(display_builder),
+            display_state: GlDisplayCreationState::Builder(Box::new(display_builder)),
             gl_config: None,
             not_current_gl_context: None,
             // PORT: seeded from GH_START_FULLSCREEN rather than hard-coded false, because
@@ -421,21 +423,20 @@ impl ApplicationHandler for App {
     ) {
         match event {
             // case WM_SIZE:   (Engine.cpp:289-293)
-            WindowEvent::Resized(size) => {
-                // PORT: guard against a zero dimension; the first frame (and a minimised
-                // window) can report 0, and NonZeroU32::new would panic.
-                if size.width != 0 && size.height != 0 {
-                    self.i_width = size.width as i32;
-                    self.i_height = size.height as i32;
-                    if let (Some(state), Some(gl_context)) =
-                        (self.state.as_ref(), self.gl_context.as_ref())
-                    {
-                        state.gl_surface.resize(
-                            gl_context,
-                            NonZeroU32::new(size.width).unwrap(),
-                            NonZeroU32::new(size.height).unwrap(),
-                        );
-                    }
+            // PORT: the arm's guard rejects a zero dimension; the first frame (and a
+            // minimised window) can report 0, and NonZeroU32::new would panic. A zero-size
+            // resize then falls through to the `_ => ()` arm, as the old inner `if` did.
+            WindowEvent::Resized(size) if size.width != 0 && size.height != 0 => {
+                self.i_width = size.width as i32;
+                self.i_height = size.height as i32;
+                if let (Some(state), Some(gl_context)) =
+                    (self.state.as_ref(), self.gl_context.as_ref())
+                {
+                    state.gl_surface.resize(
+                        gl_context,
+                        NonZeroU32::new(size.width).unwrap(),
+                        NonZeroU32::new(size.height).unwrap(),
+                    );
                 }
             }
 

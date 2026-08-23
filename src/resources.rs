@@ -44,9 +44,9 @@ impl Resources {
     pub fn acquire_mesh(&self, name: &str) -> Rc<Mesh> {
         let mut map = self.mesh_map.borrow_mut();
         // PORT: `map[std::string(name)]` default-inserts an empty weak_ptr and returns a
-        // reference to it; `entry(..).or_insert_with(Weak::new)` is the same thing
+        // reference to it; `entry(..).or_default()` (a Weak's default is `Weak::new`) is the same thing
         // (was: std::weak_ptr<Mesh>& mesh = map[std::string(name)], Resources.cpp:6).
-        let mesh = map.entry(String::from(name)).or_insert_with(Weak::new);
+        let mesh = map.entry(String::from(name)).or_default();
         // PORT: `expired()` + `lock()` collapse into a single `upgrade()`; None means expired
         // (was: if (mesh.expired()) { ... } else { return mesh.lock(); }, Resources.cpp:7-13).
         match mesh.upgrade() {
@@ -63,7 +63,7 @@ impl Resources {
     // Resources.cpp:16).
     pub fn acquire_shader(&self, name: &str) -> Rc<Shader> {
         let mut map = self.shader_map.borrow_mut();
-        let shader = map.entry(String::from(name)).or_insert_with(Weak::new);
+        let shader = map.entry(String::from(name)).or_default();
         match shader.upgrade() {
             None => {
                 let new_shader = Rc::new(Shader::new(&self.gl, name).unwrap_or_else(|e| fatal(&e)));
@@ -83,7 +83,7 @@ impl Resources {
     // same texture with different rows/cols returns the first-built one (Resources.cpp:30).
     pub fn acquire_texture(&self, name: &str, rows: i32, cols: i32) -> Rc<Texture> {
         let mut map = self.texture_map.borrow_mut();
-        let tex = map.entry(String::from(name)).or_insert_with(Weak::new);
+        let tex = map.entry(String::from(name)).or_default();
         match tex.upgrade() {
             None => {
                 let new_tex =

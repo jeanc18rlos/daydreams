@@ -304,8 +304,8 @@ mod tests {
             let z0 = -PATCH * 0.5 + row as f32 * CELL;
             for i in &p.idx[cell.first as usize..(cell.first + cell.count) as usize] {
                 let v = p.pos[*i as usize];
-                for k in 0..3 {
-                    assert!(v[k] >= cell.min[k] - 1e-6 && v[k] <= cell.max[k] + 1e-6);
+                for (k, &vk) in v.iter().enumerate() {
+                    assert!(vk >= cell.min[k] - 1e-6 && vk <= cell.max[k] + 1e-6);
                 }
             }
             assert!(cell.min[0] >= x0 - max_reach && cell.max[0] <= x0 + CELL + max_reach);

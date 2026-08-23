@@ -104,9 +104,9 @@ mod tests {
     /// Spawn and structure must fit inside the shell room.
     #[test]
     fn scene_fits_inside_the_room() {
-        assert!(MODEL_HALF_XZ < ROOM_HALF.x && MODEL_HALF_XZ < ROOM_HALF.z);
-        assert!(MODEL_TOP < ROOM_HALF.y);
+        const { assert!(MODEL_HALF_XZ < ROOM_HALF.x && MODEL_HALF_XZ < ROOM_HALF.z) }
+        const { assert!(MODEL_TOP < ROOM_HALF.y) }
         assert!(SPAWN.x.abs() < ROOM_HALF.x && SPAWN.z.abs() < ROOM_HALF.z);
-        assert!(SPAWN.y > 0.0 && SPAWN.y < ROOM_HALF.y);
+        const { assert!(SPAWN.y > 0.0 && SPAWN.y < ROOM_HALF.y) }
     }
 }

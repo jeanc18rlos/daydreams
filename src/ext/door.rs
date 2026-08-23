@@ -381,6 +381,6 @@ mod tests {
 
     #[test]
     fn hysteresis_is_real() {
-        assert!(CLOSE_DIST > OPEN_DIST);
+        const { assert!(CLOSE_DIST > OPEN_DIST) }
     }
 }

@@ -20,7 +20,10 @@ pub const GH_TITLE: &str = "DayDreams";
 pub const GH_CLASS: &str = "NED";
 
 //General
-pub const GH_PI: f32 = 3.141592653589793;
+// PORT: GameHeader.h's literal `3.141592653589793` rounds to the f32 nearest pi, which is
+// what `f32::consts::PI` is, bit for bit (the test below pins it); the name stays because the
+// ported files read it (was: static const float GH_PI = 3.141592653589793f, GameHeader.h:11).
+pub const GH_PI: f32 = std::f32::consts::PI;
 // PORT: `const int` -> usize, because it is only ever used to size/limit a Vec of portals
 // (was: static const int GH_MAX_PORTALS = 16, GameHeader.h:12).
 pub const GH_MAX_PORTALS: usize = 16;
@@ -94,5 +97,29 @@ pub fn gh_max<T: PartialOrd>(a: T, b: T) -> T {
         a
     } else {
         b
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The original's `3.141592653589793f` and `f32::consts::PI` are the same 32 bits: the
+    /// nearest float to pi, which the literal (pi to sixteen digits) rounds to. Computed
+    /// rather than written out, because the literal itself is what clippy objects to.
+    #[test]
+    fn gh_pi_is_the_originals_literal() {
+        let from_literal = (4.0f64 * 1.0f64.atan()) as f32;
+        assert_eq!(GH_PI.to_bits(), from_literal.to_bits());
+        assert_eq!(GH_PI.to_bits(), 0x4049_0fdb);
+    }
+
+    #[test]
+    fn clamp_min_and_max() {
+        assert_eq!(gh_clamp(5, 0, 3), 3);
+        assert_eq!(gh_clamp(-1, 0, 3), 0);
+        assert_eq!(gh_clamp(2, 0, 3), 2);
+        assert_eq!(gh_min(1.5, 2.5), 1.5);
+        assert_eq!(gh_max(1.5, 2.5), 2.5);
     }
 }

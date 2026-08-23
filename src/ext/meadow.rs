@@ -179,8 +179,8 @@ mod tests {
     /// The whole weather trick depends on the far world sitting past the split.
     #[test]
     fn far_world_is_past_the_mood_split() {
-        assert!(FAR.x > view::MOOD_SPLIT_X + 100.0);
-        assert!(DOOR_POS.x < view::MOOD_SPLIT_X);
+        const { assert!(FAR.x > view::MOOD_SPLIT_X + 100.0) }
+        const { assert!(DOOR_POS.x < view::MOOD_SPLIT_X) }
     }
 
     /// The title's vantage is composed by hand against constants that live elsewhere, and

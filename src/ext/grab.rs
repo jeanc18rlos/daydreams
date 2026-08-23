@@ -532,7 +532,7 @@ fn pick(
         if t > GRAB_REACH {
             continue;
         }
-        if best.map_or(true, |(_, bt, _)| t < bt) {
+        if best.is_none_or(|(_, bt, _)| t < bt) {
             best = Some((i, t, g));
         }
     }
@@ -553,7 +553,7 @@ fn try_grab(
         // indistinguishable from a broken key binding.
         let n = objects
             .iter()
-            .filter(|o| o.try_borrow().ok().map_or(false, |o| as_grabbable(&*o).is_some()))
+            .filter(|o| o.try_borrow().ok().is_some_and(|o| as_grabbable(&*o).is_some()))
             .count();
         log::debug!("[grab] nothing in reach (crosshair missed; {n} grabbable object(s) in scene, reach {GRAB_REACH})");
         return;
@@ -614,6 +614,63 @@ pub fn bound_radius(base: &Object) -> f32 {
     let mesh_r = base.mesh.as_ref().map_or(0.5, |m| m.bound_radius);
     let s = base.scale.x.max(base.scale.y).max(base.scale.z);
     (mesh_r * s).max(0.05)
+}
+
+/// Draw a translucent copy of the held object at the placement the ray alone would give, when
+/// the fit logic shrank the real object away from it (see module docs, "The ghost").
+///
+/// Runs in the main pass only, after the scene, so it never lands in a portal framebuffer.
+/// Blending is switched on and depth writes off for the single draw, then both are restored to
+/// the state the ported renderer assumes (BLEND off, depth mask on).
+pub fn draw_ghost(
+    gl: &glow::Context,
+    cam: &crate::camera::Camera,
+    objects: &[Rc<RefCell<dyn ObjectT>>],
+    state: &GrabState,
+    shader: &crate::shader::Shader,
+) {
+    use glow::HasContext;
+
+    let Some(idx) = state.held else { return };
+    if !state.fit_shrunk {
+        return;
+    }
+    let Some(handle) = objects.get(idx) else { return };
+    let Ok(obj) = handle.try_borrow() else { return };
+    let base = obj.base();
+    let Some(mesh) = base.mesh.clone() else { return };
+
+    // A throw-away Object with the ghost's transform, so the exact ported transform chain
+    // (Object.cpp:38) is reused rather than re-derived. `shader` is left None: the ghost is
+    // drawn by hand below with the ghost shader, not through `draw_impl`.
+    let ghost = Object {
+        pos: state.ghost_pos,
+        euler: base.euler,
+        scale: base.scale,
+        p_scale: state.target_scale,
+        mesh: None,
+        texture: None,
+        shader: None,
+    };
+    let mv = ghost.world_to_local().transposed();
+    let mvp = cam.matrix() * ghost.local_to_world();
+
+    shader.use_program();
+    if let Some(tex) = &base.texture {
+        tex.use_texture();
+    }
+    shader.set_mvp(Some(&mvp), Some(&mv));
+
+    unsafe {
+        gl.enable(glow::BLEND);
+        gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+        gl.depth_mask(false);
+    }
+    mesh.draw();
+    unsafe {
+        gl.depth_mask(true);
+        gl.disable(glow::BLEND);
+    }
 }
 
 #[cfg(test)]
@@ -780,62 +837,5 @@ mod tests {
             x += (1.0 - x) * SCALE_EASE;
         }
         assert!((x - 1.0).abs() < 1e-3);
-    }
-}
-
-/// Draw a translucent copy of the held object at the placement the ray alone would give, when
-/// the fit logic shrank the real object away from it (see module docs, "The ghost").
-///
-/// Runs in the main pass only, after the scene, so it never lands in a portal framebuffer.
-/// Blending is switched on and depth writes off for the single draw, then both are restored to
-/// the state the ported renderer assumes (BLEND off, depth mask on).
-pub fn draw_ghost(
-    gl: &glow::Context,
-    cam: &crate::camera::Camera,
-    objects: &[Rc<RefCell<dyn ObjectT>>],
-    state: &GrabState,
-    shader: &crate::shader::Shader,
-) {
-    use glow::HasContext;
-
-    let Some(idx) = state.held else { return };
-    if !state.fit_shrunk {
-        return;
-    }
-    let Some(handle) = objects.get(idx) else { return };
-    let Ok(obj) = handle.try_borrow() else { return };
-    let base = obj.base();
-    let Some(mesh) = base.mesh.clone() else { return };
-
-    // A throw-away Object with the ghost's transform, so the exact ported transform chain
-    // (Object.cpp:38) is reused rather than re-derived. `shader` is left None: the ghost is
-    // drawn by hand below with the ghost shader, not through `draw_impl`.
-    let ghost = Object {
-        pos: state.ghost_pos,
-        euler: base.euler,
-        scale: base.scale,
-        p_scale: state.target_scale,
-        mesh: None,
-        texture: None,
-        shader: None,
-    };
-    let mv = ghost.world_to_local().transposed();
-    let mvp = cam.matrix() * ghost.local_to_world();
-
-    shader.use_program();
-    if let Some(tex) = &base.texture {
-        tex.use_texture();
-    }
-    shader.set_mvp(Some(&mvp), Some(&mv));
-
-    unsafe {
-        gl.enable(glow::BLEND);
-        gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
-        gl.depth_mask(false);
-    }
-    mesh.draw();
-    unsafe {
-        gl.depth_mask(true);
-        gl.disable(glow::BLEND);
     }
 }

@@ -142,7 +142,7 @@ impl Portal {
         let frame_buf = &ctx.portal_fbos[(rec_level - 1) as usize];
         let mut portal_cam = *cam;
         portal_cam.clip_oblique(self.base.pos - normal * extra_clip, -normal);
-        portal_cam.world_view = portal_cam.world_view * warp.delta;
+        portal_cam.world_view *= warp.delta;
         portal_cam.width = frame_buf.width;
         portal_cam.height = frame_buf.height;
 

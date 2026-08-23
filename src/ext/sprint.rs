@@ -341,7 +341,7 @@ mod tests {
         let mut input = Input::new();
         input.key[KEY_SPRINT] = true;
         // Strafe, backpedal, and a back diagonal: all walk.
-        for keys in [&[b'A'][..], &[b'D'], &[b'S'], &[b'S', b'A']] {
+        for keys in [&b"A"[..], b"D", b"S", b"SA"] {
             input.key = [false; 256];
             input.key[KEY_SPRINT] = true;
             for k in keys {
@@ -350,7 +350,7 @@ mod tests {
             assert!(!level(&mut s, &input, false), "{keys:?} should walk");
         }
         // Forward and the forward diagonals run (0.71 of the vector is forward).
-        for keys in [&[b'W'][..], &[b'W', b'A'], &[b'W', b'D']] {
+        for keys in [&b"W"[..], b"WA", b"WD"] {
             input.key = [false; 256];
             input.key[KEY_SPRINT] = true;
             for k in keys {

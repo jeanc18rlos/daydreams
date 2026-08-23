@@ -101,37 +101,11 @@ opt-level = 3
 unsafe_op_in_unsafe_fn = "warn"
 
 [lints.clippy]
-# The engine files are transcriptions of the C++ (see README, "What port means here") and
-# are not edited for style: each lint below asks for an idiomatic rewrite of a line that
-# exists in the shape it has because the original has that shape.
-# GameHeader.h's `GH_PI = 3.141592653589793` -- the original's literal, truncated to f32 by
-# the compiler exactly as the C++ one was.
-approx_constant = "allow"
-excessive_precision = "allow"
-# Mesh.cpp's line parser tests `line[0..2]` and then reads from `line[2..]`.
-manual_strip = "allow"
-# Index loops over `lb`, `hit_spheres`, `v`: the C++ indexes, and the ported loop bodies
-# use the index for more than the element.
-needless_range_loop = "allow"
-# Player.cpp:87's two-branch pitch limit.
-manual_clamp = "allow"
-# Mesh.cpp's explicit empty constructor and Resources.cpp's map-insert idiom.
-derivable_impls = "allow"
-unwrap_or_default = "allow"
-# `a = a * b` over Vector3/Matrix4 in the transcribed level7.rs and portal.rs. vector.rs does implement
-# the compound operators (the extensions use them); the ported lines keep `a = a * b` because
-# that is how Vector.h's call sites in the C++ read, and the transcription matches them.
-assign_op_pattern = "allow"
-# Engine.cpp's BMP row padding loop.
-manual_repeat_n = "allow"
-# main.rs's WindowEvent::Resized arm: WindowProc's WM_SIZE case (Engine.cpp:289-293) with the
-# zero-dimension guard as its own `if` inside the arm, not folded into a match guard.
-collapsible_match = "allow"
-# The level files' tests assert on layout constants on purpose (door hysteresis, the room
-# enclosing its model, the far world past the weather split): a compile-time check that a
-# tuned constant still satisfies a relation it was tuned for. `const { assert!() }` would
-# need const float methods the MSRV does not have.
-assertions_on_constants = "allow"
+# Nothing is allowed crate-wide. The transcribed engine files pass clippy's defaults as they
+# are -- where a lint asked for an idiomatic rewrite of a ported line, the rewrite was
+# mechanical (`strip_prefix` for Mesh.cpp's `line[0..2]` test, `clamp` for Player.cpp:87's
+# two-branch pitch limit, `*=` over the Vector.h types) and carries a `// PORT:` note. Any
+# future exception goes on the item it concerns, with its reason beside it.
 
 # cargo-bundle (`cargo bundle --profile dist`) -- a .app on macOS, .deb on Linux. The four
 # resource directories ship inside the bundle, where the asset-root resolution looks first

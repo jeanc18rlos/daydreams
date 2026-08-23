@@ -65,7 +65,7 @@ impl Scene for Level7 {
         // ground.obj is a 2x2 quad at base scale (10,1,10), so z half becomes 62.5 centred at
         // -32.5 -> floor covers x in [-30,30], z in [-95,30].
         let mut ground = props::ground(gl, res, false);
-        ground.scale = ground.scale * Vector3::new(3.0, 3.0, 6.25);
+        ground.scale *= Vector3::new(3.0, 3.0, 6.25);
         ground.pos.z = -32.5;
         objs.push(Rc::new(RefCell::new(ground)) as Rc<RefCell<dyn ObjectT>>);
 

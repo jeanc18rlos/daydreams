@@ -160,11 +160,10 @@ impl Player {
     pub fn look(&mut self, mouse_dx: f32, mouse_dy: f32) {
         //Adjust x-axis rotation
         self.cam_rx -= mouse_dy * GH_MOUSE_SENSITIVITY;
-        if self.cam_rx > GH_PI / 2.0 {
-            self.cam_rx = GH_PI / 2.0;
-        } else if self.cam_rx < -GH_PI / 2.0 {
-            self.cam_rx = -GH_PI / 2.0;
-        }
+        // PORT: the two-branch limit as one clamp; identical for every value, NaN included
+        // (was: if (cam_rx > GH_PI / 2) { cam_rx = GH_PI / 2; } else if (cam_rx < -GH_PI / 2)
+        // { cam_rx = -GH_PI / 2; }, Player.cpp:87).
+        self.cam_rx = self.cam_rx.clamp(-GH_PI / 2.0, GH_PI / 2.0);
 
         //Adjust y-axis rotation
         self.cam_ry -= mouse_dx * GH_MOUSE_SENSITIVITY;

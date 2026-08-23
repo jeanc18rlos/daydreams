@@ -62,7 +62,7 @@ const STATION: Vector3 = Vector3 { x: 0.0, y: GH_PLAYER_HEIGHT, z: 6.0 };
 const CUBE_POS: Vector3 = Vector3 { x: 0.0, y: 2.3, z: 0.0 };
 const CUBE_HALF: f32 = 0.7;
 const CUBE_RY: f32 = GH_PI / 4.0;
-const CUBE_RX: f32 = 0.615_479_71; // atan(1/sqrt(2))
+const CUBE_RX: f32 = 0.615_479_7; // atan(1/sqrt(2))
 /// Decal plane, a hair proud of the z = -5 wall so it cannot z-fight with it.
 const WALL_Z: f32 = -4.98;
 /// Decal centre height: where the eye->cube sight-line meets the wall.
@@ -276,6 +276,6 @@ mod tests {
     /// Hysteresis must actually be hysteresis.
     #[test]
     fn solve_radii_are_hysteretic() {
-        assert!(SOLVE_EXIT > SOLVE_ENTER);
+        const { assert!(SOLVE_EXIT > SOLVE_ENTER) }
     }
 }

@@ -622,8 +622,7 @@ mod tests {
         assert!(m.is_open());
         assert!(!m.is_title());
         assert_eq!(step(&mut m, KEY_ESCAPE, 14), MenuAction::Continue);
-        let mut pad = PadEvents::default();
-        pad.menu_back = true;
+        let pad = PadEvents { menu_back: true, ..PadEvents::default() };
         assert_eq!(m.update(&Input::new(), &pad, 14), MenuAction::Continue);
     }
 

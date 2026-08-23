@@ -19,24 +19,13 @@ pub const NUM_VBOS: usize = 3;
 // Mesh.cpp:130-152. `ParsedMesh` holds what were the C++ member variables
 // (Mesh.h:29-31) plus `is3DTex`, which in C++ was a constructor local (Mesh.cpp:18) that
 // the upload block read directly (Mesh.cpp:145).
+#[derive(Default)]
 pub struct ParsedMesh {
     pub colliders: Vec<Collider>,
     pub verts: Vec<f32>,
     pub uvs: Vec<f32>,
     pub normals: Vec<f32>,
     pub is_3d_tex: bool,
-}
-
-impl Default for ParsedMesh {
-    fn default() -> ParsedMesh {
-        ParsedMesh {
-            colliders: Vec::new(),
-            verts: Vec::new(),
-            uvs: Vec::new(),
-            normals: Vec::new(),
-            is_3d_tex: false,
-        }
-    }
 }
 
 // PORT: stand-in for std::istringstream's `operator>>` chain (Mesh.cpp:25, 32, 47, 73).
@@ -231,16 +220,16 @@ pub fn parse_obj(text: &str) -> ParsedMesh {
     // strips a trailing '\r', matching Windows text-mode getline.
     for line in text.lines() {
         let lb = line.as_bytes();
-        if line.starts_with("v ") {
-            let mut ss = SStream::new(&line[2..]);
+        if let Some(rest) = line.strip_prefix("v ") {
+            let mut ss = SStream::new(rest);
             let x = ss.extract_f32();
             let y = ss.extract_f32();
             let z = ss.extract_f32();
             vert_palette.push(x);
             vert_palette.push(y);
             vert_palette.push(z);
-        } else if line.starts_with("vt ") {
-            let mut ss = SStream::new(&line[3..]);
+        } else if let Some(rest) = line.strip_prefix("vt ") {
+            let mut ss = SStream::new(rest);
             let u = ss.extract_f32();
             let v = ss.extract_f32();
             let w = ss.extract_f32();
@@ -250,7 +239,7 @@ pub fn parse_obj(text: &str) -> ParsedMesh {
                 uv_palette.push(w);
                 is_3d_tex = true;
             }
-        } else if line.starts_with("c ") {
+        } else if let Some(rest) = line.strip_prefix("c ") {
             let a: u32;
             let b: u32;
             let c: u32;
@@ -260,7 +249,7 @@ pub fn parse_obj(text: &str) -> ParsedMesh {
                 b = v_ix - 1;
                 c = v_ix;
             } else {
-                let mut ss = SStream::new(&line[2..]);
+                let mut ss = SStream::new(rest);
                 a = ss.extract_u32();
                 b = ss.extract_u32();
                 c = ss.extract_u32();
@@ -281,8 +270,8 @@ pub fn parse_obj(text: &str) -> ParsedMesh {
             let mut num_slashes = 0i32;
             let mut last_slash_ix: usize = 0;
             let mut doubleslash = false;
-            for i in 0..lb.len() {
-                if lb[i] == b'/' {
+            for (i, &ch) in lb.iter().enumerate() {
+                if ch == b'/' {
                     // PORT: wrapping_sub reproduces size_t's wraparound for i == 0 (was:
                     // last_slash_ix == i - 1, Mesh.cpp:62). i is never 0 for an "f " line.
                     if last_slash_ix == i.wrapping_sub(1) {
