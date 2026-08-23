@@ -278,6 +278,10 @@ impl Engine {
         // EXT: and the dev frame-time record. Ticked here, at the top, so one interval spans a
         // whole frame including the swap main.rs does after run_frame returns.
         self.frame_clock.borrow_mut().tick();
+        // EXT: and the occlusion frame stamp, for the same reason: every render pass below --
+        // the menu's as much as the game's -- must carry one frame's stamp, and a stored
+        // query result is only believed when its stamp is exactly one frame old.
+        self.occlusion.borrow_mut().next_frame();
         // EXT: portal framebuffers at the drawable's size, before either render path below.
         self.ensure_portal_fbos(i_width, i_height);
         // EXT: surface any error the streamed music has queued. Here rather than further down
@@ -1020,8 +1024,10 @@ impl Engine {
                 // glGenQueries/glDeleteQueries per pass, and the readback loop that followed
                 // (was: glGetQueryObjectuivARB(queries[i], GL_QUERY_RESULT_ARB, &drawTest[i]),
                 // Engine.cpp:243-247) is gone: that was a CPU-GPU stall per pass. `drawTest[i]`
-                // is LAST frame's answer for this slot instead, read before this frame's query
-                // is issued; see src/ext/occlusion.rs for the rule and what it changes.
+                // is LAST frame's answer for this slot instead -- and only last frame's: an
+                // older one, left while the portal was out of the frustum, counts as "visible"
+                // -- read before this frame's query is issued; see src/ext/occlusion.rs for
+                // the rule and what it changes.
                 let mut occ = self.occlusion.borrow_mut();
                 let path = self.pass_path.get();
                 unsafe {

@@ -819,17 +819,21 @@ Where it went, in order of effect:
   (it would pass no samples either way, so the answer is identical), and a pass with no
   portal in view skips the query block altogether. Facing away from the door, no pass stalls.
 * **The readback that remained is one frame late** (`src/ext/occlusion.rs`). The queries are
-  still issued every pass, but the answer used is the one the same slot produced *last*
-  frame, read with `GL_QUERY_RESULT_AVAILABLE` first; a slot with no result -- never issued,
-  out of the frustum last frame, or not yet available -- counts as visible. No pass ever
-  stalls. A slot is one portal seen from one pass, and a pass is named by the chain of
-  portals it is seen through, so the same portal seen through two different portals keeps two
-  answers. What this changes on screen: a portal that becomes fully hidden is drawn for one
-  extra frame (it is hidden, so nothing shows), and a portal uncovered after being fully hidden
-  is first drawn on the frame *after* it appears -- for that one frame the uncovered sliver,
-  one frame's motion wide, shows what was drawn behind the quad. Portals entering from
-  outside the frustum are unaffected: the CPU pre-test above settles those in the current
-  frame.
+  still issued every pass, each stamped with the frame it was issued on, and the answer used
+  is the one the same slot produced on the *previous frame exactly*, read with
+  `GL_QUERY_RESULT_AVAILABLE` first. A portal is hidden only when that one-frame-old result
+  is available and counted zero samples; in every other case -- never issued, issued two or
+  more frames ago (its portal was out of the frustum since, so the slot was not asked), or
+  not yet available -- it counts as visible (`SlotPolicy::decide`, unit-tested). The stamp is
+  what stops a slot handing back a "0 samples" from some frames-old view the moment its portal
+  re-enters the frame. No pass ever stalls. A slot is one portal seen from one pass, and a
+  pass is named by the chain of portals it is seen through, so the same portal seen through
+  two different portals keeps two answers. What this changes on screen: a portal that becomes
+  fully hidden is drawn for one extra frame (it is hidden, so nothing shows), and a portal
+  uncovered after being fully hidden is first drawn on the frame *after* it appears -- for
+  that one frame the uncovered sliver, one frame's motion wide, shows what was drawn behind
+  the quad. Portals entering from outside the frustum are unaffected: the CPU pre-test above
+  settles those in the current frame, and their slot's last result is older than a frame.
 * **Each portal pass is scissored to the quad's screen footprint** (`src/ext/scissor.rs`).
   `portal.frag` samples the nested framebuffer by screen-space projection, so only the quad's
   footprint is ever read; the quad's corners are projected, their NDC box is clamped and

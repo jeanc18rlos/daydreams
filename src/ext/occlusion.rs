@@ -7,11 +7,20 @@
 //! pass that has a portal in view. It was most of the main thread's time.
 //!
 //! Here the queries are still issued every frame, but the answer used is **last frame's**,
-//! which the GPU has long since produced. The rule for the decision is:
+//! which the GPU has long since produced. Every query is stamped with the frame it was issued
+//! on, and the rule for the decision ([`SlotPolicy::decide`]) is:
 //!
-//! * a query was issued for this slot last frame and its result is available: use it;
-//! * otherwise -- never issued, the slot was out of view last frame, or the GPU has not
-//!   caught up -- treat the portal as **visible** and draw it.
+//! * a query was issued for this slot **on the previous frame exactly** and its result is
+//!   available: use it -- hidden if it passed no samples, visible otherwise;
+//! * otherwise -- never issued, issued two or more frames ago (the portal was out of the
+//!   frustum since, so the slot was not asked), or the GPU has not caught up -- treat the
+//!   portal as **visible** and draw it.
+//!
+//! The frame stamp is what makes the second rule safe. Without it a slot would keep the
+//! result of the last query it ever ran -- from any number of frames ago, while its portal was
+//! out of frame -- and hand that back the frame the portal came back into view: "0 samples"
+//! from a view that no longer exists, and a portal missing for one frame. A result is only
+//! ever believed when it is one frame old.
 //!
 //! So the scheme only ever errs toward drawing. What changes on screen: a portal that becomes
 //! fully hidden is drawn for one extra frame (harmless: it is hidden), and a portal that is
@@ -19,7 +28,7 @@
 //! the frame it appears -- the uncovered sliver is one frame's motion wide, and for that frame
 //! the quad shows what the pass drew behind it. A portal entering the view from outside the
 //! frustum is unaffected: the CPU pre-test in `Engine::render` settles that in the current
-//! frame, and a slot that was out of view last frame falls under the second rule.
+//! frame, and its slot's last result is older than a frame, so it is visible by the rule.
 //!
 //! # Slots
 //!
@@ -31,6 +40,14 @@
 //! answers, and a slot keyed on the recursion level alone would hand one view the other's.
 //! `GH_MAX_RECURSION` bounds the chain at three links and `GH_MAX_PORTALS` each link at 16, so
 //! a name packs into a few bits of an integer.
+//!
+//! # Frames
+//!
+//! The engine ticks [`Occlusion::next_frame`] once at the top of `run_frame`, before any render
+//! pass; every pass of that frame -- the main view and each nested portal view -- carries the
+//! same stamp. A slot is asked at most once per frame, because a pass name occurs once per
+//! frame, so "issued on the previous frame" and "asked on the previous frame" are the same
+//! thing.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -54,11 +71,28 @@ pub fn push(path: Path, i: usize) -> Path {
     (path << LINK_BITS) | (i as Path + 1)
 }
 
-/// Per-slot state: the GL query object, and whether a query issued last frame is waiting to
-/// be read.
+/// The decision rule, kept apart from the GL so it can be tested without a context.
+pub struct SlotPolicy;
+
+impl SlotPolicy {
+    /// Whether a portal should be drawn on frame `now`, given that its slot's query was last
+    /// issued on `issued` (`None` if never), whether that query's result is `available`, and
+    /// the `samples` it counted if so. Hidden only on a one-frame-old, available, zero-sample
+    /// result; visible in every other case.
+    pub fn decide(now: u64, issued: Option<u64>, available: bool, samples: u32) -> bool {
+        match issued {
+            // Exactly one frame old: the only result that describes the view being drawn.
+            Some(f) if f + 1 == now => !available || samples > 0,
+            // Never asked, or asked about some older view: nothing to go on, so draw.
+            _ => true,
+        }
+    }
+}
+
+/// Per-slot state: the GL query object, and the frame its query was last issued on.
 struct Slot {
     query: glow::Query,
-    pending: bool,
+    issued: Option<u64>,
 }
 
 pub struct Occlusion {
@@ -67,8 +101,11 @@ pub struct Occlusion {
     /// within a few frames, and the queries are kept until the engine is torn down.
     slots: HashMap<(Path, usize), Slot>,
     /// Number of portals the slots were issued against; a change makes every index mean
-    /// something else, so every pending result is dropped.
+    /// something else, so every stored result is dropped.
     portal_count: usize,
+    /// The frame in flight: what a query issued now is stamped with, and what a stored stamp
+    /// is judged against. Ticked by `next_frame`.
+    frame: u64,
 }
 
 impl Occlusion {
@@ -80,50 +117,67 @@ impl Occlusion {
             gl: Rc::clone(gl),
             slots: HashMap::new(),
             portal_count: 0,
+            // Frame 0 is never "the previous frame" of anything (no stamp precedes it), which
+            // is the right answer for the very first frame: nothing has been asked yet.
+            frame: 1,
         }
     }
 
-    /// Forget every pending result. On a scene load the portal vector is rebuilt, so index
+    /// Begin a new frame: everything issued from now on is stamped with it, and only results
+    /// issued on the frame just ended will be believed. Once per `Engine::run_frame`, ahead of
+    /// every render pass.
+    pub fn next_frame(&mut self) {
+        self.frame += 1;
+    }
+
+    /// Forget every stored result. On a scene load the portal vector is rebuilt, so index
     /// `i` names a different portal than it did; the queries themselves are reusable.
     pub fn reset(&mut self) {
         for s in self.slots.values_mut() {
-            s.pending = false;
+            s.issued = None;
         }
     }
 
     /// Whether the portal at index `i`, seen from the pass `path`, passed any samples the
-    /// last time it was queried -- `true` unless a query issued last frame says otherwise.
-    /// Consumes the pending result, so a frame that skips the query (portal out of the
-    /// frustum) cannot leave a stale answer for the frame that next asks.
+    /// last time it was queried -- `true` unless a query issued on the previous frame says
+    /// otherwise (`SlotPolicy::decide`). Never stalls: the result is only fetched once the
+    /// driver reports it available, and a result that is not is treated as "visible".
     pub fn visible(&mut self, path: Path, i: usize, portal_count: usize) -> bool {
         if portal_count != self.portal_count {
             self.portal_count = portal_count;
             self.reset();
         }
-        let Some(slot) = self.slots.get_mut(&(path, i)) else { return true };
-        if !slot.pending {
-            return true;
-        }
-        slot.pending = false;
-        unsafe {
-            let gl = &self.gl;
-            if gl.get_query_parameter_u32(slot.query, glow::QUERY_RESULT_AVAILABLE) == 0 {
-                return true;
-            }
-            gl.get_query_parameter_u32(slot.query, glow::QUERY_RESULT) > 0
-        }
+        let now = self.frame;
+        let Some(slot) = self.slots.get_mut(&(path, i)) else {
+            return SlotPolicy::decide(now, None, false, 0);
+        };
+        // Only a one-frame-old stamp is worth the two driver calls; anything else the policy
+        // answers "visible" without them.
+        let (available, samples) = match slot.issued {
+            Some(f) if f + 1 == now => unsafe {
+                let gl = &self.gl;
+                if gl.get_query_parameter_u32(slot.query, glow::QUERY_RESULT_AVAILABLE) == 0 {
+                    (false, 0)
+                } else {
+                    (true, gl.get_query_parameter_u32(slot.query, glow::QUERY_RESULT))
+                }
+            },
+            _ => (false, 0),
+        };
+        SlotPolicy::decide(now, slot.issued, available, samples)
     }
 
-    /// Start a `SAMPLES_PASSED` query for the slot; `end` closes it. The result is read by
-    /// `visible` next frame. Beginning a query on an object whose previous result was never
-    /// read simply discards that result, which is what an unavailable one deserves.
+    /// Start a `SAMPLES_PASSED` query for the slot, stamped with the current frame; `end`
+    /// closes it. The result is read by `visible` next frame. Beginning a query on an object
+    /// whose previous result was never read simply discards that result, which is what a
+    /// stale or unavailable one deserves.
     pub fn begin(&mut self, path: Path, i: usize) {
         let gl = &self.gl;
         let slot = self.slots.entry((path, i)).or_insert_with(|| Slot {
             query: unsafe { gl.create_query().expect("glGenQueries failed") },
-            pending: false,
+            issued: None,
         });
-        slot.pending = true;
+        slot.issued = Some(self.frame);
         unsafe {
             gl.begin_query(glow::SAMPLES_PASSED, slot.query);
         }
@@ -167,5 +221,39 @@ mod tests {
             deep = push(deep, GH_MAX_PORTALS - 1);
         }
         assert!(deep > 0);
+    }
+
+    /// A slot that has never been asked has nothing to say against drawing.
+    #[test]
+    fn never_issued_is_visible() {
+        assert!(SlotPolicy::decide(10, None, false, 0));
+        assert!(SlotPolicy::decide(10, None, true, 0));
+    }
+
+    /// The one case that hides: last frame's query came back with no samples.
+    #[test]
+    fn zero_samples_from_last_frame_hides() {
+        assert!(!SlotPolicy::decide(10, Some(9), true, 0));
+        // And any sample at all from last frame draws.
+        assert!(SlotPolicy::decide(10, Some(9), true, 1));
+        assert!(SlotPolicy::decide(10, Some(9), true, 4096));
+    }
+
+    /// A result from two or more frames ago describes a view that no longer exists -- the
+    /// portal was out of the frustum since -- and must not hide the portal on re-entry.
+    #[test]
+    fn stale_results_are_visible() {
+        assert!(SlotPolicy::decide(10, Some(8), true, 0));
+        assert!(SlotPolicy::decide(10, Some(1), true, 0));
+        // A stamp from the current frame (or later) is not "last frame" either; the engine
+        // never produces one, but the rule stays on the side of drawing if it did.
+        assert!(SlotPolicy::decide(10, Some(10), true, 0));
+        assert!(SlotPolicy::decide(10, Some(11), true, 0));
+    }
+
+    /// The GPU has not caught up: draw rather than wait.
+    #[test]
+    fn unavailable_result_is_visible() {
+        assert!(SlotPolicy::decide(10, Some(9), false, 0));
     }
 }
