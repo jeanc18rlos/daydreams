@@ -395,6 +395,48 @@ mod tests {
     }
 
     #[test]
+    fn on_collide_grounds_the_player_only_for_pushes_steeper_than_0_7() {
+        // A floor push: grounded, and the lateral part of the push is dropped so the player
+        // does not slide down a gentle slope (Player.cpp:110-115).
+        let mut p = Player::new();
+        p.on_ground = false;
+        p.base.velocity = Vector3::new(1.0, -3.0, 0.0);
+        p.on_collide(Vector3::new(0.1, 0.5, 0.0));
+        assert!(p.on_ground);
+        assert!((p.obj().pos.x - 0.0).abs() < 1e-6 && (p.obj().pos.y - 0.5).abs() < 1e-6);
+        assert!(p.base.velocity.y.abs() < 1e-6, "{:?}", p.base.velocity);
+        // A wall push (normalised y of 0.196) leaves on_ground alone and moves the player by
+        // the whole push.
+        let mut p = Player::new();
+        p.on_ground = false;
+        p.on_collide(Vector3::new(0.5, 0.1, 0.0));
+        assert!(!p.on_ground);
+        assert!((p.obj().pos.x - 0.5).abs() < 1e-6 && (p.obj().pos.y - 0.1).abs() < 1e-6);
+        // The threshold itself: y/|push| just over 0.7 grounds, just under does not.
+        for (y, grounded) in [(0.71f32, true), (0.69, false)] {
+            let mut p = Player::new();
+            p.on_ground = false;
+            let lateral = (1.0 - y * y).sqrt();
+            p.on_collide(Vector3::new(lateral, y, 0.0) * 0.01);
+            assert_eq!(p.on_ground, grounded, "y = {y}");
+        }
+        // Friction only bites on the ground: the same wall push in the air keeps the
+        // tangential velocity, on the ground it is scaled by (1 - friction).
+        let mut air = Player::new();
+        air.on_ground = false;
+        air.base.velocity = Vector3::new(0.0, 0.0, -2.0);
+        air.on_collide(Vector3::new(0.1, 0.0, 0.0));
+        assert!((air.base.velocity.z + 2.0).abs() < 1e-6, "{:?}", air.base.velocity);
+        let mut ground = Player::new();
+        ground.on_ground = true;
+        ground.base.velocity = Vector3::new(0.0, 0.0, -2.0);
+        ground.on_collide(Vector3::new(0.1, 0.0, 0.0));
+        let expect = -2.0 * (1.0 - ground.base.friction);
+        assert!((ground.base.velocity.z - expect).abs() < 1e-6, "{:?}", ground.base.velocity);
+        assert!(ground.base.friction > 0.0, "the player has friction to lose");
+    }
+
+    #[test]
     fn standing_still_takes_no_steps() {
         let mut p = Player::new();
         let input = Input::new();

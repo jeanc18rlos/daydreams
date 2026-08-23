@@ -128,3 +128,68 @@ impl Default for Camera {
         Camera::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn approx_m(a: &Matrix4, b: &Matrix4, tol: f32) -> bool {
+        a.m.iter().zip(b.m.iter()).all(|(x, y)| (x - y).abs() < tol)
+    }
+
+    #[test]
+    fn inverse_projection_is_the_full_inverse_of_projection() {
+        for (w, h, n, f) in [(1280, 720, 0.001, 100.0), (256, 256, 0.1, 10.0), (2560, 1440, 0.5, 1000.0), (640, 480, 1.0, 2.0)] {
+            let mut cam = Camera::new();
+            cam.set_size(w, h, n, f);
+            let closed = cam.inverse_projection();
+            let brute = cam.projection.inverse();
+            // The closed form fills five entries; everything else must be zero in both.
+            assert!(approx_m(&closed, &brute, 1e-4 * brute.m.iter().fold(1.0f32, |a, &b| a.max(b.abs()))), "{w}x{h} n={n} f={f}\n{:?}\n{:?}", closed.m, brute.m);
+            assert!(approx_m(&(cam.projection * closed), &Matrix4::identity(), 1e-4));
+            assert!(approx_m(&(closed * cam.projection), &Matrix4::identity(), 1e-4));
+        }
+    }
+
+    #[test]
+    fn set_size_maps_near_and_far_to_the_ndc_ends() {
+        let mut cam = Camera::new();
+        cam.set_size(800, 600, 0.25, 50.0);
+        let ndc = |z: f32| cam.projection * Vector4::new(0.0, 0.0, z, 1.0);
+        let near = ndc(-0.25);
+        let far = ndc(-50.0);
+        assert!((near.z / near.w + 1.0).abs() < 1e-5, "near -> {}", near.z / near.w);
+        assert!((far.z / far.w - 1.0).abs() < 1e-4, "far -> {}", far.z / far.w);
+        assert!(cam.width == 800 && cam.height == 600 && cam.near == 0.25 && cam.far == 50.0);
+    }
+
+    #[test]
+    fn clip_oblique_puts_the_given_plane_at_the_near_end() {
+        let mut cam = Camera::new();
+        cam.set_size(1280, 720, 0.001, 100.0);
+        cam.set_position_orientation(Vector3::new(1.0, 1.5, 4.0), 0.1, 0.7);
+        let pos = Vector3::new(0.5, 1.0, -2.0);
+        let normal = Vector3::new(0.3, 0.1, 1.0).normalized();
+        cam.clip_oblique(pos, normal);
+        let clip = |p: Vector3| cam.matrix() * Vector4::from_vec3(p, 1.0);
+        // The point itself, and any other point of the plane, is at z = -w: the near end.
+        let c = clip(pos);
+        assert!((c.z + c.w).abs() < 1e-3 * c.w.abs(), "{:?}", c);
+        let along = Vector3::new(1.0, 0.0, -0.3); // perpendicular to the normal
+        let c = clip(pos + along * 0.8);
+        assert!((c.z + c.w).abs() < 1e-3 * c.w.abs(), "{:?}", c);
+        // The normal points at the half-space that is cut (z < -w) and the other side is kept:
+        // Portal::draw hands in the normal facing back at the camera, so the nested pass keeps
+        // what lies beyond the portal and loses the camera's own side.
+        let c = clip(pos + normal * 0.5);
+        assert!(c.z < -c.w, "on the normal's side: {c:?}");
+        let c = clip(pos - normal * 0.5);
+        assert!(c.z > -c.w, "beyond the plane: {c:?}");
+        // Only the third row changes.
+        let mut plain = Camera::new();
+        plain.set_size(1280, 720, 0.001, 100.0);
+        for i in (0..16).filter(|i| !(8..12).contains(i)) {
+            assert_eq!(cam.projection.m[i], plain.projection.m[i], "m[{i}]");
+        }
+    }
+}

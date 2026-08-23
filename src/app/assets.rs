@@ -45,10 +45,15 @@ fn resolve_or_die(flag: Option<PathBuf>) -> PathBuf {
     let exe = std::env::current_exe().ok();
     let cwd = std::env::current_dir().ok();
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    resolve(&candidates(explicit, exe.as_deref(), cwd.as_deref(), &manifest), |dir| {
-        dir.join("Shaders").is_dir()
-    })
-    .unwrap_or_else(|e| super::crash::fatal(&e))
+    resolve(&candidates(explicit, exe.as_deref(), cwd.as_deref(), &manifest), has_shaders)
+        .unwrap_or_else(|e| super::crash::fatal(&e))
+}
+
+/// What makes a directory an asset root: it holds `Shaders/`. The first file every run opens
+/// is a shader, so a root without them fails on its first load anyway; the other three
+/// directories are not checked because the intro needs none of them before the first frame.
+fn has_shaders(dir: &Path) -> bool {
+    dir.join("Shaders").is_dir()
 }
 
 /// The directories to try, in order. An explicit choice is the whole list.
@@ -149,6 +154,39 @@ mod tests {
         }
         let text = err.to_string();
         assert!(text.contains("/a") && text.contains("/b"), "{text}");
+    }
+
+    #[test]
+    fn only_a_directory_with_shaders_qualifies() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bare = tmp.path().join("bare");
+        let file = tmp.path().join("file");
+        let full = tmp.path().join("full");
+        std::fs::create_dir(&bare).unwrap();
+        std::fs::create_dir(&full).unwrap();
+        std::fs::create_dir(full.join("Shaders")).unwrap();
+        // A `Shaders` that is a file, not a directory, does not count either.
+        std::fs::create_dir(&file).unwrap();
+        std::fs::write(file.join("Shaders"), b"").unwrap();
+        assert!(!has_shaders(&bare) && !has_shaders(&file) && has_shaders(&full));
+        assert!(!has_shaders(&tmp.path().join("missing")));
+        // The search order is honoured over real directories: the first one that qualifies
+        // wins even when a later one would too, and a missing one is skipped.
+        let order = vec![tmp.path().join("missing"), bare.clone(), file.clone(), full.clone(), p("/")];
+        assert_eq!(resolve(&order, has_shaders).unwrap(), full);
+        let err = resolve(&[bare.clone(), file.clone()], has_shaders).unwrap_err();
+        assert!(matches!(&err, AssetError::NoAssetRoot { tried } if tried.len() == 2));
+        // An explicit choice is checked and not fallen through: a bare directory named on
+        // the command line is the whole list, and it fails.
+        let c = candidates(Some(bare.clone()), Some(&full.join("daydreams")), Some(&full), &full);
+        assert_eq!(c, vec![bare.clone()]);
+        assert!(resolve(&c, has_shaders).is_err());
+        // Without a choice, the executable's directory is tried before the working directory
+        // and the crate: an exe beside a `Shaders/` finds it.
+        let c = candidates(None, Some(&full.join("daydreams")), Some(&bare), &bare);
+        assert_eq!(resolve(&c, has_shaders).unwrap(), full);
+        let c = candidates(None, Some(&bare.join("daydreams")), Some(&full), &bare);
+        assert_eq!(resolve(&c, has_shaders).unwrap(), full);
     }
 
     #[test]

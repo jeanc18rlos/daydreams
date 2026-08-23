@@ -148,3 +148,139 @@ impl ObjectT for Physical {
         Physical::reset(self)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game_header::GH_PI;
+    use crate::portal::connect;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn approx(a: Vector3, b: Vector3) -> bool {
+        (a - b).mag() < 1e-4
+    }
+
+    /// Portal A at the origin facing -z, portal B at x = 10 turned a quarter turn and twice
+    /// the size, connected. Walking into A from its front (+z side) comes out of B's front.
+    fn portals() -> (Portal, Portal) {
+        let a = Rc::new(RefCell::new(Portal::detached()));
+        let b = Rc::new(RefCell::new(Portal::detached()));
+        {
+            let mut b = b.borrow_mut();
+            b.base.pos = Vector3::new(10.0, 0.0, 0.0);
+            b.base.euler.y = GH_PI / 2.0;
+            b.base.scale = Vector3::splat(2.0);
+        }
+        connect(&a, &b);
+        let a = Rc::try_unwrap(a).ok().unwrap().into_inner();
+        let b = Rc::try_unwrap(b).ok().unwrap().into_inner();
+        (a, b)
+    }
+
+    /// A physical whose last step went from `from` to `to`, looking along -z.
+    fn stepped(from: Vector3, to: Vector3) -> Physical {
+        let mut p = Physical::new();
+        p.set_position(from);
+        p.base.pos = to;
+        p.velocity = (to - from) * (1.0 / GH_DT);
+        p
+    }
+
+    #[test]
+    fn crossing_the_plane_teleports_into_the_other_frame() {
+        let (a, b) = portals();
+        let mut p = stepped(Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, 0.0, -1.0));
+        let v0 = p.velocity;
+        assert!(p.try_portal(&a));
+        // Position: A-local (0, 0, -1) minus the doubled bump, scaled by two and turned into
+        // B's frame, so 2.004 out along B's forward (-x in world) from B's centre.
+        let depth = 1.0 + 2.0 * (2.0 * GH_NEAR_MIN);
+        assert!(approx(p.base.pos, Vector3::new(10.0 - 2.0 * depth, 0.0, 0.0)), "{:?}", p.base.pos);
+        assert!(approx(b.base.world_to_local().mul_point(p.base.pos), Vector3::new(0.0, 0.0, -depth)));
+        // prev_pos is reset to the new position so the next step cannot re-cross.
+        assert!(approx(p.prev_pos, p.base.pos));
+        // Velocity turns with the frame and doubles with it: -z at speed s becomes -x at 2s.
+        assert!(approx(p.velocity, Vector3::new(-2.0 * v0.mag(), 0.0, 0.0)), "{:?}", p.velocity);
+        // Looking along -z (euler.y = 0) now looks along -x, which is euler.y = +pi/2
+        // (forward = (-sin, 0, -cos)).
+        assert!((p.base.euler.y - GH_PI / 2.0).abs() < 1e-5, "{}", p.base.euler.y);
+        // And the traveller is twice the size.
+        assert!((p.base.p_scale - 2.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_return_trip_undoes_the_scale_and_the_turn() {
+        let (a, b) = portals();
+        let mut p = stepped(Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, 0.0, -1.0));
+        assert!(p.try_portal(&a));
+        // Step back through B, now at twice the scale: from 2 out along its forward to 2 past.
+        let here = p.base.pos;
+        let back = Vector3::new(10.0 + 2.0, 0.0, 0.0);
+        p.prev_pos = here;
+        p.base.pos = back;
+        p.velocity = (back - here) * (1.0 / GH_DT);
+        assert!(p.try_portal(&b));
+        assert!((p.base.p_scale - 1.0).abs() < 1e-5);
+        assert!(p.base.euler.y.abs() < 1e-5, "{}", p.base.euler.y);
+        assert!(p.base.pos.z > 0.0 && p.base.pos.x.abs() < 1e-4, "{:?}", p.base.pos);
+        assert!(p.velocity.z > 0.0 && p.velocity.x.abs() < 1e-2, "{:?}", p.velocity);
+    }
+
+    #[test]
+    fn a_step_that_does_not_cross_changes_nothing() {
+        let (a, _) = portals();
+        let mut p = stepped(Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, 0.0, 0.5));
+        let (pos, prev, vel, ey, ps) = (p.base.pos, p.prev_pos, p.velocity, p.base.euler.y, p.base.p_scale);
+        assert!(!p.try_portal(&a));
+        assert!(approx(p.base.pos, pos) && approx(p.prev_pos, prev) && approx(p.velocity, vel));
+        assert!(p.base.euler.y == ey && p.base.p_scale == ps);
+        // Crossing the plane outside the quad is not a crossing either.
+        let mut p = stepped(Vector3::new(3.0, 0.0, 1.0), Vector3::new(3.0, 0.0, -1.0));
+        assert!(!p.try_portal(&a));
+        assert!(approx(p.base.pos, Vector3::new(3.0, 0.0, -1.0)));
+    }
+
+    #[test]
+    fn the_bump_lands_the_object_past_the_far_plane() {
+        let (a, b) = portals();
+        // A step that ends exactly on A's plane still counts -- the plane is bumped
+        // 2*GH_NEAR_MIN towards the traveller -- and the arrival is 4*GH_NEAR_MIN (times the
+        // new scale) beyond B's plane, never on it, so the next step cannot bounce back.
+        let mut p = stepped(Vector3::new(0.0, 0.0, 0.01), Vector3::new(0.0, 0.0, 0.0));
+        assert!(p.try_portal(&a));
+        let clearance = (p.base.pos - b.base.pos).dot(b.base.forward());
+        let expect = 4.0 * GH_NEAR_MIN * 2.0;
+        assert!((clearance - expect).abs() < 1e-5, "clearance {clearance} vs {expect}");
+        assert!(clearance > GH_NEAR_MIN);
+        // The bump scales with the traveller: at p_scale 2 it is twice as far.
+        let mut big = stepped(Vector3::new(0.0, 0.0, 0.01), Vector3::new(0.0, 0.0, 0.0));
+        big.base.p_scale = 2.0;
+        assert!(big.try_portal(&a));
+        let clearance = (big.base.pos - b.base.pos).dot(b.base.forward());
+        assert!((clearance - 2.0 * expect).abs() < 1e-5, "clearance {clearance}");
+        assert!((big.base.p_scale - 4.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn on_collide_removes_the_velocity_into_the_push() {
+        let mut p = Physical::new();
+        p.velocity = Vector3::new(1.0, -2.0, 0.0);
+        p.on_collide(Vector3::new(0.0, 0.5, 0.0));
+        assert!(approx(p.base.pos, Vector3::new(0.0, 0.5, 0.0)));
+        assert!(approx(p.velocity, Vector3::new(1.0, 0.0, 0.0)), "{:?}", p.velocity);
+        // Bounce reflects the component into the push; friction scales the rest.
+        let mut p = Physical::new();
+        p.bounce = 0.5;
+        p.friction = 0.25;
+        p.velocity = Vector3::new(1.0, -2.0, 0.0);
+        p.on_collide(Vector3::new(0.0, 0.5, 0.0));
+        assert!(approx(p.velocity, Vector3::new(0.75, 1.0, 0.0)), "{:?}", p.velocity);
+        // A push below the 1e-8 * p_scale threshold moves the object but leaves its velocity.
+        let mut p = Physical::new();
+        p.velocity = Vector3::new(1.0, -2.0, 0.0);
+        p.on_collide(Vector3::new(0.0, 1e-5, 0.0));
+        assert!(approx(p.velocity, Vector3::new(1.0, -2.0, 0.0)));
+        assert!((p.base.pos.y - 1e-5).abs() < 1e-9);
+    }
+}

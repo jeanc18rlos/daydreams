@@ -162,3 +162,105 @@ pub fn key_index(k: winit::keyboard::KeyCode) -> Option<usize> {
     };
     Some(c as usize)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use winit::keyboard::KeyCode;
+
+    /// Every key the game reads, and the slot it reads it from: the ASCII slots the C++
+    /// indexes with `wParam & 0xFF`, the Win32 virtual-key numbers for the rest.
+    #[test]
+    fn every_key_the_game_reads_lands_in_its_slot() {
+        let table: [(KeyCode, usize); 36] = [
+            (KeyCode::KeyW, b'W' as usize),
+            (KeyCode::KeyA, b'A' as usize),
+            (KeyCode::KeyS, b'S' as usize),
+            (KeyCode::KeyD, b'D' as usize),
+            (KeyCode::Digit1, b'1' as usize),
+            (KeyCode::Digit2, b'2' as usize),
+            (KeyCode::Digit3, b'3' as usize),
+            (KeyCode::Digit4, b'4' as usize),
+            (KeyCode::Digit5, b'5' as usize),
+            (KeyCode::Digit6, b'6' as usize),
+            (KeyCode::Digit7, b'7' as usize),
+            (KeyCode::Digit8, b'8' as usize),
+            (KeyCode::Digit9, b'9' as usize),
+            (KeyCode::Digit0, b'0' as usize),
+            (KeyCode::Minus, b'-' as usize),
+            (KeyCode::Equal, b'=' as usize),
+            (KeyCode::BracketLeft, b'[' as usize),
+            (KeyCode::BracketRight, b']' as usize),
+            (KeyCode::Backslash, b'\\' as usize),
+            (KeyCode::Semicolon, b';' as usize),
+            (KeyCode::Quote, b'\'' as usize),
+            (KeyCode::KeyE, b'E' as usize),
+            (KeyCode::KeyM, b'M' as usize),
+            (KeyCode::KeyR, b'R' as usize),
+            (KeyCode::ShiftLeft, crate::ext::sprint::KEY_SPRINT),
+            (KeyCode::ShiftRight, crate::ext::sprint::KEY_SPRINT),
+            (KeyCode::ArrowUp, 38),
+            (KeyCode::ArrowDown, 40),
+            (KeyCode::ArrowLeft, 37),
+            (KeyCode::ArrowRight, 39),
+            (KeyCode::Enter, 13),
+            (KeyCode::Backspace, 8),
+            (KeyCode::Space, b' ' as usize),
+            // The scene keys in the registry's own terms.
+            (KeyCode::Digit1, crate::ext::scenes::SCENES[0].key as usize),
+            (KeyCode::Quote, crate::ext::scenes::SCENES[16].key as usize),
+            (KeyCode::Semicolon, crate::ext::scenes::SCENES[crate::ext::scenes::INTRO].key as usize),
+        ];
+        for (code, slot) in table {
+            assert_eq!(key_index(code), Some(slot), "{code:?}");
+            assert!(slot < 256);
+        }
+        // Every registered scene key is reached by exactly one physical key above.
+        for entry in crate::ext::scenes::SCENES {
+            let hits = table.iter().filter(|(_, s)| *s == entry.key as usize).count();
+            assert!(hits >= 1, "scene key {:?} is not typeable", entry.key as char);
+        }
+    }
+
+    #[test]
+    fn keys_the_game_does_not_read_map_nowhere() {
+        // Escape is deliberately absent: main.rs writes slot 27 itself so the menu can see
+        // the release too. The rest would be silent slots nothing reads.
+        for code in [
+            KeyCode::Escape,
+            KeyCode::KeyQ,
+            KeyCode::KeyZ,
+            KeyCode::Tab,
+            KeyCode::ControlLeft,
+            KeyCode::AltLeft,
+            KeyCode::F1,
+            KeyCode::Comma,
+            KeyCode::Period,
+            KeyCode::Slash,
+            KeyCode::Backquote,
+            KeyCode::Numpad1,
+        ] {
+            assert_eq!(key_index(code), None, "{code:?}");
+        }
+    }
+
+    #[test]
+    fn end_frame_clears_presses_and_smooths_the_mouse() {
+        let mut i = Input::new();
+        i.key[b'W' as usize] = true;
+        i.key_press[b'W' as usize] = true;
+        i.set_mouse_button(0, true);
+        i.add_mouse_motion(10.0, -4.0);
+        i.end_frame();
+        // Levels survive, edges do not.
+        assert!(i.key[b'W' as usize] && !i.key_press[b'W' as usize]);
+        assert!(i.mouse_button[0] && !i.mouse_button_press[0]);
+        // The smoothed delta takes (1 - GH_MOUSE_SMOOTH) of the raw motion and the raw
+        // accumulator is emptied.
+        let k = 1.0 - GH_MOUSE_SMOOTH;
+        assert!((i.mouse_dx - 10.0 * k).abs() < 1e-6 && (i.mouse_dy + 4.0 * k).abs() < 1e-6);
+        assert!(i.mouse_ddx == 0.0 && i.mouse_ddy == 0.0);
+        i.set_mouse_button(0, false);
+        assert!(!i.mouse_button[0]);
+    }
+}

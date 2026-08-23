@@ -97,3 +97,100 @@ impl Collider {
         &self.mat
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::object::Object;
+    use crate::physical::Physical;
+    use crate::sphere::Sphere;
+
+    fn approx(a: Vector3, b: Vector3) -> bool {
+        (a - b).mag() < 1e-5
+    }
+
+    /// The 2x2 floor rectangle at y = 0 a mesh `c` line of those three corners produces.
+    fn floor() -> Collider {
+        Collider::new(Vector3::new(-1.0, 0.0, -1.0), Vector3::new(1.0, 0.0, -1.0), Vector3::new(1.0, 0.0, 1.0))
+    }
+
+    /// Exactly what Engine::update does per hit sphere (Engine.cpp:166-178): the push in the
+    /// sphere's unit space, carried back to world as a direction.
+    fn world_push(phys: &Physical, owner: &Object, collider: &Collider) -> Option<Vector3> {
+        let world_to_local = phys.world_to_local();
+        let sphere = phys.hit_spheres[0];
+        let world_to_unit = sphere.local_to_unit() * world_to_local;
+        let local_to_unit = world_to_unit * owner.local_to_world();
+        let unit_to_world = world_to_unit.inverse();
+        collider.collide(&local_to_unit).map(|push| unit_to_world.mul_direction(push))
+    }
+
+    fn unit_sphere_at(pos: Vector3) -> Physical {
+        let mut p = Physical::new();
+        p.set_position(pos);
+        p.hit_spheres.push(Sphere::new(1.0));
+        p
+    }
+
+    #[test]
+    fn the_longest_side_becomes_the_diagonal() {
+        let m = *floor().mat();
+        assert!(approx(m.translation(), Vector3::zero()));
+        assert!(approx(m.x_axis(), Vector3::new(1.0, 0.0, 0.0)));
+        assert!(approx(m.y_axis(), Vector3::new(0.0, 0.0, 1.0)));
+        // Any corner order gives the same rectangle up to the sign of its axes.
+        let m2 = *Collider::new(Vector3::new(1.0, 0.0, 1.0), Vector3::new(-1.0, 0.0, -1.0), Vector3::new(1.0, 0.0, -1.0)).mat();
+        assert!(approx(m2.translation(), Vector3::zero()));
+        assert!((m2.x_axis().mag() - 1.0).abs() < 1e-5 && (m2.y_axis().mag() - 1.0).abs() < 1e-5);
+        assert!(m2.x_axis().y.abs() < 1e-6 && m2.y_axis().y.abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_sphere_sunk_into_the_floor_is_pushed_straight_up_by_the_overlap() {
+        let floor = floor();
+        let owner = Object::new();
+        let phys = unit_sphere_at(Vector3::new(0.0, 0.5, 0.0));
+        let push = world_push(&phys, &owner, &floor).expect("overlapping");
+        assert!(approx(push, Vector3::new(0.0, 0.5, 0.0)), "{push:?}");
+        // Applying it leaves the sphere resting on the floor, and a second test finds nothing.
+        let mut phys = phys;
+        phys.on_collide(push);
+        assert!(approx(phys.base.pos, Vector3::new(0.0, 1.0, 0.0)));
+        assert!(world_push(&phys, &owner, &floor).is_none_or(|p| p.mag() < 1e-5));
+        // Off to the side of the rectangle's edge the push points diagonally away from it,
+        // and a sphere clear of it gets none.
+        // The nearest point is the corner (1, 0, 0), half a radius away: the push is the other
+        // half of that radius along the same line.
+        let phys = unit_sphere_at(Vector3::new(1.3, 0.4, 0.0));
+        let push = world_push(&phys, &owner, &floor).expect("clipping the edge");
+        assert!(approx(push, Vector3::new(0.3, 0.4, 0.0)), "{push:?}");
+        assert!(world_push(&unit_sphere_at(Vector3::new(0.0, 1.5, 0.0)), &owner, &floor).is_none());
+        assert!(world_push(&unit_sphere_at(Vector3::new(3.0, 0.5, 0.0)), &owner, &floor).is_none());
+    }
+
+    #[test]
+    fn the_owners_transform_and_the_spheres_scale_go_through_the_matrices() {
+        let floor = floor();
+        // The floor's owner is raised to y = 2 and stretched to 4 wide: a sphere at x = 1.5
+        // is over the slab rather than past its edge, so the push is straight up by the
+        // overlap with the raised plane (unstretched, it would be diagonal, off the corner).
+        let mut owner = Object::new();
+        owner.pos = Vector3::new(0.0, 2.0, 0.0);
+        owner.scale = Vector3::new(2.0, 1.0, 1.0);
+        let phys = unit_sphere_at(Vector3::new(1.5, 2.25, 0.0));
+        let push = world_push(&phys, &owner, &floor).expect("under the stretched floor");
+        assert!(approx(push, Vector3::new(0.0, 0.75, 0.0)), "{push:?}");
+        // A traveller that came through a scaling portal at p_scale 2 has a 2-unit sphere in
+        // world: centred 1.5 above a floor it is pushed up by half a unit.
+        let mut big = unit_sphere_at(Vector3::new(0.0, 1.5, 0.0));
+        big.base.p_scale = 2.0;
+        let push = world_push(&big, &Object::new(), &floor).expect("bigger sphere");
+        assert!(approx(push, Vector3::new(0.0, 0.5, 0.0)), "{push:?}");
+        // A floor turned on its side is a wall: the push is sideways.
+        let mut wall = Object::new();
+        wall.euler.z = std::f32::consts::FRAC_PI_2;
+        let phys = unit_sphere_at(Vector3::new(0.5, 0.0, 0.0));
+        let push = world_push(&phys, &wall, &floor).expect("against the wall");
+        assert!(approx(push, Vector3::new(0.5, 0.0, 0.0)), "{push:?}");
+    }
+}

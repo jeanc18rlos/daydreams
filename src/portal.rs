@@ -64,7 +64,10 @@ pub struct Portal {
     pub id: u32,
     pub front: Warp,
     pub back: Warp,
-    err_shader: Rc<Shader>,
+    // PORT: std::shared_ptr<Shader> -> Option<Rc<Shader>>, the same mapping Object's three
+    // shared_ptrs get (Object.h:42-44); `new` always fills it, so the unwrap in draw_pink is
+    // the C++'s unconditional dereference (was: std::shared_ptr<Shader> errShader, Portal.h:42).
+    err_shader: Option<Rc<Shader>>,
     // EXT: `FrameBuffer frameBuf[GH_MAX_RECURSION <= 1 ? 1 : GH_MAX_RECURSION - 1]`
     // (Portal.h:43) is not a member any more. The engine owns one framebuffer per recursion
     // level for every portal (`Engine::portal_fbos`) and `draw` borrows it through the
@@ -88,8 +91,17 @@ impl Portal {
             id,
             front: Warp::new(id),
             back: Warp::new(id),
-            err_shader: res.acquire_shader("pink"),
+            err_shader: Some(res.acquire_shader("pink")),
         }
+    }
+
+    /// EXT: a portal with no mesh and no shaders, for the tests of `connect` and
+    /// `Physical::try_portal`: the warp algebra and the teleport never touch GL, and a
+    /// `Resources` cannot exist without a context.
+    #[cfg(test)]
+    pub fn detached() -> Portal {
+        let id = NEXT_PORTAL_ID.fetch_add(1, Ordering::Relaxed);
+        Portal { base: Object::new(), id, front: Warp::new(id), back: Warp::new(id), err_shader: None }
     }
 
     pub fn draw(&self, ctx: &RenderCtx, cam: &Camera, cur_fbo: Option<glow::Framebuffer>) {
@@ -169,8 +181,9 @@ impl Portal {
         let mv = self.base.local_to_world();
         let mvp = cam.matrix() * mv;
         let mesh = self.base.mesh.as_ref().unwrap();
-        self.err_shader.use_program();
-        self.err_shader.set_mvp(Some(&mvp), Some(&mv));
+        let err_shader = self.err_shader.as_ref().unwrap();
+        err_shader.use_program();
+        err_shader.set_mvp(Some(&mvp), Some(&mv));
         mesh.draw();
     }
 
@@ -298,5 +311,137 @@ pub fn connect_warps(
         wb.to_portal = Some(a_id);
         wb.delta = b_delta;
         wb.delta_inv = a_delta;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game_header::GH_PI;
+
+    fn approx(a: Vector3, b: Vector3) -> bool {
+        (a - b).mag() < 1e-4
+    }
+
+    fn approx_m(a: &Matrix4, b: &Matrix4) -> bool {
+        a.m.iter().zip(b.m.iter()).all(|(x, y)| (x - y).abs() < 1e-4)
+    }
+
+    /// Portal A at the origin, unrotated, unit scale; portal B off to the side, turned a
+    /// quarter turn and twice the size: the shape every scale-changing corridor in the levels
+    /// takes.
+    fn pair() -> (Rc<RefCell<Portal>>, Rc<RefCell<Portal>>) {
+        let a = Rc::new(RefCell::new(Portal::detached()));
+        let b = Rc::new(RefCell::new(Portal::detached()));
+        {
+            let mut b = b.borrow_mut();
+            b.base.pos = Vector3::new(10.0, 0.0, 0.0);
+            b.base.euler.y = GH_PI / 2.0;
+            b.base.scale = Vector3::splat(2.0);
+        }
+        (a, b)
+    }
+
+    #[test]
+    fn connect_wires_front_to_back_both_ways_with_the_other_portals_id() {
+        let (a, b) = pair();
+        connect(&a, &b);
+        let (a, b) = (a.borrow(), b.borrow());
+        assert_ne!(a.id, b.id);
+        assert_eq!(a.front.to_portal, Some(b.id));
+        assert_eq!(a.back.to_portal, Some(b.id));
+        assert_eq!(b.front.to_portal, Some(a.id));
+        assert_eq!(b.back.to_portal, Some(a.id));
+        assert_eq!(a.front.from_portal, a.id);
+        assert_eq!(b.back.from_portal, b.id);
+        // Connect(p1->front, p3->back): a's front pairs with b's back and the warps are each
+        // other's inverses; the second call does the same for a's back and b's front.
+        assert!(approx_m(&a.front.delta, &b.back.delta_inv));
+        assert!(approx_m(&a.front.delta_inv, &b.back.delta));
+        assert!(approx_m(&a.back.delta, &b.front.delta_inv));
+        assert!(approx_m(&a.back.delta_inv, &b.front.delta));
+    }
+
+    #[test]
+    fn delta_and_delta_inv_are_inverses() {
+        let (a, b) = pair();
+        connect(&a, &b);
+        let a = a.borrow();
+        for w in [&a.front, &a.back] {
+            assert!(approx_m(&(w.delta * w.delta_inv), &Matrix4::identity()));
+            assert!(approx_m(&(w.delta_inv * w.delta), &Matrix4::identity()));
+            assert!(approx_m(&w.delta.inverse(), &w.delta_inv));
+        }
+    }
+
+    #[test]
+    fn delta_inv_carries_a_frame_onto_b_frame_points_and_directions() {
+        let (a, b) = pair();
+        connect(&a, &b);
+        let (a, b) = (a.borrow(), b.borrow());
+        // A local point (0.5, 0.25, -1) -- half a quad across, one unit behind -- lands at the
+        // same local coordinates of B: world = B.pos + rot_y(pi/2) * (2 * local).
+        let local = Vector3::new(0.5, 0.25, -1.0);
+        let world_a = a.base.local_to_world().mul_point(local);
+        let world_b = a.back.delta_inv.mul_point(world_a);
+        assert!(approx(b.base.world_to_local().mul_point(world_b), local));
+        assert!(approx(world_b, Vector3::new(10.0 - 2.0, 0.5, -1.0)), "{world_b:?}");
+        // `delta` is the camera's direction: world_view * delta looks out of B's frame as if
+        // from A's, so it takes B-frame points back to A-frame ones.
+        assert!(approx(a.back.delta.mul_point(world_b), world_a));
+        // Directions turn and scale, and do not translate.
+        let dir = a.back.delta_inv.mul_direction(Vector3::new(0.0, 0.0, -1.0));
+        assert!(approx(dir, Vector3::new(-2.0, 0.0, 0.0)), "{dir:?}");
+        assert!(approx(a.back.delta_inv.mul_direction(Vector3::zero()), Vector3::zero()));
+        // The scale a traveller picks up is the x-axis length (Physical.cpp:63).
+        assert!((a.back.delta_inv.x_axis().mag() - 2.0).abs() < 1e-5);
+        assert!((b.front.delta_inv.x_axis().mag() - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn connect_warps_writes_only_the_named_sides() {
+        let (a, b) = pair();
+        connect_warps(&a, Side::Back, &b, Side::Front);
+        let (a, b) = (a.borrow(), b.borrow());
+        assert_eq!(a.back.to_portal, Some(b.id));
+        assert_eq!(b.front.to_portal, Some(a.id));
+        assert_eq!(a.front.to_portal, None);
+        assert_eq!(b.back.to_portal, None);
+        assert!(approx_m(&a.front.delta, &Matrix4::identity()));
+        assert!(approx_m(&b.back.delta_inv, &Matrix4::identity()));
+    }
+
+    #[test]
+    fn a_portal_can_be_connected_to_itself() {
+        // Level 3's tunnel joins a portal's front to its own back; the two borrows must not
+        // overlap, and the warp is the identity.
+        let a = Rc::new(RefCell::new(Portal::detached()));
+        connect_warps(&a, Side::Front, &a, Side::Back);
+        let a = a.borrow();
+        assert_eq!(a.front.to_portal, Some(a.id));
+        assert_eq!(a.back.to_portal, Some(a.id));
+        assert!(approx_m(&a.front.delta, &Matrix4::identity()));
+    }
+
+    #[test]
+    fn intersects_and_dist_to_use_the_quad_extent() {
+        let (a, _) = pair();
+        let a = a.borrow();
+        let bump = Vector3::zero();
+        // Through the middle, front to back: the front warp; back to front: the back one.
+        let w = a.intersects(Vector3::new(0.0, 0.0, -1.0), Vector3::new(0.0, 0.0, 1.0), bump);
+        assert!(w.is_some_and(|w| std::ptr::eq(w, &a.front)));
+        let w = a.intersects(Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, 0.0, -1.0), bump);
+        assert!(w.is_some_and(|w| std::ptr::eq(w, &a.back)));
+        // Same side, or crossing the plane outside the quad: nothing.
+        assert!(a.intersects(Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, 0.0, 0.5), bump).is_none());
+        assert!(a.intersects(Vector3::new(3.0, 0.0, 1.0), Vector3::new(3.0, 0.0, -1.0), bump).is_none());
+        assert!(a.intersects(Vector3::new(0.0, 1.5, 1.0), Vector3::new(0.0, 1.5, -1.0), bump).is_none());
+        // Distance to the quad: straight out from its centre, and diagonally from a corner.
+        assert!((a.dist_to(Vector3::new(0.0, 0.0, 3.0)) - 3.0).abs() < 1e-5);
+        assert!((a.dist_to(Vector3::new(4.0, 5.0, 0.0)) - 5.0).abs() < 1e-5);
+        // The bump is on the side of the plane the point is on.
+        assert!(approx(a.get_bump(Vector3::new(0.0, 0.0, -2.0)), a.base.forward()));
+        assert!(approx(a.get_bump(Vector3::new(0.0, 0.0, 2.0)), -a.base.forward()));
     }
 }
