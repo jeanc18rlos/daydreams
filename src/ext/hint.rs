@@ -19,12 +19,20 @@
 //! stands in an idle cabin; the grab's `ObjectT::pick_hint` sets it once per frame for the
 //! object under the crosshair. Those two never apply at once (the elevator takes the E press
 //! before the grab looks), so the ordering between them has not had to be chosen.
+//!
+//! One pair does apply at once: the held key aimed at the locked window. The window's
+//! `pick_hint` says "LOCKED", the key's step says "E  USE THE KEY", and the key's must show
+//! -- but the grab sets the window's line once per rendered frame, AFTER the fixed steps in
+//! which the key set its. So a second slot, [`insist`], outranks [`set`] whatever the order:
+//! what the thing in your hand can do beats what the thing under the crosshair is.
 
 use std::cell::RefCell;
 
 thread_local! {
     /// The hint set since the last take, if any.
     static HINT: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// The insisted hint since the last take, if any; shown in preference to `HINT`.
+    static INSISTED: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// Offer a hint line for this frame. A later call before the frame's [`take`] replaces it.
@@ -32,10 +40,18 @@ pub fn set(text: impl Into<String>) {
     HINT.with(|h| *h.borrow_mut() = Some(text.into()));
 }
 
-/// The hint for this frame, consumed. Called by the engine's overlay block once per rendered
-/// frame; a second call in the same frame gets `None`.
+/// Offer a hint line that outranks any [`set`] this frame, whichever came first: the prompt
+/// for the object in hand (see the module docs). A later `insist` replaces an earlier one.
+pub fn insist(text: impl Into<String>) {
+    INSISTED.with(|h| *h.borrow_mut() = Some(text.into()));
+}
+
+/// The hint for this frame, consumed -- the insisted one if there is one, else the set one;
+/// both slots are emptied. Called by the engine's overlay block once per rendered frame; a
+/// second call in the same frame gets `None`.
 pub fn take() -> Option<String> {
-    HINT.with(|h| h.borrow_mut().take())
+    let plain = HINT.with(|h| h.borrow_mut().take());
+    INSISTED.with(|h| h.borrow_mut().take()).or(plain)
 }
 
 #[cfg(test)]
@@ -49,5 +65,20 @@ mod tests {
         set(String::from("E  USE KEY"));
         assert_eq!(take().as_deref(), Some("E  USE KEY"));
         assert_eq!(take(), None, "consumed");
+    }
+
+    #[test]
+    fn an_insisted_hint_outranks_a_set_one_in_either_order_and_both_are_consumed() {
+        insist("E  USE THE KEY");
+        set("LOCKED");
+        assert_eq!(take().as_deref(), Some("E  USE THE KEY"));
+        assert_eq!(take(), None, "the outranked line must not show on the next frame");
+        set("LOCKED");
+        insist("E  USE THE KEY");
+        assert_eq!(take().as_deref(), Some("E  USE THE KEY"));
+        assert_eq!(take(), None);
+        // With nothing insisted, a set line shows as before.
+        set("LOCKED");
+        assert_eq!(take().as_deref(), Some("LOCKED"));
     }
 }
