@@ -23,13 +23,9 @@ use crate::game_header::{
     gh_clamp, gh_min, GH_DT, GH_FAR, GH_FBO_SIZE, GH_MAX_PORTALS, GH_MAX_RECURSION, GH_MAX_STEPS,
     GH_NEAR_MAX, GH_NEAR_MIN, GH_USE_SKY,
 };
+// EXT: the scene registry -- every scene's key, name and constructor, in key order.
+use crate::ext::scenes::{INTRO, SCENES};
 use crate::input::Input;
-use crate::level1::Level1;
-use crate::level2::Level2;
-use crate::level3::Level3;
-use crate::level4::Level4;
-use crate::level5::Level5;
-use crate::level6::Level6;
 use crate::object::{ObjectT, RenderCtx, UpdateCtx};
 use crate::player::Player;
 use crate::props::Sky;
@@ -164,26 +160,9 @@ impl Engine {
 
         // PORT: `std::shared_ptr<Scene>` -> `Rc<dyn Scene>`; the seven registrations keep their
         // order, which is what makes keys '1'..'7' select them (Engine.cpp:41-47).
-        let v_scenes: Vec<Rc<dyn Scene>> = vec![
-            Rc::new(Level1),
-            Rc::new(Level2::new(3)),
-            Rc::new(Level2::new(6)),
-            Rc::new(Level3),
-            Rc::new(Level4),
-            Rc::new(Level5),
-            Rc::new(Level6),
-            // EXT: extension scenes, selected by keys 8 onward.
-            Rc::new(crate::level7::Level7),
-            Rc::new(crate::level8::Level8),
-            Rc::new(crate::level9::Level9),
-            Rc::new(crate::level10::Level10),
-            Rc::new(crate::level11::Level11),
-            Rc::new(crate::level12::Level12),
-            Rc::new(crate::level13::Level13),
-            Rc::new(crate::level14::Level14),
-            Rc::new(crate::level15::Level15),
-            Rc::new(crate::level16::Level16),
-        ];
+        // EXT: the registrations, the extension scenes' included, are the one table in
+        // src/ext/scenes.rs; this builds them in its order.
+        let v_scenes: Vec<Rc<dyn Scene>> = SCENES.iter().map(|entry| (entry.make)()).collect();
 
         let timer = Timer::new();
         // PORT: `const int64_t ticks_per_step = timer.SecondsToTicks(GH_DT)` is a local at the
@@ -228,7 +207,7 @@ impl Engine {
         // EXT: the title screen draws the intro level behind it (`render_menu_frame`), so the
         // game boots into that scene rather than the ported scene 0. Nothing is played until
         // NEW GAME closes the menu; until then the level is only ever a backdrop.
-        engine.load_scene(INTRO_SCENE.min(engine.v_scenes.len() - 1));
+        engine.load_scene(INTRO);
         // EXT: a mute saved from a previous session applies to the music the load above just
         // started. Done after the load rather than before, so the toggle has something to stop.
         if crate::ext::settings::muted() {
@@ -345,14 +324,10 @@ impl Engine {
         }
 
         // EXT: the C++ hard-codes seven if/else branches for keys 1-7 (Engine.cpp:90-104).
-        // With extension scenes added there are more than nine, so the mapping is table-driven:
-        // 1-9 select scenes 0-8, 0 selects the tenth, then '-' and '=' continue the run.
-        const SCENE_KEYS: [u8; 17] = [
-            b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'0', b'-', b'=', b'[', b']', b'\\', b';',
-            b'\'',
-        ];
-        for (i, key) in SCENE_KEYS.iter().enumerate() {
-            if i < self.v_scenes.len() && self.input.borrow().key_press[*key as usize] {
+        // With extension scenes added there are more than nine, so the mapping is table-driven
+        // by the registry's keys (src/ext/scenes.rs).
+        for (i, entry) in SCENES.iter().enumerate() {
+            if self.input.borrow().key_press[entry.key as usize] {
                 self.load_scene(i);
                 break;
             }
@@ -625,7 +600,7 @@ impl Engine {
             MenuAction::NewGame => {
                 self.pad_grab.set(false);
                 // EXT: a new game opens on the intro level.
-                self.load_scene(INTRO_SCENE.min(self.v_scenes.len() - 1));
+                self.load_scene(INTRO);
                 self.ext.borrow_mut().menu.close();
             }
             MenuAction::Continue => {
@@ -648,7 +623,7 @@ impl Engine {
                 // The title screen's backdrop IS the intro level, so leaving a game reloads it;
                 // otherwise the title would sit in front of whatever level was being played,
                 // seen from a vantage composed for a different world.
-                self.load_scene(INTRO_SCENE.min(self.v_scenes.len() - 1));
+                self.load_scene(INTRO);
                 self.ext.borrow_mut().menu = crate::ext::menu::Menu::new();
             }
             MenuAction::Quit => self.quit_requested.set(true),
@@ -660,28 +635,7 @@ impl Engine {
 
     /// EXT: human-readable scene names, in key order, for the level-select menu.
     pub fn scene_names(&self) -> Vec<String> {
-        const NAMES: [&str; 17] = [
-            "Tunnels",
-            "Three Rooms",
-            "Six Rooms",
-            "Pillar Rooms",
-            "Sloped Tunnel",
-            "Scaling Tunnel",
-            "Floorplan",
-            "Perspective Gallery",
-            "Penrose Ascent",
-            "Compound",
-            "Unobserved",
-            "Anamorphic Chamber",
-            "The Painted Cube",
-            "Relativity",
-            "Meadow",
-            "Intro",
-            "Backrooms",
-        ];
-        (0..self.v_scenes.len())
-            .map(|i| NAMES.get(i).map_or_else(|| format!("Scene {}", i + 1), |n| n.to_string()))
-            .collect()
+        SCENES.iter().map(|entry| entry.name.to_string()).collect()
     }
 
     /// EXT: main.rs polls this each frame.
@@ -1111,10 +1065,6 @@ impl Engine {
 // EXT: additions beyond the C++ port. Everything above this line transcribes
 // Engine.cpp / Engine.h; everything below is new.
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// EXT: index of the intro scene, where NEW GAME begins -- and, before that, what the title
-/// screen shows behind itself.
-pub const INTRO_SCENE: usize = 15;
 
 
 #[allow(dead_code)] // EXT: scene_count / is_holding are for the HUD, added next.
