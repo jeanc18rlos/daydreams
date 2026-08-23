@@ -316,7 +316,6 @@ impl GltfModel {
         (g.pos, g.idx)
     }
 
-
     /// Fitted bounds of a part: `[minx, maxx, miny, maxy, minz, maxz]`.
     pub fn bounds(&self, part: &str) -> [f32; 6] {
         *self.bounds.get(part).unwrap_or_else(|| panic!("no part {part:?}"))

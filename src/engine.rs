@@ -96,9 +96,8 @@ pub struct Engine {
     shot_path: RefCell<Option<String>>,
     shot_after_frames: Cell<i32>,
     // EXT: dev tooling -- key slots `--forward` / `--strafe` / `--sprint` hold down for the
-    // whole run.
-    // Re-asserted at the top of every frame rather than set once, because a focus change
-    // drops every key level (main.rs) and a headless window may never be focused at all.
+    // whole run, re-asserted at the top of every frame rather than set once, because a focus
+    // change drops every key level (main.rs) and a headless window may never be focused at all.
     dev_hold: RefCell<Vec<usize>>,
     // EXT: this frame's gamepad edges, handed in by main.rs before run_frame.
     pad_events: Cell<crate::ext::gamepad::PadEvents>,
@@ -721,7 +720,7 @@ impl Engine {
         // the duration of a load) live on the engine now, shared (`portal_fbos`), and the mesh
         // and two shaders a new portal re-acquires are pinned in `ExtState`. So they go first,
         // and the reload stays warm without them.
-        drop(std::mem::take(&mut *self.v_portals.borrow_mut()));
+        self.v_portals.borrow_mut().clear();
         let old_objects = std::mem::take(&mut *self.v_objects.borrow_mut());
         self.player.borrow_mut().reset();
 
