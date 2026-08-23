@@ -5,14 +5,18 @@ precision highp float;
 //
 // The portrait is two textures made by tools/gen_portraits.py from a hand-edited sheet of a
 // public-domain painting (src/ext/portrait_atlas.rs holds the numbers): `base` is the sitter
-// with blank eye sockets and no mouth, and `parts` an atlas of seven cutouts with alpha --
-// both eyes looking at the viewer, both eyes looking to the viewer's left, and a smiling, a
-// sad and an angry mouth. Each part has a rect in the atlas and a placement rect on the
-// base, in the base's own UV; the fragment samples the base, then lays the parts over it:
-// the two eye parts of the centre variant crossfaded with the left variant's by `eye_left`,
-// and the three mouths weighted by `mouth_w`. Parts are summed premultiplied, so two parts
-// may overlap only where their alphas partition (the Vermeer's eye halves do, through the
-// bridge of the nose).
+// with blank eye sockets and no mouth, and `parts` an atlas of cutouts with alpha -- both
+// eyes looking at the viewer, both eyes looking to the viewer's left, and a smiling, a sad
+// and an angry mouth, a mouth being one piece or several (the Hals mouths are four: lips,
+// goatee, a moustache half each side). Each piece has a rect in the atlas and a placement
+// rect on the base, in the base's own UV, flattened into `part_atlas`/`part_place`: the four
+// eye pieces at 0..4, then every mouth piece, variant `v`'s spanning indices
+// mouth_bounds[v]..mouth_bounds[v+1]. The fragment samples the base, then lays the parts
+// over it: the two eye parts of the centre variant crossfaded with the left variant's by
+// `eye_left`, and each mouth variant's pieces composited over one another (last on top,
+// premultiplied over) before the three variants are weighted by `mouth_w`. Whole variants
+// are summed premultiplied, so two variants may overlap only where their alphas partition or
+// their weights sum to one, and an eye may never overlap a mouth (painting.rs tests this).
 //
 // THE EYES: inside each eye's ellipse (`eye[i]`, the lid edge at r = 1) the part is sampled
 // at a warped UV, `uv - gaze_i * w(r)` with `w` 1 at the centre and falling to 0 at the
@@ -50,8 +54,10 @@ uniform sampler2D parts;    // the eye and mouth cutouts, with alpha
 uniform vec4 cam_pos;       // this pass's eye, world space
 uniform vec4 fog_color;     // what the far end fades to; rgb used
 uniform vec4 size;          // canvas width and height in metres (x, y)
-uniform vec4 part_atlas[7]; // each part's rect in `parts`, (u0, v0, u1, v1), PART_ORDER
-uniform vec4 part_place[7]; // each part's rect on the base, the same form
+uniform vec4 part_atlas[16]; // each piece's rect in `parts`, (u0, v0, u1, v1); eyes at 0..4,
+                             // then the mouth pieces (painting.rs MAX_PIECES)
+uniform vec4 part_place[16]; // each piece's rect on the base, the same form
+uniform vec4 mouth_bounds;  // mouth variant v's pieces are indices [v]..[v+1] ([0] is 4)
 uniform vec4 eye[2];        // the eye openings, left then right: centre (xy), radii (zw)
 uniform vec4 gaze;          // the iris offsets in base UV: left eye xy, right eye zw
 uniform float eye_left;     // 0 the centre eyes .. 1 the left-looking ones
@@ -154,14 +160,22 @@ void main(void) {
 	vec3 col = texture(base, buv).rgb;
 
 	// ── The parts, premultiplied and summed: eyes, left then right, each the centre
-	// variant crossfaded with the left one at the warped UV; then the weighted mouths.
+	// variant crossfaded with the left one at the warped UV; then the weighted mouths,
+	// each variant's pieces composited over one another (last on top) before the weight.
 	vec4 acc = vec4(0.0);
 	for (int i = 0; i < 2; i++) {
 		vec2 g = (i == 0) ? gaze.xy : gaze.zw;
 		vec2 uv = warped(buv, eye[i], g);
 		acc += mix(part(i, uv), part(2 + i, uv), eye_left);
 	}
-	acc += part(4, buv) * mouth_w.x + part(5, buv) * mouth_w.y + part(6, buv) * mouth_w.z;
+	for (int v = 0; v < 3; v++) {
+		vec4 m = vec4(0.0);
+		for (int i = int(mouth_bounds[v]); i < int(mouth_bounds[v + 1]); i++) {
+			vec4 c = part(i, buv);
+			m = c + m * (1.0 - c.a);
+		}
+		acc += m * mouth_w[v];
+	}
 	col = col * (1.0 - min(acc.a, 1.0)) + acc.rgb;
 
 	// ── The key, in gold leaf, sampled through the anamorphosis so the smear's

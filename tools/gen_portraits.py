@@ -10,10 +10,12 @@ and writes what the shader and the scene need:
 
   Textures/portrait_<name>.bmp        the base, 32-bit BGRA, cropped to the figure, on a dark
                                       painted ground inpainted from the sheet's own surround
-  Textures/portrait_<name>_parts.bmp  the seven parts with alpha, packed and padded
-  src/ext/portrait_atlas.rs           per portrait: sizes, each part's atlas rect and its
-                                      placement rect on the base, both eyes' ellipses, all in
-                                      top-origin UV (see below)
+  Textures/portrait_<name>_parts.bmp  the parts with alpha, packed and padded
+  src/ext/portrait_atlas.rs           per portrait: sizes, per VARIANT (the seven of
+                                      PART_ORDER) a LIST of pieces -- most variants are one
+                                      piece, the Hals mouths are four -- each with its atlas
+                                      rect and its placement rect on the base, and both eyes'
+                                      ellipses, all in top-origin UV (see below)
 
 Nothing is parsed at runtime. Requires numpy and Pillow only.
 
@@ -22,7 +24,7 @@ bottom-first rows into img[height-1] downward), so every rect and ellipse here i
 -- (u, v) = (x / width, y / height) with y down the image -- and painting.frag flips the
 quad's v once before sampling. Keep both halves of that in step.
 
-THE TWO KINDS OF SHEET
+THE THREE KINDS OF SHEET
 * `alpha`: an RGBA sheet whose pieces are cutouts -- the figure on the left, the labelled eye
   and mouth pieces on the right, each with its own alpha, on a painted ground. A part is the
   connected component of alpha inside its manifest region (so the label text, which also has
@@ -41,16 +43,36 @@ THE TWO KINDS OF SHEET
   masks cross-fade through the overlap, summing to one there: the shader composites parts
   additively in premultiplied form, so two parts may overlap only where their alphas
   partition.
+* `chain` (the Hals "Laughing Cavalier" sheet): a hybrid. The left column holds two alpha
+  figures on the painted ground -- the ORIGINAL on top, the blanked base below, the same
+  framing give or take a few pixels. The middle column holds rectangular VARIANT CROPS with
+  alpha (soft torn edges, a rounded corner), each showing one variant's pieces IN PLACE on
+  the face. The right column holds the true PNG cutouts -- one piece per eye, and each mouth
+  as FOUR pieces laid out splayed (lips, goatee, left and right moustache), NOT in their
+  on-face arrangement. So a piece cannot register against the base directly (the base has no
+  moustache under a moustache) and registers through a chain: piece -> its variant crop
+  (which shows the arrangement) -> the ORIGINAL (whole-rectangle NCC, the crop's own alpha as
+  the mask) -> the base (the original shifted by the same inset-core NCC the `black` kind
+  uses). The crops are a different RENDERING of the same arrangement -- the hair strokes do
+  not correlate -- so the piece -> crop hop cannot be texture NCC either: an eye piece lands
+  by aligning its opening's ellipse (`eye`, hand-read in piece pixels) onto the crop's
+  (`target`, hand-read in crop pixels) and is then polished by a local NCC; a mouth piece
+  lands by the best silhouette overlap (IoU) of its alpha against the crop-minus-base
+  difference map inside its hand-boxed `window`, over the manifest's scale sweep, then the
+  same local NCC polish. The pieces keep their own alpha edges -- the moustache wisps -- and
+  are NOT feathered (`feather: 0` per piece); colours are matched to the crop under the
+  piece's own alpha. The sheet also carries a fourth, unlabelled mouth set (its lips and
+  goatee are one connected blob, not four pieces); the labels sit BELOW their content
+  everywhere on the sheet, so the three labelled sets are the manifest's and the orphan is
+  ignored.
 
-ADDING A SHEET (the Hals "Laughing Cavalier" the user has, not yet saved): one more manifest
-entry. For the layout the user described -- eyes and moustache/mouth PNGs -- it is an `alpha`
-sheet: the base figure with the sockets and mouth blanked, and seven cutouts (eyes centre
-left/right, eyes left left/right, mouth smile/sad/angry) each in its own region; if the eyes
-come as one piece per variant, give that piece a `split` as the Vermeer entry does and the
-tool makes two parts of it. `eye` per eye piece is the eye opening's ellipse in the piece's
-own pixels (centre x, y, radius x, y): the lid edge, where the iris warp stops. Run the tool
-with `--preview DIR` and look at the composites before trusting any number. Then add the
-portrait to `level16.rs`'s rotation and a line to THIRD_PARTY.md.
+ADDING A SHEET: one more manifest entry, of whichever kind fits its layout. `eye` per eye
+piece is the eye opening's ellipse in the piece's own pixels (centre x, y, radius x, y): the
+lid edge, where the iris warp stops -- hand-read off a gridded crop, like every region here.
+A variant may be a LIST of pieces (the Hals mouths): the runtime composites a variant's
+pieces over one another in manifest order (last on top) and crossfades whole variants. Run
+the tool with `--preview DIR` and look at the composites before trusting any number. Then
+hang the portrait in `level16.rs` (the per-seed map) and add a line to THIRD_PARTY.md.
 
 Run from the repository root:  python3 tools/gen_portraits.py [--preview DIR]
 """
@@ -548,6 +570,227 @@ def whole_tile(pieces, name):
     return out
 
 
+# ── The chain kind (docstring, "THE THREE KINDS OF SHEET") ───────────────────────────────────
+# The crop-minus-base difference map: |Δ luminance| over this many grey levels is fully "a
+# piece lives here", and above DIFF_TH of that a pixel counts toward a mouth piece's IoU.
+DIFF_NORM = 60.0
+DIFF_TH = 0.45
+# How far the local NCC polish may move an eye piece off its ellipse-aligned spot, in crop
+# pixels, and how far off the ellipse-implied scale it may go.
+POLISH = 8
+POLISH_SCALES = (0.90, 0.95, 1.00, 1.05, 1.10)
+
+
+def coverage_rect(alpha, region, th=0.5, trim=2):
+    """The rectangular core of a variant crop: the tallest run of rows whose mean alpha
+    clears `th`, then the widest run of columns in it, less `trim` px of resampled rim. The
+    crops have soft torn edges and a rounded corner; their own alpha is the NCC mask, so the
+    rectangle only frames the search."""
+    x0, y0, x1, y1 = region
+    a = alpha[y0:y1, x0:x1].astype(np.float64) / 255.0
+    r0, r1 = max(runs(a.mean(axis=1), th), key=lambda r: r[1] - r[0])
+    c0, c1 = max(runs(a[r0:r1].mean(axis=0), th), key=lambda c: c[1] - c[0])
+    return (x0 + c0 + trim, y0 + r0 + trim, x0 + c1 - trim, y0 + r1 - trim)
+
+
+def figure_over_ground(sheet, alpha, ground, region):
+    """A left-column figure composited over the inpainted ground, cropped to its blob."""
+    m = alpha_component(alpha, region)
+    fa = np.where(m, alpha, 0).astype(np.float64)[..., None] / 255.0
+    comp = sheet[..., :3].astype(np.float64) * fa + ground * (1 - fa)
+    x0, y0, x1, y1 = bbox(m)
+    return np.clip(comp[y0:y1, x0:x1], 0, 255).astype(np.uint8)
+
+
+def load_chain_sheet(entry):
+    """The hybrid sheet: the two figures over their inpainted ground, the variant crops with
+    their alpha, and the cutout pieces."""
+    sheet = np.array(Image.open(os.path.join(ROOT, entry["sheet"])).convert("RGBA"))
+    alpha = sheet[..., 3]
+    masks = {}
+    for vspec in entry["variants"].values():
+        for pname, pspec in vspec["pieces"].items():
+            masks[pname] = alpha_component(alpha, pspec["region"])
+    tile_rects = {v: coverage_rect(alpha, vspec["crop"]) for v, vspec in entry["variants"].items()}
+    # The ground: nothing within GLOW of a piece or a crop seeds the fill (`alpha` kind).
+    near = np.zeros(alpha.shape, bool)
+    for m in masks.values():
+        near |= m
+    for x0, y0, x1, y1 in tile_rects.values():
+        near[y0:y1, x0:x1] = True
+    ground = inpaint(sheet[..., :3], erode(alpha == 0, 3) & ~dilate(near, GLOW))
+    base = figure_over_ground(sheet, alpha, ground, entry["base"]["region"])
+    ref = figure_over_ground(sheet, alpha, ground, entry["reference"]["region"])
+    tiles = {}
+    for vname, (x0, y0, x1, y1) in tile_rects.items():
+        rgb = sheet[y0:y1, x0:x1, :3]
+        a = alpha[y0:y1, x0:x1].astype(np.float64) / 255.0
+        tiles[vname] = (rgb, a, (x0, y0, x1, y1))
+        print(f"  {vname}: crop {x1 - x0}x{y1 - y0} at ({x0}, {y0})")
+    pieces = {}
+    for vspec in entry["variants"].values():
+        for pname, pspec in vspec["pieces"].items():
+            px0, py0, px1, py1 = bbox(masks[pname])
+            rgba = sheet[py0:py1, px0:px1].copy()
+            rgba[..., 3] = np.where(masks[pname][py0:py1, px0:px1], rgba[..., 3], 0)
+            pieces[pname] = Piece(pname, rgba, pspec.get("eye"))
+            print(f"  {pname}: cut {px1 - px0}x{py1 - py0} at ({px0}, {py0})")
+    return base, ref, pieces, tiles
+
+
+def diff_map(bg, cg, scale, bx, by):
+    """|the crop - the base under it| in crop pixels, blurred a touch and clipped 0..1: a
+    variant's pieces are exactly where its crop differs from the blanked base."""
+    ch, cw = cg.shape
+    bh, bw = bg.shape
+    x0, y0 = int(round(bx)), int(round(by))
+    x1, y1 = int(round(bx + cw * scale)), int(round(by + ch * scale))
+    sub = bg[max(y0, 0) : min(y1, bh), max(x0, 0) : min(x1, bw)]
+    pad = ((max(-y0, 0), max(y1 - bh, 0)), (max(-x0, 0), max(x1 - bw, 0)))
+    if any(p for pair in pad for p in pair):
+        sub = np.pad(sub, pad, mode="edge")
+    up = np.array(Image.fromarray(sub.astype(np.float32), mode="F").resize((cw, ch), Image.BILINEAR), dtype=np.float64)
+    d = np.abs(gauss_blur(cg, 1.5) - gauss_blur(up, 1.5))
+    return np.clip(gauss_blur(d, 2.0) / DIFF_NORM, 0, 1)
+
+
+def place_eye(cg, p, pspec):
+    """An eye piece in its crop: the piece's opening ellipse laid on the crop's, then a local
+    NCC polish -- +-POLISH pixels, POLISH_SCALES about the ellipses' scale -- of the piece's
+    grayscale under its own alpha. Returns (scale, x, y, ncc)."""
+    ecx, ecy, erx, ery = pspec["eye"]
+    tcx, tcy, trx, try_ = pspec["target"]
+    s0 = 0.5 * (trx / erx + try_ / ery)
+    tpl = gray(p.rgba)
+    mask = p.rgba[..., 3].astype(np.float64) / 255.0
+    best = None
+    for f in POLISH_SCALES:
+        s = s0 * f
+        t = resize(tpl, s)
+        m = np.clip(resize(mask, s), 0, 1)
+        th, tw = t.shape
+        x0 = int(round(tcx - ecx * s)) - POLISH
+        y0 = int(round(tcy - ecy * s)) - POLISH
+        wx0, wy0 = max(x0, 0), max(y0, 0)
+        wx1 = min(x0 + 2 * POLISH + tw + 1, cg.shape[1])
+        wy1 = min(y0 + 2 * POLISH + th + 1, cg.shape[0])
+        if wy1 - wy0 <= th or wx1 - wx0 <= tw:
+            continue
+        n = masked_ncc(cg[wy0:wy1, wx0:wx1], t, m)
+        y, x = np.unravel_index(np.argmax(n), n.shape)
+        if best is None or n[y, x] > best[3]:
+            best = (float(s), int(x + wx0), int(y + wy0), float(n[y, x]))
+    return best
+
+
+def place_mouth(cg, d, p, pspec, scales):
+    """A mouth piece in its crop: the best silhouette overlap (IoU) of the piece's alpha with
+    the difference map inside the hand-boxed window, over the scale sweep. The recorded score
+    is the NCC of the piece against the crop AT that placement -- a diagnostic, not the
+    optimiser: the crop is another rendering of the same hair and texture NCC cannot place a
+    moustache, but it says how alike the two are where the piece landed."""
+    M = (d > DIFF_TH).astype(np.float64)
+    tpl = (gauss_blur(p.rgba[..., 3].astype(np.float64) / 255.0, 2.0) > 0.5).astype(np.float64)
+    wx0, wy0, wx1, wy1 = pspec["window"]
+    img = M[wy0:wy1, wx0:wx1]
+    best = None
+    for s in scales:
+        t = (np.clip(resize(tpl, s), 0, 1) > 0.5).astype(np.float64)
+        if t.shape[0] >= img.shape[0] or t.shape[1] >= img.shape[1]:
+            continue
+        inter = xcorr(img, t)
+        mbox = xcorr(img, np.ones_like(t))
+        iou = inter / np.maximum(t.sum() + mbox - inter, 1e-9)
+        y, x = np.unravel_index(np.argmax(iou), iou.shape)
+        if best is None or iou[y, x] > best[3]:
+            best = (float(s), int(x + wx0), int(y + wy0), float(iou[y, x]))
+    s, x, y, iou_score = best
+    # The diagnostic NCC at the landing spot.
+    t = resize(gray(p.rgba), s)
+    m = np.clip(resize(p.rgba[..., 3].astype(np.float64) / 255.0, s), 0, 1)
+    th, tw = t.shape
+    sub = cg[y : y + th, x : x + tw]
+    if sub.shape == t.shape:
+        ncc = float(masked_ncc(sub, t, m)[0, 0])
+    else:
+        ncc = 0.0
+    return s, x, y, ncc, iou_score
+
+
+def match_colour_at(piece, img, scale, at, weights):
+    """`match_colour` against any image at an explicit placement (the chain matches a piece
+    to its CROP: the base has no moustache under a moustache)."""
+    s, (x, y) = scale, at
+    w, h = piece.size
+    sw, sh = int(round(w * s)), int(round(h * s))
+    under = img[y : y + sh, x : x + sw, :3].astype(np.float64)
+    small = resize_rgba(piece.rgba, (sw, sh)).astype(np.float64)
+    wts = np.clip(resize(weights, s), 0, 1)[: under.shape[0], : under.shape[1]]
+    small = small[: under.shape[0], : under.shape[1]]
+    wsum = max(wts.sum(), 1e-6)
+    mb = (under * wts[..., None]).sum(axis=(0, 1)) / wsum
+    mp = (small[..., :3] * wts[..., None]).sum(axis=(0, 1)) / wsum
+    gain = np.clip(mb / np.maximum(mp, 1.0), 0.6, 1.7)
+    rgb = np.clip(piece.rgba[..., :3].astype(np.float64) * gain, 0, 255)
+    piece.rgba = np.concatenate([rgb.astype(np.uint8), piece.rgba[..., 3:]], axis=-1)
+    return gain
+
+
+def register_chain(entry, base, ref, pieces, tiles):
+    bg, rg = gray(base), gray(ref)
+    # The base against the original: the same inset-core NCC as the `black` kind.
+    inset = 40
+    core = bg[inset:-inset, inset:-inset]
+    n = masked_ncc(rg, core, np.ones_like(core))
+    oy, ox = np.unravel_index(np.argmax(n), n.shape)
+    dx, dy = inset - int(ox), inset - int(oy)
+    print(f"  base is the original shifted by ({dx}, {dy}), ncc {n[oy, ox]:.3f}")
+    lo, hi, step = entry["register"]["scales"]
+    crop_scales = np.arange(lo, hi + step / 2, step)
+    plo, phi, pstep = entry["piece_scales"]
+    piece_scales = np.arange(plo, phi + pstep / 2, pstep)
+    for vname, vspec in entry["variants"].items():
+        crgb, ca, rect = tiles[vname]
+        cg = gray(crgb)
+        # Crop -> original: the whole rectangle, the crop's own alpha as the mask (the torn
+        # edge and the rounded corner weigh themselves out), a few rim pixels dropped.
+        mask = ca.copy()
+        mask[:3] = 0
+        mask[-3:] = 0
+        mask[:, :3] = 0
+        mask[:, -3:] = 0
+        s2, x2, y2, sc2 = register(rg, cg, mask, crop_scales)
+        print(f"  {vname}: crop scale {s2:.3f} at ({x2}, {y2}) on the original, ncc {sc2:.3f}")
+        d = diff_map(bg, cg, s2, x2 + dx, y2 + dy)
+        for pname, pspec in vspec["pieces"].items():
+            p = pieces[pname]
+            if "eye" in pspec:
+                s1, x1, y1, score = place_eye(cg, p, pspec)
+                extra = ""
+            else:
+                s1, x1, y1, score, iou = place_mouth(cg, d, p, pspec, piece_scales)
+                extra = f" iou {iou:.3f}"
+            p.scale = s1 * s2
+            p.at = (int(round(x2 + x1 * s2 + dx)), int(round(y2 + y1 * s2 + dy)))
+            p.score = score
+            gain = match_colour_at(p, crgb, s1, (x1, y1), p.rgba[..., 3].astype(np.float64) / 255.0)
+            print(
+                f"  {pname}: scale {s1:.3f} at ({x1}, {y1}) in the crop -> "
+                f"{p.scale:.3f} at {p.at} on the base, ncc {score:.3f}{extra} "
+                f"gain {np.round(gain, 3)}"
+            )
+
+
+def side_by_side(a, b):
+    """Two images beside one another, for the composite-vs-original preview."""
+    h = max(a.shape[0], b.shape[0])
+    w = a.shape[1] + b.shape[1] + 8
+    out = np.zeros((h, w, 3), np.uint8)
+    out[: a.shape[0], : a.shape[1]] = a[..., :3]
+    out[: b.shape[0], a.shape[1] + 8 :] = b[..., :3]
+    return Image.fromarray(out)
+
+
 # ── Output ───────────────────────────────────────────────────────────────────────────────────
 def write_bmp32(path, rgba):
     """32-bit uncompressed BMP, BGRA, bottom-first rows, 54-byte header (data offset 54):
@@ -626,15 +869,34 @@ def generate(entry, preview):
         register_alpha(entry, base, pieces)
         for p in pieces.values():
             p.rgba[..., 3] = feather(p.rgba[..., 3], entry["feather"] * p.size[1])
-    else:
+    elif entry["kind"] == "black":
         base, ref, pieces = load_black_sheet(entry)
         register_black(entry, base, ref, pieces)
+    else:
+        base, ref, pieces, tiles = load_chain_sheet(entry)
+        register_chain(entry, base, ref, pieces, tiles)
+        # The cutouts keep their own edges -- the moustache wisps -- unless a piece says
+        # otherwise: `feather: 0` per mouth piece, the entry's own for the eye skin patches.
+        for vspec in entry["variants"].values():
+            for pname, pspec in vspec["pieces"].items():
+                width = pspec.get("feather", entry["feather"])
+                if width > 0:
+                    p = pieces[pname]
+                    p.rgba[..., 3] = feather(p.rgba[..., 3], width * p.size[1])
+    # Which pieces make up each of PART_ORDER's variants, in paint order (last on top): the
+    # piece named for its variant on the one-piece sheets, the manifest's lists on a `chain`.
+    if entry["kind"] == "chain":
+        variants = {v: tuple(spec["pieces"]) for v, spec in entry["variants"].items()}
+        variants = {n: variants.get(n, (n,)) for n in PART_ORDER}
+    else:
+        variants = {n: (n,) for n in PART_ORDER}
     bh, bw = base.shape[:2]
     # The parts, resampled to PART_ZOOM times the base's density, padded inside their rects.
     images = {}
     placements = {}
     eyes = {}
-    for n in PART_ORDER:
+    order = [n for slot in PART_ORDER for n in variants[slot]]
+    for n in order:
         p = pieces[n]
         s = p.scale
         w, h = p.size
@@ -664,20 +926,27 @@ def generate(entry, preview):
              pieces[n].eye[2] * pieces[n].scale, pieces[n].eye[3] * pieces[n].scale)
             for n in EYE_PARTS[:2]
         ]
-        composite(base, pieces, ["eyes_center_l", "eyes_center_r", "mouth_smile"]).save(os.path.join(preview, f"{name}_center_smile.png"))
-        composite(base, pieces, ["eyes_left_l", "eyes_left_r", "mouth_sad"]).save(os.path.join(preview, f"{name}_left_sad.png"))
-        composite(base, pieces, ["eyes_center_l", "eyes_center_r", "mouth_angry"], ell).save(os.path.join(preview, f"{name}_center_angry_ellipses.png"))
+        centre_eyes = ["eyes_center_l", "eyes_center_r"]
+        left_eyes = ["eyes_left_l", "eyes_left_r"]
+        composite(base, pieces, centre_eyes + list(variants["mouth_smile"])).save(os.path.join(preview, f"{name}_center_smile.png"))
+        composite(base, pieces, left_eyes + list(variants["mouth_sad"])).save(os.path.join(preview, f"{name}_left_sad.png"))
+        composite(base, pieces, centre_eyes + list(variants["mouth_angry"]), ell).save(os.path.join(preview, f"{name}_center_angry_ellipses.png"))
         Image.fromarray(base).save(os.path.join(preview, f"{name}_base.png"))
         Image.fromarray(atlas).save(os.path.join(preview, f"{name}_parts.png"))
+        if ref is not None and entry["kind"] == "chain":
+            side_by_side(np.array(composite(base, pieces, centre_eyes + list(variants["mouth_smile"]))), ref).save(
+                os.path.join(preview, f"{name}_composite_vs_original.png")
+            )
     return {
         "name": name,
         "title": entry["title"],
         "base_size": (bw, bh),
         "parts_size": (aw, ah),
-        "atlas": {n: (rects[n][0] / aw, rects[n][1] / ah, (rects[n][0] + rects[n][2]) / aw, (rects[n][1] + rects[n][3]) / ah) for n in PART_ORDER},
+        "variants": variants,
+        "atlas": {n: (rects[n][0] / aw, rects[n][1] / ah, (rects[n][0] + rects[n][2]) / aw, (rects[n][1] + rects[n][3]) / ah) for n in order},
         "place": placements,
         "eyes": eyes,
-        "scores": {n: pieces[n].score for n in PART_ORDER},
+        "scores": {n: pieces[n].score for n in order},
     }
 
 
@@ -686,22 +955,24 @@ def write_rust(results):
     with open(OUT_RS, "w") as f:
         f.write("//! EXT: generated by tools/gen_portraits.py -- DO NOT EDIT.\n")
         f.write("//! The Backrooms' portraits: each base texture, the parts atlas over it, and where every\n")
-        f.write("//! part and eye sits, in top-origin UV (see the tool's UV note).\n")
+        f.write("//! piece and eye sits, in top-origin UV (see the tool's UV note).\n")
         f.write("// A table: the renderer reads the rects and the ellipses, the tests read the rest.\n")
         f.write("#![allow(dead_code)]\n\n")
-        f.write("/// One part: its rect in the parts atlas and its placement rect on the base, both as\n")
+        f.write("/// One piece: its rect in the parts atlas and its placement rect on the base, both as\n")
         f.write("/// (u0, v0, u1, v1) with v measured from the image TOP.\n")
         f.write("#[derive(Clone, Copy, Debug)]\n")
         f.write("pub struct Part {\n    pub atlas: [f32; 4],\n    pub place: [f32; 4],\n}\n\n")
-        f.write("/// One portrait. `parts` are in `PART_ORDER`: eyes centre left/right, eyes left\n")
-        f.write("/// left/right, mouth smile/sad/angry (\"left\" and \"right\" are the image's, the viewer's).\n")
-        f.write("/// `eyes` are the eye openings' ellipses as (cx, cy, rx, ry) in base UV, left then right,\n")
-        f.write("/// the same for every variant.\n")
+        f.write("/// One portrait. `parts` are the variants in `PART_ORDER` -- eyes centre left/right, eyes\n")
+        f.write("/// left left/right, mouth smile/sad/angry (\"left\" and \"right\" are the image's, the\n")
+        f.write("/// viewer's) -- each a list of pieces the renderer composites over one another in order\n")
+        f.write("/// (last on top): one piece on most sheets, the Hals mouths four. The eye variants are\n")
+        f.write("/// always a single piece, which the iris warp needs. `eyes` are the eye openings'\n")
+        f.write("/// ellipses as (cx, cy, rx, ry) in base UV, left then right, the same for every variant.\n")
         f.write("#[derive(Clone, Copy, Debug)]\n")
         f.write("pub struct Portrait {\n")
         f.write("    pub name: &'static str,\n    pub base: &'static str,\n    pub parts_texture: &'static str,\n")
         f.write("    pub base_size: (u32, u32),\n    pub parts_size: (u32, u32),\n")
-        f.write("    pub parts: [Part; 7],\n    pub eyes: [[f32; 4]; 2],\n}\n\n")
+        f.write("    pub parts: [&'static [Part]; 7],\n    pub eyes: [[f32; 4]; 2],\n}\n\n")
         f.write("pub const PART_ORDER: [&str; 7] = [\n")
         for n in PART_ORDER:
             f.write(f'    "{n}",\n')
@@ -716,12 +987,24 @@ def write_rust(results):
             f.write(f"        base_size: ({r['base_size'][0]}, {r['base_size'][1]}),\n")
             f.write(f"        parts_size: ({r['parts_size'][0]}, {r['parts_size'][1]}),\n")
             f.write("        parts: [\n")
-            for n in PART_ORDER:
-                f.write(f"            // {n} (ncc {r['scores'][n]:.2f})\n")
-                f.write("            Part {\n")
-                f.write(f"                atlas: {v4(r['atlas'][n])},\n")
-                f.write(f"                place: {v4(r['place'][n])},\n")
-                f.write("            },\n")
+            for slot in PART_ORDER:
+                names = r["variants"][slot]
+                if len(names) == 1:
+                    n = names[0]
+                    f.write(f"            // {slot} (ncc {r['scores'][n]:.2f})\n")
+                    f.write("            &[Part {\n")
+                    f.write(f"                atlas: {v4(r['atlas'][n])},\n")
+                    f.write(f"                place: {v4(r['place'][n])},\n")
+                    f.write("            }],\n")
+                else:
+                    f.write(f"            // {slot}: " + ", ".join(f"{n.split('_')[-1]} (ncc {r['scores'][n]:.2f})" for n in names) + "\n")
+                    f.write("            &[\n")
+                    for n in names:
+                        f.write("                Part {\n")
+                        f.write(f"                    atlas: {v4(r['atlas'][n])},\n")
+                        f.write(f"                    place: {v4(r['place'][n])},\n")
+                        f.write("                },\n")
+                    f.write("            ],\n")
             f.write("        ],\n")
             f.write(f"        eyes: [{v4(r['eyes']['eyes_center_l'])}, {v4(r['eyes']['eyes_center_r'])}],\n")
             f.write("    },\n")

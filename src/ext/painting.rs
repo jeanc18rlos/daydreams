@@ -139,6 +139,13 @@ pub const LEFT_FULL: f32 = 2.5;
 /// their side rather than a divide by zero.
 const GAZE_MIN_Z: f32 = 0.05;
 
+/// The most pieces a portrait's seven variants may hold between them: the four eye variants
+/// are one piece each (the iris warp needs a single rect to slide), and each of the three
+/// mouths up to four (the Hals mouths are a moustache half each side, the lips and the
+/// goatee; the Mona's and the Vermeer's are one). The shader's uniform arrays are sized to
+/// this (painting.frag `part_atlas`), so the two must move together.
+pub const MAX_PIECES: usize = 16;
+
 /// The three faces a portrait cycles through while unobserved ([`Expression`]): the mouth
 /// each one wears and whether the eyes have turned to the left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -652,10 +659,15 @@ pub struct Painting {
     portrait: &'static Portrait,
     base: Rc<Texture>,
     parts: Rc<Texture>,
-    /// The portrait's part rects, flattened for the shader's uniform arrays: seven atlas
-    /// rects, seven placement rects, two eye ellipses.
-    part_atlas: [f32; 28],
-    part_place: [f32; 28],
+    /// The portrait's piece rects, flattened for the shader's uniform arrays: the four eye
+    /// variants' single pieces at 0..4, then every mouth piece in variant order, each an
+    /// atlas rect and a placement rect; and the two eye ellipses. `mouth_bounds` fences the
+    /// mouth pieces per variant -- variant `v` is indices `bounds[v]..bounds[v + 1]`, with
+    /// `bounds[0]` = 4 -- so the shader can composite a variant's pieces over one another
+    /// (in table order, last on top) before weighting the variant.
+    part_atlas: [f32; 4 * MAX_PIECES],
+    part_place: [f32; 4 * MAX_PIECES],
+    mouth_bounds: [f32; 4],
     eyes: [f32; 8],
     /// World to canvas metres, without the canvas's scale: what the gaze wants.
     rigid_w2l: Matrix4,
@@ -779,11 +791,25 @@ impl Painting {
             bar(Vector3::new(0.0, -0.5 * h, z), rail, roll, 0.0),
         ];
 
-        let mut part_atlas = [0.0; 28];
-        let mut part_place = [0.0; 28];
-        for (i, part) in portrait.parts.iter().enumerate() {
+        let mut part_atlas = [0.0; 4 * MAX_PIECES];
+        let mut part_place = [0.0; 4 * MAX_PIECES];
+        let mut fill = |i: usize, part: &crate::ext::portrait_atlas::Part| {
             part_atlas[4 * i..4 * i + 4].copy_from_slice(&part.atlas);
             part_place[4 * i..4 * i + 4].copy_from_slice(&part.place);
+        };
+        for (i, variant) in portrait.parts[..4].iter().enumerate() {
+            assert_eq!(variant.len(), 1, "{}: an eye variant is one piece", portrait.name);
+            fill(i, &variant[0]);
+        }
+        let mut mouth_bounds = [4.0; 4];
+        let mut idx = 4;
+        for (v, variant) in portrait.parts[4..].iter().enumerate() {
+            for part in variant.iter() {
+                assert!(idx < MAX_PIECES, "{}: too many pieces", portrait.name);
+                fill(idx, part);
+                idx += 1;
+            }
+            mouth_bounds[v + 1] = idx as f32;
         }
         let mut eyes = [0.0; 8];
         eyes[..4].copy_from_slice(&portrait.eyes[0]);
@@ -799,6 +825,7 @@ impl Painting {
             parts: res.acquire_texture(portrait.parts_texture, 1, 1),
             part_atlas,
             part_place,
+            mouth_bounds,
             eyes,
             rigid_w2l,
             size,
@@ -903,6 +930,7 @@ impl ObjectT for Painting {
         shader.set_i32("parts", 1);
         shader.set_vec4_array("part_atlas", &self.part_atlas);
         shader.set_vec4_array("part_place", &self.part_place);
+        shader.set_vec4("mouth_bounds", self.mouth_bounds);
         shader.set_vec4_array("eye", &self.eyes);
         shader.set_vec4("gaze", gaze);
         shader.set_f32("iris_core", IRIS_CORE);
@@ -1081,9 +1109,11 @@ mod tests {
         assert!(frag.contains("smoothstep(iris_core, 1.0, r)"));
     }
 
-    /// The generated atlas (`tools/gen_portraits.py`): every part's atlas rect lies inside
-    /// its texture and its placement rect inside the base, each eye's opening inside its
-    /// eye part, and the only parts that overlap on the base are a variant's two eye halves.
+    /// The generated atlas (`tools/gen_portraits.py`): every piece's atlas rect lies inside
+    /// its texture and its placement rect inside the base, each eye variant is a single
+    /// piece with its eye's opening inside it, the pieces fit the shader's arrays, and on
+    /// the base an eye piece never overlaps a mouth piece (an eye and a mouth really are
+    /// summed; everything else crossfades, partitions or composites over).
     #[test]
     fn the_portrait_atlas_is_consistent() {
         use crate::ext::portrait_atlas::{PART_ORDER, PORTRAITS};
@@ -1102,40 +1132,51 @@ mod tests {
                 assert_eq!((bmp.width as u32, bmp.height as u32), expect, "{tex}");
                 assert_eq!(bmp.bpp, 32, "{tex}");
             }
-            for (i, part) in p.parts.iter().enumerate() {
-                assert!(
-                    inside(&part.atlas),
-                    "{} {}: atlas {:?}",
-                    p.name,
-                    PART_ORDER[i],
-                    part.atlas
-                );
-                assert!(
-                    inside(&part.place),
-                    "{} {}: place {:?}",
-                    p.name,
-                    PART_ORDER[i],
-                    part.place
-                );
-                for (j, other) in p.parts.iter().enumerate().skip(i + 1) {
-                    // Eye parts may overlap one another -- a variant's two halves partition
-                    // their alpha through the seam, and the centre and left variants of one
-                    // eye are crossfaded, not summed -- and the mouths sit on one another by
-                    // design, their weights summing to one. An eye may never touch a mouth:
-                    // those really are summed.
-                    let same_kind = (i < 4) == (j < 4);
+            let pieces: usize = p.parts.iter().map(|v| v.len()).sum();
+            assert!(pieces <= MAX_PIECES, "{}: {pieces} pieces", p.name);
+            for (i, variant) in p.parts.iter().enumerate() {
+                assert!(!variant.is_empty(), "{} {}: no pieces", p.name, PART_ORDER[i]);
+                if i < 4 {
+                    // The iris warp slides one rect: an eye variant is always one piece.
+                    assert_eq!(variant.len(), 1, "{} {}", p.name, PART_ORDER[i]);
+                }
+                for part in variant.iter() {
                     assert!(
-                        same_kind || !overlap(&part.place, &other.place),
-                        "{}: {} overlaps {}",
+                        inside(&part.atlas),
+                        "{} {}: atlas {:?}",
                         p.name,
                         PART_ORDER[i],
-                        PART_ORDER[j]
+                        part.atlas
                     );
+                    assert!(
+                        inside(&part.place),
+                        "{} {}: place {:?}",
+                        p.name,
+                        PART_ORDER[i],
+                        part.place
+                    );
+                }
+                for (j, other) in p.parts.iter().enumerate().skip(i + 1) {
+                    let same_kind = (i < 4) == (j < 4);
+                    if same_kind {
+                        continue;
+                    }
+                    for a in variant.iter() {
+                        for b in other.iter() {
+                            assert!(
+                                !overlap(&a.place, &b.place),
+                                "{}: {} overlaps {}",
+                                p.name,
+                                PART_ORDER[i],
+                                PART_ORDER[j]
+                            );
+                        }
+                    }
                 }
             }
             for (i, &[cx, cy, rx, ry]) in p.eyes.iter().enumerate() {
                 for variant in [0, 2] {
-                    let r = &p.parts[variant + i].place;
+                    let r = &p.parts[variant + i][0].place;
                     assert!(
                         cx - rx > r[0] && cx + rx < r[2] && cy - ry > r[1] && cy + ry < r[3],
                         "{}: eye {i} ({cx}, {cy}, {rx}, {ry}) outside part {}",
@@ -1145,11 +1186,18 @@ mod tests {
                 }
                 assert!(rx > ry, "{}: an eye opening is wider than it is high", p.name);
             }
-            // The left eye is left of the right one, and the mouth below both.
+            // The left eye is left of the right one, and every mouth piece's centre below
+            // both eye centres (the Hals' moustache tips curl up beside the cheeks, so only
+            // the centres are ordered, not the boxes).
             assert!(p.eyes[0][0] < p.eyes[1][0]);
-            assert!(p.parts[4].place[1] > p.eyes[0][1] + p.eyes[0][3]);
-            // And the Mona Lisa, the key's portrait, is the first: level16 hangs it on the
-            // even seeds, the key's among them.
+            for variant in &p.parts[4..] {
+                for part in variant.iter() {
+                    let centre_y = 0.5 * (part.place[1] + part.place[3]);
+                    assert!(centre_y > p.eyes[0][1] && centre_y > p.eyes[1][1], "{}", p.name);
+                }
+            }
+            // And the Mona Lisa, the key's portrait, is the first: level16 pins the key
+            // seed's frame to it.
             assert_eq!(PORTRAITS[0].name, "mona");
         }
     }
