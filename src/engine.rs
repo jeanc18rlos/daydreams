@@ -207,8 +207,9 @@ impl Engine {
             portal_fbos: RefCell::new(Vec::new()),
         };
 
-        // EXT: the title screen draws the intro level behind it (`render_menu_frame`), so the
-        // game boots into that scene rather than the ported scene 0. Nothing is played until
+        // EXT: the title screen draws the INTRO scene -- the Backrooms' meadow -- behind it
+        // (`render_menu_frame`), so the game boots into that scene rather than the ported
+        // scene 0. Nothing is played until
         // NEW GAME closes the menu; until then the level is only ever a backdrop.
         engine.load_scene(INTRO);
         // EXT: a mute saved from a previous session applies to the music the load above just
@@ -605,8 +606,9 @@ impl Engine {
 
     /// EXT: a frame while a menu is open. Both menus draw the world and then the menu over it;
     /// what differs is which world. The pause menu shows the game the player is standing in,
-    /// frozen where they left it. The title screen shows the intro level as a backdrop from the
-    /// vantage composed for it (`ext::meadow::title_view`), stepped rather than frozen.
+    /// frozen where they left it. The title screen shows the INTRO scene (the Backrooms) as a
+    /// backdrop from the vantage composed for it (`ext::meadow::title_view`), stepped rather
+    /// than frozen.
     /// The black wash between the two is drawn by `Menu::draw`, which knows how much its
     /// current screen needs.
     fn render_menu_frame(&self, i_width: i32, i_height: i32) {
@@ -628,6 +630,13 @@ impl Engine {
         let mut ext = self.ext.borrow_mut();
         let ext = &mut *ext;
         ext.ui.begin(i_width, i_height);
+        // EXT: the elevator's black-out stays up under the pause menu, so pausing mid-ride
+        // does not light the world up behind it and snap it back on Continue. Zero on the
+        // title, whose backdrop has no ride in progress.
+        let fade = crate::ext::elevator::fade();
+        if fade > 0.0 {
+            ext.ui.fill_rect(0.0, 0.0, i_width as f32, i_height as f32, [0.0, 0.0, 0.0, fade]);
+        }
         ext.menu.draw(&ext.ui, &name_refs);
         ext.ui.end();
     }
@@ -642,7 +651,7 @@ impl Engine {
             // menu item would otherwise fire a grab on the first frame after resuming.
             MenuAction::NewGame => {
                 self.pad_grab.set(false);
-                // EXT: a new game opens on the intro level.
+                // EXT: a new game opens on the INTRO scene (the Backrooms).
                 self.load_scene(INTRO);
                 self.ext.borrow_mut().menu.close();
             }
@@ -663,7 +672,7 @@ impl Engine {
                 self.ext.borrow_mut().menu.close();
             }
             MenuAction::MainMenu => {
-                // The title screen's backdrop IS the intro level, so leaving a game reloads it;
+                // The title screen's backdrop IS the INTRO scene, so leaving a game reloads it;
                 // otherwise the title would sit in front of whatever level was being played,
                 // seen from a vantage composed for a different world.
                 self.load_scene(INTRO);
@@ -1121,7 +1130,7 @@ impl Engine {
 impl Engine {
     /// EXT: one rendered frame of the title screen's backdrop.
     ///
-    /// The intro level has to be alive behind the title -- the door swings itself open while
+    /// The INTRO scene has to be alive behind the title -- the door swings itself open while
     /// the menu fades in, the sea moves through it, the blade field settles -- so this runs the
     /// same fixed-step loop `run_frame` does. It differs in the two ways a backdrop differs
     /// from a game:

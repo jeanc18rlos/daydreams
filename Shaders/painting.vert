@@ -4,9 +4,10 @@
 // ported quad.obj, so the streams are the OBJ loader's: positions, then uvs, then the flat
 // normals, which this shader never reads and so never declares.
 //
-// ATTRIBUTE ORDER IS LOAD-BEARING. Shader::new scrapes this source for "\nin " and binds the
-// names to locations 0, 1, 2, ... in declaration order (shader.rs:88-96); Mesh::new fills
-// location 0 with positions and 1 with uvs.
+// ATTRIBUTE ORDER IS LOAD-BEARING. Shader::new scrapes this source for "\nin "
+// (shader.rs, `scrape_attribs`) and binds the names to locations 0, 1, 2, ... in declaration
+// order (its `bind_attrib_location` loop); Mesh::new fills location 0 with positions and 1
+// with uvs.
 
 uniform mat4 mvp;
 uniform mat4 model;   // local_to_world, for the fog distance (the same term gltfunlit uses)

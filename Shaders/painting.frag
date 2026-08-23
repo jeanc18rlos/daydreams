@@ -45,8 +45,9 @@ out vec4 fragColor;
 // go: the whites are 0.040 wide and the iris 0.017, so 0.016 keeps a sliver of white beyond it.
 #define GAZE_K 0.014
 #define GAZE_LIMIT 0.016
-// A viewer level with the canvas (or behind it) gets a straight-ahead look, not a divide by
-// zero.
+// The viewer's distance off the canvas is taken as at least this, so the tangent is bounded:
+// a viewer level with the canvas (or behind it) gets the iris pinned at GAZE_LIMIT toward
+// their side rather than a divide by zero.
 #define GAZE_MIN_Z 0.05
 
 // ── Hashes and noise ─────────────────────────────────────────────────────────────────────────

@@ -70,7 +70,7 @@ dev profile to keep it real-time, and builds dependencies at `opt-level = 3` so 
 once and cached. Release is still recommended.
 
 ```sh
-cargo test --release   # 229 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, the portal warps and the teleport, the collision push, the camera, the platform layer and the extensions' pure logic
+cargo test --release   # 306 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, the portal warps and the teleport, the collision push, the camera, the platform layer and the extensions' pure logic
 ```
 
 The mesh tests read `Meshes/`, so a checkout without the assets fails them.
@@ -758,7 +758,7 @@ binary already has stdout) and the entire Win32 half of `Engine.cpp`: `CreateGLW
 ## Status
 
 `cargo build --release` — 0 errors, 0 warnings; `cargo build --profile dist` — clean.
-`cargo test --release` — 300 passed, 0 failed.
+`cargo test --release` — 306 passed, 0 failed.
 `cargo clippy --release --all-targets -- -D warnings` — clean, with an empty `[lints.clippy]` table.
 `cargo fmt --check` — clean.
 `cargo deny check` — advisories, bans, licences, sources ok.
@@ -873,8 +873,9 @@ off. And the visibility test that keeps Level10's statues still while watched
 (`ext/visibility.rs`) keeps the sitter's *face* still: only after 0.4 s of nobody looking do the
 brows lower, the mouth flatten and the gaze stop following and stare straight out. Look away and
 back and it is different; you never catch it moving. The next unobserved stretch puts it back.
-The eyes remember, too: while nobody looks they stay aimed at where you were last seen from, and
-when you look again they slide from there to you over 0.6 s.
+The eyes remember, too: while nobody looks they stay aimed at where you were last seen from --
+the last sighting, however brief -- and when you look again they slide from there to you over
+0.6 s.
 
 The test had to learn to see through a door. From the meadow the hall is a thousand units away
 and the plain cone test says "not looking" for every painting in it, which would let them change
@@ -884,8 +885,10 @@ cone, the line to that image crosses the portal's quad, the near half of that li
 the far half -- from where the line comes out of the far door to the painting -- is clear of the
 building. The far half starts at the far door rather than at the warped eye on purpose: a player a
 stride outside the meadow door is a stride behind the far door, inside the hall's end wall. A
-portal is consulted only for paintings on its far side, by which end of it they are nearer. The
-line-of-sight raycast sees the Backrooms' triangle mesh like any other blocker, so a wall is cover.
+portal is consulted only for paintings on its far side, by which end of it they are nearer, and
+only while the doors stand (`Watch::while_doors_stand`): once the one-way door has gone, so
+have its portals, and nothing is seen through them. The line-of-sight raycast sees the
+Backrooms' triangle mesh like any other blocker, so a wall is cover.
 
 The portrait itself is procedural (`Shaders/painting.frag`; there is no portrait image in the
 asset set): signed-distance shapes for the ground, shoulders, collar, neck, hair, head, eyes,
@@ -1155,7 +1158,7 @@ Small additions, each tagged `// EXT:`:
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
 | `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery |
 | `frame_buffer.rs` | sized attachments instead of `GH_FBO_SIZE` square |
-| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn and portal-removal requests applied after the portal pass, its scene-load request applied after the fixed-step loop; E offered to the elevator before the grab, and its hint and black-out in the overlay block; the `--forward`/`--strafe`/`--sprint` held keys and `--arrive`; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`) |
+| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn and portal-removal requests applied after the portal pass, its scene-load request applied after the fixed-step loop; E offered to the elevator before the grab, and its hint and black-out in the overlay block (the black-out under the pause menu too); the `--forward`/`--strafe`/`--sprint` held keys, `--arrive` and `--ride-at`, handed over as one `cli::DirectRun`; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`) |
 | `portal.rs` | the nested pass scissored to the quad's screen footprint |
 | `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4`; `new` returns `Result<_, AssetError>` and the attribute scan is a pure, tested `scrape_attribs` |
 | `texture.rs` | `new` returns `Result<_, AssetError>`; the BMP byte walk is a pure, tested `decode_bmp` |
@@ -1380,8 +1383,8 @@ Backrooms' corridor.
 
 ## Pool Rooms and Overgrown (scenes `,` and `.`)
 
-Two of the three Sketchfab assets the loader grew for (the third is the elevator, which is
-the next step) as levels of their own: Blenderust's "Level 37 flooded tiled complex"
+Two of the three Sketchfab assets the loader grew for (the third is the [elevator](#elevator))
+as levels of their own: Blenderust's "Level 37 flooded tiled complex"
 (`Meshes/level_37_flooded_tiled_complex.glb`) and "Backrooms room with plants, overgrown"
 (`Meshes/backrooms_room_with_plants_overgrown.glb`), both CC-BY-4.0, licences beside them and
 credit lines in `THIRD_PARTY.md`. Neither has a meadow in front of it: the player is simply
@@ -1402,10 +1405,14 @@ y = 0 and the player facing -z, the engine's default heading, which keeps `--yaw
 wall reserved for an elevator, exported as `ELEVATOR_SPOT` (the cabin's floor point on the
 wall's inner face, world coordinates: `(0, 0, 1.5)` in both levels) and `ELEVATOR_YAW` (the
 yaw its doorway faces, `Object::euler.y` convention: pi, i.e. -z); the level's own spawn is
-derived from the two (`interior::arrival`), so they cannot drift apart. The cabin is 2.7 m deep
-and sinks into the wall, which in both levels is the model's outer face: it will reach past
-the fence, which stands a metre outside the model, and the step that places it has that to
-move.
+derived from the two (`interior::arrival`), so they cannot drift apart. Each level builds its
+elevator first, its slab `elevator::PROUD` of the wall, and hands `interior::load` the
+`Openings` it makes: the cabin's `wall_cut()`, carved out of the model as it loads (the
+hall's wall behind the doorway, and for the pool the inside of its metre-thick wall where the
+cabin now is), and its `world_bounds()`, which the fence encloses along with the model -- the
+2.7 m cabin sinks through the wall and stands outside the building, behind it. A ray cast
+from the spawn into the cabin in either level finds the cabin's back wall and nothing of the
+host; `--forward` from the spawn at `--yaw 180` walks in and stops at it (z = 3.85).
 
 **Pool Rooms.** The model is two storeys of white mosaic tile, 37 x 33 m, with marble slides
 through both and a tiled basement under the floor. The level is the lower hall: a flat floor
@@ -1441,13 +1448,13 @@ the maze with the central block's wall 2.4 m ahead and corridors either side.
 
 Screenshots, for the record of the look: `--scene 17` and `--scene 18` at the four yaws, and
 `--pos 0.9,25,-8.5 --pitch -89` over the Overgrown room, whose ceiling is single-sided and
-shows the whole maze from above (the pool's roof is not, so its plan is the occupancy raster
-the level was measured from).
+shows the whole maze from above (the pool's roof is not; its plan was a throwaway occupancy
+raster, not shipped -- the tests re-measure every number the level is placed by).
 
 ## glTF loader
 
 `ext/gltf_model.rs` is the one path every non-OBJ model takes: the door, the Backrooms scan,
-and the three Sketchfab assets for the next step -- EFX's animated elevator
+and the three Sketchfab assets the later levels are built from -- EFX's animated elevator
 (`Meshes/elevator_with_animation_lowpoly.glb`) and Blenderust's overgrown room and flooded
 tiled complex (`backrooms_room_with_plants_overgrown.glb`, `level_37_flooded_tiled_complex.glb`,
 all CC-BY-4.0; see `THIRD_PARTY.md`). What it accepts and what it does with it:
@@ -1456,17 +1463,20 @@ all CC-BY-4.0; see `THIRD_PARTY.md`). What it accepts and what it does with it:
 |---|---|
 | **Formats** | GLB only, images embedded as PNG or JPEG; a URI image is a load error naming it, not a missing map. `KHR_materials_unlit`, `KHR_materials_emissive_strength` and `KHR_texture_transform` are honoured -- the last by baking offset, rotation and scale into the primitive's UVs at load, so the shaders never see it. Only the **base colour** texture's transform is read, and it is applied to every map of that material (a primitive has one UV stream here, and `gltf` 1.4 exposes no transform for the normal map anyway). A file without tangents gets them computed from its UVs, as the spec asks. Clearcoat, specular and the second UV set are ignored. A primitive with no material gets the spec's default material, not the file's first. |
 | **Materials** | PBR maps are packed into three RGBA textures per material -- base colour + alpha, normal xy + roughness + metalness, emissive + occlusion -- each at the size of the largest map feeding it (1x1 for a factor-only material); factors, emissive strength, occlusion strength and the normal map's `scale` are baked in. Unlit materials go up as shipped. A part is drawn with one shader, so it is all PBR or all unlit. One gotcha is the spec's: a material that writes no `metallicFactor` is fully **metallic** (the default is 1.0), and a metal has no diffuse, so a foliage card exported with nothing but a base colour map renders as a dark cut-out. `Load::metallic_override` names such materials (`"Bush_*"`, a trailing star for a prefix) and the metalness they should have had; a pattern matching nothing is an error. |
-| **Alpha** | A policy, not the file's word. `OPAQUE` is opaque. `MASK` is alpha-tested at the file's cutoff; `BLEND` is alpha-tested at 0.5 too -- foliage cards want crisp, depth-correct edges, not sorting artefacts -- *unless* the material is named in `Load::translucent` (`"Water.002"`), when it is drawn in a second pass after the part's other primitives: blended `SRC_ALPHA, ONE_MINUS_SRC_ALPHA`, depth-tested, not depth-writing, both faces. A name the file lacks is an error. |
+| **Alpha** | A policy, not the file's word. `OPAQUE` is opaque. `MASK` is alpha-tested at the file's cutoff; `BLEND` is alpha-tested at 0.5 too -- foliage cards want crisp, depth-correct edges, not sorting artefacts -- *unless* the material is named in `Load::translucent` (`"Water.002"`), when it is drawn in a second pass after every opaque pass of the model: blended `SRC_ALPHA, ONE_MINUS_SRC_ALPHA`, depth-tested, not depth-writing, both faces. A name the file lacks is an error. |
 | **Interior lighting** | `Shaders/gltfpbr.frag` under `mood > 1.5` (`view::MOOD_INTERIOR`) drops the sun for a hemisphere -- warm white from above, a dim brown bounce from the floor -- plus a small ambient, a damped overhead specular, the same hemisphere as the metals' environment, and the material's emission, saturating (no HDR target). The Backrooms' return door takes it through the meadow split; a scene that is an interior from the first step calls `view::set_scene_mood(MOOD_INTERIOR)`, which answers for every eye and is cleared on the next load. |
+| **Cuts** | `Load::cut_boxes` names axis-aligned boxes in the model's space to carve out as the file is parsed (`ext/carve.rs`): triangles inside a box are dropped, triangles crossing its faces are clipped so exactly the part outside survives, with UV, normal and tangent interpolated along the cut and the double-sided copy rebuilt from the cut front faces. `GltfModel::triangles` reports the cut geometry, so a collider built from it has the same hole the drawing has. This is how the elevator's cabin gets a real doorway through a host wall; a part wholly inside a box is an error. |
 | **Animation** | Translation channels only (`LINEAR`, `STEP`; `CUBICSPLINE` reduced to its keys), by node name: `GltfModel::animation(name)`, `Animation::translation(node, t)` in the node's local space, clamped to the clip (a NaN time reads as the rest pose), and `GltfModel::node_delta(anim, node, t)` -- the node's displacement from rest in the model's fitted space, parent chain and fit scale applied. `Animation::duration` is the last key over the kept channels. A moving node is gathered as its own part with `PartSpec { roots: &["Door1"], frame: Frame::Scene, .. }`, left out of the body with `skip`, and drawn at the elevator's `Object` plus the delta. `ext/gltf_prop.rs` does exactly that for any `Load`: every part at one `Object`, triangle collision from the solid materials only (no foliage cards, no water), every part's opaque pass before any part's translucent one, a clip playing on the parts that follow a node. |
 | **Looking at a file** | `daydreams --windowed --view-glb PATH [--view-translucent Water.002] --shot out.bmp` opens a scene of that one model at its own scale under the interior light, on a dark ground cap over an invisible floor, the player at the floor of its bounding box, the first clip looping; `--pos`, `--yaw` and `--pitch` work as with `--scene`. `cargo run --release --example glb_probe -- PATH` prints what the file holds first: images, primitives and materials, alpha modes, texture transforms, the node tree and the clips with their channels. |
 
 Every new piece of the loader is unit-tested without a GL context: the UV transform, channel
 sampling and clamping, `node_delta` through a parent chain, the generated tangents, the image
-decode of the elevator's JPEGs and PNGs, a one-triangle GLB with no materials at all, and a
-`parse()` of each of the three shipped GLBs checking triangle counts, bounds, the elevator's
-clip and its door deltas, the foliage's alpha test, the moss and marble tiling, the water,
-the solid subset a collider takes, and the metalness override.
+decode of the elevator's JPEGs and PNGs, a one-triangle GLB with no materials at all (and one
+whose only material is `BLEND`, which has nothing solid and builds no collider), the cut on a
+quad straddling a box and on the elevator's floor, and a `parse()` of each of the three
+shipped GLBs checking triangle counts, bounds, the elevator's clip and its door deltas, the
+foliage's alpha test, the moss and marble tiling, the water, the solid subset a collider
+takes, and the metalness override.
 
 ### Dev tooling
 

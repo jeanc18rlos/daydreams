@@ -71,11 +71,12 @@ impl DoorLink {
     }
 }
 
-/// Whether a leaf should be open, given everything that can ask it to be. A vanished door
-/// answers no to all of it: the title's hold-open, the player standing on its threshold, a
-/// partner that is open -- none of them can bring back a door that is gone.
-fn wants_open(vanished: bool, near: bool, held: bool, partner_wants: bool) -> bool {
-    !vanished && (near || held || partner_wants)
+/// Whether a leaf should be open, given everything that can ask it to be: the player standing
+/// on its threshold, the title's hold-open, a partner that is open. A vanished door never
+/// gets this far (`Door::update` returns before asking): nothing brings back a door that is
+/// gone.
+fn wants_open(near: bool, held: bool, partner_wants: bool) -> bool {
+    near || held || partner_wants
 }
 
 thread_local! {
@@ -305,7 +306,7 @@ impl ObjectT for Door {
         } else {
             false
         };
-        let want_open = wants_open(false, near, held, partner_wants);
+        let want_open = wants_open(near, held, partner_wants);
         if !opening && want_open {
             // Swing toward the player when they are the one approaching: a positive angle
             // about the hinge carries the leaf's free edge to local -z (Matrix4::rot_y maps +x
@@ -436,19 +437,12 @@ mod tests {
         assert!(here.vanished() && there.vanished());
     }
 
-    /// Neither proximity, nor the title's hold-open, nor an open partner opens a vanished door.
+    /// Proximity, the title's hold-open and an open partner each open a door on their own.
     #[test]
-    fn a_vanished_door_ignores_every_reason_to_open() {
-        assert!(wants_open(false, true, false, false));
-        assert!(wants_open(false, false, true, false));
-        assert!(wants_open(false, false, false, true));
-        assert!(!wants_open(false, false, false, false));
-        for near in [false, true] {
-            for held in [false, true] {
-                for partner in [false, true] {
-                    assert!(!wants_open(true, near, held, partner));
-                }
-            }
-        }
+    fn any_one_reason_opens_a_door() {
+        assert!(wants_open(true, false, false));
+        assert!(wants_open(false, true, false));
+        assert!(wants_open(false, false, true));
+        assert!(!wants_open(false, false, false));
     }
 }

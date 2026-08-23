@@ -39,12 +39,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::ext::backrooms::{fell_out, Backrooms, GroundCap, DOOR_FACING, DOOR_SPOT, FLOOR_Y};
-use crate::ext::bounds::bounds_box;
+use crate::ext::backrooms::{Backrooms, GroundCap, DOOR_FACING, DOOR_SPOT, FLOOR_Y};
 use crate::ext::door::yaw_facing;
 use crate::ext::elevator::{self, Elevator, PROUD, SLAB_X, THRESHOLD};
+use crate::ext::interior::{fence_and_respawn, union};
 use crate::ext::meadow::{door_with_portal, in_far_world, load_meadow, FAR};
-use crate::ext::room::{request_remove_portals, request_respawn, Respawn, RoomLogic};
+use crate::ext::room::{request_remove_portals, Respawn, RoomLogic};
 use crate::ext::view;
 use crate::game_header::GH_PLAYER_HEIGHT;
 use crate::object::ObjectT;
@@ -56,10 +56,6 @@ use crate::vector::Vector3;
 
 pub struct Level16;
 
-/// Clearance the invisible fence keeps around the model. The scan has doorways in its outer
-/// walls that lead nowhere; a metre of margin lets the player stand in one without the fence
-/// showing through it, and not walk out of it.
-const FENCE_MARGIN: f32 = 1.0;
 /// Where a player who has fallen out of the building is put back: a stride inside the arrival
 /// door, at standing height on the carpet, which is where walking through it lands them. They
 /// face down the hall, away from the door, as they would have on arrival.
@@ -120,47 +116,18 @@ impl Scene for Level16 {
         // ── The backrooms: the model, placed so its door spot is FAR with the carpet at y = 0.
         let rooms = Backrooms::new(gl, res, FAR, &[lift.wall_cut()]);
         // The building's extent and the cabin's, which stands outside it behind the wall.
-        let (lo, hi) = {
-            let ((rlo, rhi), (llo, lhi)) = (rooms.world_bounds(), lift.world_bounds());
-            (
-                Vector3::new(rlo.x.min(llo.x), rlo.y.min(llo.y), rlo.z.min(llo.z)),
-                Vector3::new(rhi.x.max(lhi.x), rhi.y.max(lhi.y), rhi.z.max(lhi.z)),
-            )
-        };
+        let bounds = union(rooms.world_bounds(), lift.world_bounds());
         // Darkness under and around the building, for wherever its walls let the outside show.
         objs.push(Rc::new(RefCell::new(GroundCap::new(res, &rooms))) as Rc<RefCell<dyn ObjectT>>);
         objs.push(Rc::new(RefCell::new(rooms)) as Rc<RefCell<dyn ObjectT>>);
         objs.push(Rc::new(RefCell::new(lift.doors())) as Rc<RefCell<dyn ObjectT>>);
         objs.push(Rc::new(RefCell::new(lift)) as Rc<RefCell<dyn ObjectT>>);
 
-        // An invisible fence round the model's full extent, so nothing leaves through a
-        // doorway in an outer wall. bounds_box takes the floor level and the wall height (not
-        // a half-extent) on y: the floor is dropped a margin below the model and the walls
-        // rise a margin above it.
-        objs.push(Rc::new(RefCell::new(bounds_box(
-            res,
-            Vector3::new(0.5 * (lo.x + hi.x), lo.y - FENCE_MARGIN, 0.5 * (lo.z + hi.z)),
-            Vector3::new(
-                0.5 * (hi.x - lo.x) + FENCE_MARGIN,
-                hi.y - lo.y + 2.0 * FENCE_MARGIN,
-                0.5 * (hi.z - lo.z) + FENCE_MARGIN,
-            ),
-        ))) as Rc<RefCell<dyn ObjectT>>);
-
-        // Under the carpet there is nothing, on purpose: a player who ends up there (see the
-        // module docs) is put back at the arrival point rather than caught by a net and left
-        // standing in the dark. The rule is checked every step against the fenced footprint
-        // and the carpet level, which is FAR.y by construction (`carpet_lands_at_the_doors_foot`).
-        let footprint = (
-            Vector3::new(lo.x - FENCE_MARGIN, lo.y, lo.z - FENCE_MARGIN),
-            Vector3::new(hi.x + FENCE_MARGIN, hi.y, hi.z + FENCE_MARGIN),
-        );
-        let arrival = Respawn::facing(ARRIVAL, -DOOR_FACING);
-        objs.push(Rc::new(RefCell::new(RoomLogic::new(move |ctx| {
-            if fell_out(ctx.player_pos, FAR.y, footprint) {
-                request_respawn(arrival);
-            }
-        }))) as Rc<RefCell<dyn ObjectT>>);
+        // An invisible fence round the lot, so nothing leaves through a doorway in an outer
+        // wall, and the rule that puts a player who has fallen under the carpet (see the
+        // module docs) back at the arrival point -- the carpet level is FAR.y by construction
+        // (`carpet_lands_at_the_doors_foot`).
+        fence_and_respawn(res, objs, bounds, FAR.y, Respawn::facing(ARRIVAL, -DOOR_FACING));
 
         // The same door, from the carpet. It faces the hall's end wall, so stepping out of it
         // means looking down the hall.
@@ -176,6 +143,7 @@ impl Scene for Level16 {
         // away for good (see the module docs). The title backdrop's camera is parked on the
         // meadow and never gets here.
         let portal_ids = [meadow.here.borrow().id, there.borrow().id];
+        let doors = link.clone();
         objs.push(Rc::new(RefCell::new(RoomLogic::new(move |ctx| {
             if !link.vanished() && in_far_world(ctx.player_pos) {
                 link.vanish();
@@ -186,7 +154,8 @@ impl Scene for Level16 {
         // ── Portraits along the hall, watching (`ext/painting.rs`). Five on the north wall,
         // three on the south, each a hair off its wall face so nothing is coplanar with the
         // scan. The watch is taken now, after both doors exist, so a painting knows it is
-        // being looked at through the meadow door as well as from the carpet.
+        // being looked at through the meadow door as well as from the carpet -- and only
+        // while the doors stand: once they have gone, so have their portals.
         {
             use crate::ext::painting::{Painting, Watch};
             /// The hall's wall faces in world z: `backrooms::DOOR_SPOT` puts model z = 3.48 and
@@ -201,7 +170,7 @@ impl Scene for Level16 {
             const HEIGHT: f32 = 1.6;
             const SIZE: (f32, f32) = (0.8, 1.0);
 
-            let watch = Watch::new(objs, portals);
+            let watch = Watch::new(objs, portals).while_doors_stand(doors);
             let hang = |x: f32, wall_z: f32, facing_z: f32, seed: u32| {
                 let centre = Vector3::new(x, HEIGHT, wall_z + facing_z * WALL_GAP);
                 let facing = Vector3::new(0.0, 0.0, facing_z);

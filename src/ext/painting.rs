@@ -39,7 +39,7 @@ use std::rc::Rc;
 use crate::camera::Camera;
 use crate::ext::backrooms::WALL_FOG;
 use crate::ext::cull::object_sphere;
-use crate::ext::door::yaw_facing;
+use crate::ext::door::{yaw_facing, DoorLink};
 use crate::ext::visibility::{has_line_of_sight, in_view_cone, WATCH_HALF_ANGLE};
 use crate::game_header::GH_DT;
 use crate::object::{Object, ObjectT, RenderCtx, UpdateCtx};
@@ -113,16 +113,22 @@ impl Expression {
 /// not; and a slide between the two on being looked at again.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Gaze {
-    /// The viewer's eye as of the last settled observation, or `None` before the first look.
+    /// Where the slide starts from: the viewer's eye as of the last settled observation, or
+    /// as of the last sighting once it ended. `None` before the first look.
     anchor: Option<Vector3>,
+    /// The viewer's eye as of this observed stretch's latest step, for the anchor to take
+    /// when the stretch ends.
+    last_seen: Option<Vector3>,
     /// Seconds of the current observed stretch, capped at [`REACQUIRE`].
     settled: f32,
 }
 
 impl Gaze {
     /// One fixed step: `seen_from` is the viewer's eye in the painting's world if the painting
-    /// is observed this step. The anchor only follows the viewer once the slide is over, so a
-    /// slide is always from the old anchor and never chases its own tail.
+    /// is observed this step. While watched, the anchor only follows the viewer once the
+    /// slide is over, so a slide is always from the old anchor and never chases its own tail;
+    /// when the look ends, the anchor is where the viewer was last seen from -- however short
+    /// the look -- which is what the eyes then stay on.
     pub fn step(&mut self, seen_from: Option<Vector3>, dt: f32) {
         match seen_from {
             Some(from) => {
@@ -130,8 +136,14 @@ impl Gaze {
                 if self.settled >= REACQUIRE || self.anchor.is_none() {
                     self.anchor = Some(from);
                 }
+                self.last_seen = Some(from);
             }
-            None => self.settled = 0.0,
+            None => {
+                if let Some(last) = self.last_seen.take() {
+                    self.anchor = Some(last);
+                }
+                self.settled = 0.0;
+            }
         }
     }
 
@@ -151,13 +163,28 @@ impl Gaze {
 pub struct Watch {
     blockers: Rc<[Rc<RefCell<dyn ObjectT>>]>,
     portals: Rc<[Rc<RefCell<Portal>>]>,
+    /// The doors the portals belong to, when they can vanish (`DoorLink::vanish`): the engine
+    /// drops their portals then, and the snapshot must stop looking through them.
+    doors: Option<DoorLink>,
 }
 
 impl Watch {
     /// Snapshot the objects and portals built so far. Paintings themselves carry no colliders,
     /// so whether they are in the list makes no difference to the ray.
     pub fn new(objs: &PObjectVec, portals: &PPortalVec) -> Watch {
-        Watch { blockers: Rc::from(objs.as_slice()), portals: Rc::from(portals.as_slice()) }
+        Watch {
+            blockers: Rc::from(objs.as_slice()),
+            portals: Rc::from(portals.as_slice()),
+            doors: None,
+        }
+    }
+
+    /// The same watch, looking through its portals only while the doors on `link` stand: once
+    /// they have vanished (the Backrooms' one-way door, `level16.rs`) nothing is seen through
+    /// a doorway that is no longer there.
+    pub fn while_doors_stand(mut self, link: DoorLink) -> Watch {
+        self.doors = Some(link);
+        self
     }
 
     /// If `point` is observed from the player's eye transform, the eye's position in the
@@ -168,6 +195,9 @@ impl Watch {
             && has_line_of_sight(&self.blockers, cam_to_world, point, None)
         {
             return Some(cam_to_world.translation());
+        }
+        if self.doors.as_ref().is_some_and(DoorLink::vanished) {
+            return None;
         }
         self.portals.iter().find_map(|p| {
             // `try_borrow`: this runs inside the update loop, where a portal is never borrowed,
@@ -424,6 +454,31 @@ mod tests {
         assert!((g.target(eye) - eye).mag() < 1e-6);
     }
 
+    /// The memory is the LAST sighting, however short: a glance from `b` after a long look
+    /// from `a` leaves the eyes on `b` once it ends, and the next slide starts there.
+    #[test]
+    fn a_short_look_is_remembered_too() {
+        let mut g = Gaze::default();
+        let a = Vector3::new(0.0, 1.5, 0.0);
+        let b = Vector3::new(3.0, 1.5, 1.0);
+        for _ in 0..((REACQUIRE * 2.0) / GH_DT) as u32 {
+            g.step(Some(a), GH_DT);
+        }
+        g.step(None, GH_DT);
+        // A look from `b` shorter than the slide: mid-slide the eyes are between the two...
+        for _ in 0..((REACQUIRE * 0.5) / GH_DT) as u32 {
+            g.step(Some(b), GH_DT);
+        }
+        let mid = g.target(b);
+        assert!((mid - a).mag() > 0.3 && (mid - b).mag() > 0.3, "mid-slide at {mid:?}");
+        // ...and once it ends they stay on `b`, not `a`.
+        g.step(None, GH_DT);
+        assert!((g.target(a) - b).mag() < 1e-6, "remembered {:?}", g.target(a));
+        // Looked at again from `a`, the slide starts at `b`.
+        g.step(Some(a), GH_DT);
+        assert!((g.target(a) - b).mag() < 0.05);
+    }
+
     /// The watch tests need portals with warps and no GL: `Portal::detached` and `connect`
     /// give both. A door at the origin facing +z, linked to one at `FAR` facing +x, the way
     /// the Backrooms are wired (`level16::walking_through_lands_in_the_hall_facing_down_it`).
@@ -487,6 +542,16 @@ mod tests {
         // unobserved.
         let cam = camera(eye, Vector3::new(-1.0, 0.0, 0.0));
         assert!(watch.seen_from(&cam, painting).is_none());
+        // Doors that can vanish: seen through them while they stand, not once they are gone,
+        // while a direct look still counts.
+        let (link, _) = DoorLink::pair();
+        let watch = watch.while_doors_stand(link.clone());
+        let cam = camera(eye, Vector3::new(0.0, 0.0, -1.0));
+        assert!(watch.seen_from(&cam, painting).is_some());
+        link.vanish();
+        assert!(watch.seen_from(&cam, painting).is_none());
+        let direct = camera(far + Vector3::new(-1.0, 1.5, -0.5), Vector3::new(-1.0, 0.0, 0.0));
+        assert!(watch.seen_from(&direct, painting).is_some());
     }
 
     /// Something solid for the ray to hit, without GL: a square, as the scan's walls are.

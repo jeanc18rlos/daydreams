@@ -54,6 +54,11 @@
 //! ([`wants_interact`], [`press`]), the ride-start edge for the sound ([`take_ride_started`]),
 //! the arrival the next level picks up ([`take_arrival`]) and the registry index of the scene
 //! being played, which is how an elevator knows which floor it is on ([`on_scene_loaded`]).
+//!
+//! The channels are written by the one elevator's `update`, last writer wins, which is to say
+//! **one elevator per scene**: a second would erase the first's hint and fade every step it
+//! ran after it, and take the E press the first was offered. Every level has one; a level
+//! that wanted two would give the channels a merge rule first.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -445,11 +450,19 @@ fn inside_cabin(local: Vector3) -> bool {
 fn time_of_widest_opening(model: &GltfModel) -> f32 {
     let anim = model.animation(CLIP).unwrap_or_else(|| panic!("{MODEL} has no {CLIP:?} clip"));
     let steps = (anim.duration() / SAMPLE_STEP) as usize;
-    (0..=steps)
+    let (t_open, widest) = (0..=steps)
         .map(|i| i as f32 * SAMPLE_STEP)
-        .map(|t| (t, model.node_delta(anim, NODE_DOOR2, t).map_or(0.0, |d| d.mag())))
-        .fold((0.0, 0.0), |best, (t, w)| if w > best.1 { (t, w) } else { best })
-        .0
+        .map(|t| {
+            let d = model
+                .node_delta(anim, NODE_DOOR2, t)
+                .unwrap_or_else(|| panic!("{CLIP:?} in {MODEL} no longer moves {NODE_DOOR2:?}"));
+            (t, d.mag())
+        })
+        .fold((0.0, 0.0), |best, (t, w)| if w > best.1 { (t, w) } else { best });
+    // A clip that moves the leaf nowhere would leave the doors drawn shut for ever while the
+    // ride believed them open: as loud a failure as the measurements in the tests.
+    assert!(widest > 0.1, "{CLIP:?} in {MODEL} slides {NODE_DOOR2:?} only {widest} m");
+    t_open
 }
 
 pub struct Elevator {
@@ -743,10 +756,21 @@ mod tests {
         assert_eq!(next_floor(None, all), None);
     }
 
+    /// Every floor names a registered scene -- a typo here would silently skip a level with
+    /// one warning in the log -- the first is where NEW GAME starts, and no scene is listed
+    /// twice.
     #[test]
-    fn floors_name_registered_scenes_in_this_branch_the_backrooms() {
+    fn every_floor_is_a_registered_scene() {
         assert!(FLOORS.iter().all(|f| !f.label.is_empty() && !f.scene_name.is_empty()));
-        assert_eq!(scenes::index_of(FLOORS[0].scene_name), Some(scenes::INTRO));
+        let mut indices: Vec<usize> = FLOORS
+            .iter()
+            .map(|f| scenes::index_of(f.scene_name).unwrap_or_else(|| panic!("{:?}", f.scene_name)))
+            .collect();
+        assert_eq!(indices[0], scenes::INTRO);
+        assert!((0..FLOORS.len()).all(floor_registered));
+        indices.sort_unstable();
+        indices.dedup();
+        assert_eq!(indices.len(), FLOORS.len());
     }
 
     #[test]

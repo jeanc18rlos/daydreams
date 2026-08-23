@@ -92,8 +92,44 @@ pub fn world_bounds(b: [f32; 6], obj: &Object) -> (Vector3, Vector3) {
     )
 }
 
+/// The invisible fence round the world-space box `(lo, hi)`, [`FENCE_MARGIN`] out, and the
+/// rule that puts whoever ends up under the floor at `floor_y` back at `arrival`. Shared by
+/// the Backrooms (`level16.rs`), whose model and door take their own path, and by [`load`].
+pub fn fence_and_respawn(
+    res: &Resources,
+    objs: &mut PObjectVec,
+    (lo, hi): (Vector3, Vector3),
+    floor_y: f32,
+    arrival: Respawn,
+) {
+    // bounds_box takes the floor level and the wall height on y (not a half-extent), so the
+    // floor is dropped a margin below the model and the walls rise a margin above it.
+    objs.push(Rc::new(RefCell::new(bounds_box(
+        res,
+        Vector3::new(0.5 * (lo.x + hi.x), lo.y - FENCE_MARGIN, 0.5 * (lo.z + hi.z)),
+        Vector3::new(
+            0.5 * (hi.x - lo.x) + FENCE_MARGIN,
+            hi.y - lo.y + 2.0 * FENCE_MARGIN,
+            0.5 * (hi.z - lo.z) + FENCE_MARGIN,
+        ),
+    ))) as Rc<RefCell<dyn ObjectT>>);
+
+    // Under the floor there is nothing, on purpose (see `ext/backrooms.rs`): whoever ends
+    // up there is put back at the arrival point. The rule is checked every step against the
+    // fenced footprint and the floor level.
+    let footprint = (
+        Vector3::new(lo.x - FENCE_MARGIN, lo.y, lo.z - FENCE_MARGIN),
+        Vector3::new(hi.x + FENCE_MARGIN, hi.y, hi.z + FENCE_MARGIN),
+    );
+    objs.push(Rc::new(RefCell::new(RoomLogic::new(move |ctx| {
+        if fell_out(ctx.player_pos, floor_y, footprint) {
+            request_respawn(arrival);
+        }
+    }))) as Rc<RefCell<dyn ObjectT>>);
+}
+
 /// The smallest box holding both.
-fn union((alo, ahi): (Vector3, Vector3), (blo, bhi): (Vector3, Vector3)) -> (Vector3, Vector3) {
+pub fn union((alo, ahi): (Vector3, Vector3), (blo, bhi): (Vector3, Vector3)) -> (Vector3, Vector3) {
     (
         Vector3::new(alo.x.min(blo.x), alo.y.min(blo.y), alo.z.min(blo.z)),
         Vector3::new(ahi.x.max(bhi.x), ahi.y.max(bhi.y), ahi.z.max(bhi.z)),
@@ -150,30 +186,7 @@ pub fn load(
     );
     objs.push(Rc::new(RefCell::new(prop)) as Rc<RefCell<dyn ObjectT>>);
 
-    // The fence: bounds_box takes the floor level and the wall height on y (not a
-    // half-extent), so the floor is dropped a margin below the model and the walls rise a
-    // margin above it.
-    objs.push(Rc::new(RefCell::new(bounds_box(
-        res,
-        Vector3::new(0.5 * (lo.x + hi.x), lo.y - FENCE_MARGIN, 0.5 * (lo.z + hi.z)),
-        Vector3::new(
-            0.5 * (hi.x - lo.x) + FENCE_MARGIN,
-            hi.y - lo.y + 2.0 * FENCE_MARGIN,
-            0.5 * (hi.z - lo.z) + FENCE_MARGIN,
-        ),
-    ))) as Rc<RefCell<dyn ObjectT>>);
-
-    // Under the floor there is nothing, on purpose (see `ext/backrooms.rs`): whoever ends
-    // up there is put back at the arrival point.
-    let footprint = (
-        Vector3::new(lo.x - FENCE_MARGIN, lo.y, lo.z - FENCE_MARGIN),
-        Vector3::new(hi.x + FENCE_MARGIN, hi.y, hi.z + FENCE_MARGIN),
-    );
-    objs.push(Rc::new(RefCell::new(RoomLogic::new(move |ctx| {
-        if fell_out(ctx.player_pos, floor_y, footprint) {
-            request_respawn(arrival);
-        }
-    }))) as Rc<RefCell<dyn ObjectT>>);
+    fence_and_respawn(res, objs, (lo, hi), floor_y, arrival);
 
     player.base.set_position(arrival.pos);
     player.set_look(arrival.yaw, 0.0);

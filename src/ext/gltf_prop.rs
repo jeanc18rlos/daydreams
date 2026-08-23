@@ -79,7 +79,8 @@ impl GltfProp {
     /// Load `spec` and stand it at `pos` with yaw `yaw`. `followers` pairs a part name with the
     /// node whose animated translation it is drawn at (see the module docs). With `solid`, every
     /// part's solid triangles become one world-space collider, built here and fixed: move the
-    /// prop afterwards and the collision stays behind.
+    /// prop afterwards and the collision stays behind. A model with nothing solid in it -- a
+    /// file of foliage cards alone, under `--view-glb` -- gets no collider and a warning.
     pub fn new(
         gl: &Rc<glow::Context>,
         res: &Resources,
@@ -104,7 +105,11 @@ impl GltfProp {
                 pos.extend_from_slice(p);
                 idx.extend(i.iter().map(|k| k + off));
             }
-            Rc::new(TriMeshCollider::new(&pos, &idx, &base.local_to_world()))
+            if idx.is_empty() {
+                log::warn!("[gltf] {} has no solid triangles: nothing to collide with", spec.path);
+                return None;
+            }
+            Some(Rc::new(TriMeshCollider::new(&pos, &idx, &base.local_to_world())))
         });
 
         GltfProp {
@@ -119,7 +124,7 @@ impl GltfProp {
             pbr: res.acquire_shader("gltfpbr"),
             unlit: res.acquire_shader("gltfunlit"),
             fog_color: [0.0, 0.0, 0.0, 1.0],
-            collider,
+            collider: collider.flatten(),
         }
     }
 

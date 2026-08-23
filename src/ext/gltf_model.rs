@@ -2355,8 +2355,20 @@ mod tests {
     /// writes for a bare mesh, and what used to alias material 0 -- which here does not
     /// exist.
     fn bare_triangle_glb() -> Vec<u8> {
-        let json = br#"{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0,"name":"tri"}],"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}],"bufferViews":[{"buffer":0,"byteLength":36}],"buffers":[{"byteLength":36}]}"#;
-        let mut json = json.to_vec();
+        triangle_glb(false)
+    }
+
+    /// The same triangle, `blended` giving it the file's one material, a `BLEND` one.
+    fn triangle_glb(blended: bool) -> Vec<u8> {
+        let (materials, material) = if blended {
+            (r#","materials":[{"name":"glass","alphaMode":"BLEND"}]"#, r#","material":0"#)
+        } else {
+            ("", "")
+        };
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0,"name":"tri"}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0}}{material}}}]}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}}],"bufferViews":[{{"buffer":0,"byteLength":36}}],"buffers":[{{"byteLength":36}}]{materials}}}"#
+        );
+        let mut json = json.into_bytes();
         while json.len() % 4 != 0 {
             json.push(b' ');
         }
@@ -2406,6 +2418,27 @@ mod tests {
         // A file whose primitives all name a material builds no default slot.
         let q = whole("Meshes/backrooms_room_with_plants_overgrown.glb", &[]);
         assert_eq!(q.policies.len(), q.doc.materials().count());
+    }
+
+    /// A file whose only material is `BLEND` -- a glass or a bush on its own -- has every
+    /// triangle drawn and none solid: what `GltfProp` builds no collider from, and what
+    /// `--view-glb` must still open.
+    #[test]
+    fn a_file_of_nothing_solid_has_no_solid_triangles() {
+        let spec = Load {
+            path: "glass.glb",
+            parts: &WHOLE,
+            fit: Fit::Identity,
+            max_map: 1024,
+            translucent: &[],
+            metallic_override: &[],
+            cut_boxes: &[],
+        };
+        let p = parse_bytes(&triangle_glb(true), &spec, "glass.glb".into())
+            .unwrap_or_else(|e| panic!("{e}"));
+        let g = gather(&p.raw["all"], &p.policies);
+        assert_eq!((g.pos.len(), g.idx.len()), (3, 3));
+        assert!(g.solid.is_empty());
     }
 
     /// The elevator embeds both formats: nine images, JPEG and PNG (two of them paletted),
