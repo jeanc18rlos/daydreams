@@ -387,20 +387,8 @@ impl ApplicationHandler for App {
             let engine = Engine::new(self.gl.as_ref().unwrap());
             engine.start_run();
             // EXT: dev flags -- direct scene start and/or screenshot-and-quit.
-            let direct = self.args.direct_scene();
-            if direct.is_some() || self.args.shot.is_some() {
-                engine.start_direct(
-                    direct,
-                    self.args.shot.clone(),
-                    // `u32` on the command line (a negative count is a parse error there);
-                    // the engine counts down in an `i32`.
-                    self.args.frames.min(i32::MAX as u32) as i32,
-                    self.args.yaw,
-                    self.args.pitch,
-                    self.args.pos,
-                    &self.args.held_keys(),
-                    self.args.arrive,
-                );
+            if let Some(run) = self.args.direct_run() {
+                engine.start_direct(run);
             }
             self.engine = Some(engine);
         }

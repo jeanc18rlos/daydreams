@@ -1348,8 +1348,36 @@ extents, and a test measures the wall, the ceiling and the chair from the scan. 
 Rooms it is set into the hall's west wall at mid-length, in the Overgrown room into the south
 wall (`ELEVATOR_SPOT` / `ELEVATOR_YAW` in `level17.rs` and `level18.rs`; the sections below).
 
-`--scene N --arrive` (hidden) loads a scene as a ride would -- black, doors shut, stood in the
-cabin -- for photographing an arrival; `--pos` inside the cabin shows the hint.
+**Testing a ride without a hand on the keyboard.** Two hidden flags: `--scene N --arrive`
+loads a scene as a ride would -- black, doors shut, stood in the cabin facing its doors (the
+look is the cabin's unless `--yaw` or `--pitch` is given) -- for photographing an arrival;
+`--ride-at FRAME` presses E once on that rendered frame, exactly as the key would be pressed:
+in an idle cabin it rides, anywhere else it grabs, which is to say nothing happens. A ride
+takes about 4 s of wall-clock time (1.5 s closing, 0.5 s fade, the load, 0.5 s fade, 1.5 s
+opening), and frames run at the display's refresh under `--windowed` (8.4 ms each on a 120 Hz
+panel), so `--frames` has to leave room: 600 frames is 5 s there and 10 s on a 60 Hz panel,
+and waiting longer in an idle cabin changes nothing. The three rides, each printing the far
+floor's `[load]` line and photographing it through the open doors from inside the cabin
+(`--pos` is the cabin's middle, `--yaw` faces its doors):
+
+```sh
+# Backrooms -> Pool Rooms: expect `[load] scene 17`, the flooded hall through the doors
+daydreams --windowed --scene 16 --pos 995.23,1.5,-8.25 --yaw 180 --ride-at 30 --frames 600 --shot ride1.bmp
+# Pool Rooms -> Overgrown: expect `[load] scene 18`, the moss and grass through the doors
+daydreams --windowed --scene 17 --pos 0,1.5,3 --ride-at 30 --frames 600 --shot ride2.bmp
+# Overgrown -> Backrooms: expect `[load] scene 16`, the entrance corridor through the doors
+daydreams --windowed --scene 18 --pos 0,1.5,3 --ride-at 30 --frames 600 --shot ride3.bmp
+# The same first ride from an arrival: E lands after the 2 s arrival, not during it
+daydreams --windowed --scene 16 --arrive --ride-at 300 --frames 900 --shot ride1b.bmp
+# E ignored: outside the cabin (position and scene unchanged), and while the doors are moving
+daydreams --windowed --scene 17 --ride-at 30 --frames 300 --shot none.bmp
+daydreams --windowed --scene 16 --arrive --ride-at 30 --frames 300 --shot none.bmp
+```
+
+The `[shot]` line's `player at` shows the boarding: `(0.00, 1.50, 2.89)` in the two glTF
+interiors (the cabin's middle behind a doorway at `z = 1.5`), `(995.25, 1.50, -8.25)` in the
+Backrooms' corridor.
+
 ## Pool Rooms and Overgrown (scenes `,` and `.`)
 
 Two of the three Sketchfab assets the loader grew for (the third is the elevator, which is
@@ -1471,8 +1499,8 @@ Options:
       --scene <N>          Skip the title and load scene N (0-based, in key order)
       --shot <FILE>        Save a screenshot here after --frames frames and quit. Alone: the title screen
       --frames <K>         Frames to render before the screenshot, so physics settles [default: 90]
-      --yaw <DEG>          Camera yaw in degrees (with --scene) [default: 0]
-      --pitch <DEG>        Camera pitch in degrees (with --scene) [default: 0]
+      --yaw <DEG>          Camera yaw in degrees (with --scene). Default 0
+      --pitch <DEG>        Camera pitch in degrees (with --scene). Default 0
       --pos <X,Y,Z>        Player position (with --scene)
       --forward            Hold W for the whole run
       --strafe             Hold A for the whole run
@@ -1506,11 +1534,12 @@ parsing, so a double-clicked bundle starts clean.
 `daydreams gen-terrain` is the one subcommand: it rewrites `Meshes/meadow_tile.obj` under the
 asset root from `ext::terrain::height` and exits (see [Meadow](#meadow-grass-and-clouds-scene-)).
 
-Three flags are hidden from `--help` because they are tools rather than features: `--panic-test`
+Four flags are hidden from `--help` because they are tools rather than features: `--panic-test`
 (the crash dialog, below), `--view-glb PATH` with `--view-translucent NAMES` (a scene of one
-model, see [glTF loader](#gltf-loader)) and `--arrive` (with `--scene`: load it as an elevator
-ride would, see [Elevator](#elevator)). `--view-glb` excludes `--scene`; its path is taken
-under the working directory when a file is there, under the asset root otherwise.
+model, see [glTF loader](#gltf-loader)), and `--arrive` and `--ride-at FRAME` (with `--scene`:
+load it as an elevator ride would, and press E once on that frame; see
+[Elevator](#elevator)). `--view-glb` excludes `--scene`; its path is taken under the working
+directory when a file is there, under the asset root otherwise.
 
 ### Logging
 

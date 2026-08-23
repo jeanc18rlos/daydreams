@@ -47,13 +47,13 @@ pub struct Args {
     #[arg(long, default_value_t = 90, value_name = "K")]
     pub frames: u32,
 
-    /// Camera yaw in degrees (with --scene).
-    #[arg(long, default_value_t = 0.0, allow_negative_numbers = true, value_name = "DEG")]
-    pub yaw: f32,
+    /// Camera yaw in degrees (with --scene). Default 0.
+    #[arg(long, allow_negative_numbers = true, value_name = "DEG")]
+    pub yaw: Option<f32>,
 
-    /// Camera pitch in degrees (with --scene).
-    #[arg(long, default_value_t = 0.0, allow_negative_numbers = true, value_name = "DEG")]
-    pub pitch: f32,
+    /// Camera pitch in degrees (with --scene). Default 0.
+    #[arg(long, allow_negative_numbers = true, value_name = "DEG")]
+    pub pitch: Option<f32>,
 
     /// Player position (with --scene).
     #[arg(long, value_parser = parse_pos, allow_hyphen_values = true, value_name = "X,Y,Z")]
@@ -72,9 +72,18 @@ pub struct Args {
     pub sprint: bool,
 
     /// With `--scene`: load it as the elevator would deliver you -- doors shut, screen black,
-    /// stood in the cabin -- so an arrival can be photographed. Hidden: dev tooling.
+    /// stood in the cabin, facing its doors -- so an arrival can be photographed. Hidden: dev
+    /// tooling.
     #[arg(long, hide = true, requires = "scene")]
     pub arrive: bool,
+
+    /// With `--scene`: on rendered frame N, press E once -- as the key would be, so it rides
+    /// only with the player stood in an idle cabin (`--arrive`, or `--pos` inside one) and
+    /// otherwise grabs, which is to say does nothing. With enough `--frames` after it, the
+    /// `[load]` line and the screenshot show the far floor with the doors open again. Hidden:
+    /// dev tooling; the README's "Elevator" section has the commands.
+    #[arg(long, hide = true, requires = "scene", value_name = "FRAME")]
+    pub ride_at: Option<u32>,
 
     /// Panic after the first frame, to exercise the crash dialog. Hidden: it is a test of the
     /// platform layer, not a feature.
@@ -101,6 +110,26 @@ pub struct Args {
 pub enum Command {
     /// Regenerate Meshes/meadow_tile.obj from ext::terrain::height and exit.
     GenTerrain,
+}
+
+/// What a dev run asks of the engine (`Engine::start_direct`): the scene to start on, the
+/// screenshot to take and when, the camera, the keys held down, and the elevator flags. Built
+/// by [`Args::direct_run`] when any of `--scene`, `--view-glb` or `--shot` is given.
+#[derive(Debug, PartialEq)]
+pub struct DirectRun {
+    pub scene: Option<DirectScene>,
+    pub shot: Option<PathBuf>,
+    /// Frames to render before the screenshot; the engine counts down in an `i32`.
+    pub frames: i32,
+    /// `--yaw` / `--pitch`, in degrees; `None` where the flag was not given.
+    pub yaw: Option<f32>,
+    pub pitch: Option<f32>,
+    pub pos: Option<[f32; 3]>,
+    /// Key slots held down every frame (`--forward`, `--strafe`, `--sprint`).
+    pub hold: Vec<usize>,
+    pub arrive: bool,
+    /// The rendered frame on which E is pressed once (`--ride-at`).
+    pub ride_at: Option<i32>,
 }
 
 /// What the game starts on instead of the title, when a dev flag says so.
@@ -187,6 +216,28 @@ impl Args {
         })
     }
 
+    /// The dev run the flags describe, or `None` when none of `--scene`, `--view-glb` and
+    /// `--shot` was given and the game starts on its title as usual.
+    pub fn direct_run(&self) -> Option<DirectRun> {
+        let scene = self.direct_scene();
+        if scene.is_none() && self.shot.is_none() {
+            return None;
+        }
+        // `u32` on the command line (a negative count is a parse error there).
+        let count = |n: u32| n.min(i32::MAX as u32) as i32;
+        Some(DirectRun {
+            scene,
+            shot: self.shot.clone(),
+            frames: count(self.frames),
+            yaw: self.yaw,
+            pitch: self.pitch,
+            pos: self.pos,
+            hold: self.held_keys(),
+            arrive: self.arrive,
+            ride_at: self.ride_at.map(count),
+        })
+    }
+
     /// The key slots `--forward` / `--strafe` / `--sprint` hold down every frame
     /// (see `Engine::start_direct`).
     pub fn held_keys(&self) -> Vec<usize> {
@@ -213,12 +264,12 @@ mod tests {
         let a = Args::try_from_tokens(&[]).unwrap();
         assert!(!a.windowed && !a.no_vsync && !a.forward && !a.strafe && !a.sprint);
         assert_eq!(a.frames, 90);
-        assert_eq!(a.yaw, 0.0);
-        assert_eq!(a.pitch, 0.0);
+        assert!(a.yaw.is_none() && a.pitch.is_none());
         assert!(a.scene.is_none() && a.shot.is_none() && a.pos.is_none());
         assert!(a.assets.is_none() && a.log_level.is_none());
         assert!(a.command.is_none());
         assert!(a.held_keys().is_empty());
+        assert!(a.direct_run().is_none(), "no dev flags: the title");
     }
 
     #[test]
@@ -230,8 +281,15 @@ mod tests {
         assert_eq!(a.scene, Some(14));
         assert_eq!(a.shot.as_deref(), Some(std::path::Path::new("out.bmp")));
         assert_eq!(a.frames, 120);
-        assert_eq!(a.yaw, 30.0);
-        assert_eq!(a.pitch, -5.0);
+        assert_eq!((a.yaw, a.pitch), (Some(30.0), Some(-5.0)));
+        let run = a.direct_run().expect("a dev run");
+        assert_eq!(run.scene, Some(DirectScene::Index(14)));
+        assert_eq!((run.frames, run.yaw, run.pitch), (120, Some(30.0), Some(-5.0)));
+        assert!(run.hold.is_empty() && !run.arrive && run.ride_at.is_none());
+        // `--shot` alone is a run too: the title screen's photograph.
+        let a = Args::try_from_tokens(&["--shot", "title.bmp"]).unwrap();
+        let run = a.direct_run().expect("a dev run");
+        assert!(run.scene.is_none() && run.shot.is_some());
     }
 
     #[test]
@@ -302,10 +360,15 @@ mod tests {
     }
 
     #[test]
-    fn arrive_needs_a_scene() {
+    fn arrive_and_ride_at_need_a_scene() {
         assert!(Args::try_from_tokens(&["--arrive"]).is_err());
+        assert!(Args::try_from_tokens(&["--ride-at", "30"]).is_err());
         assert!(Args::try_from_tokens(&["--scene", "16", "--arrive"]).unwrap().arrive);
         assert!(!Args::try_from_tokens(&["--scene", "16"]).unwrap().arrive);
+        let a = Args::try_from_tokens(&["--scene", "16", "--arrive", "--ride-at", "30"]).unwrap();
+        assert_eq!(a.ride_at, Some(30));
+        assert_eq!(a.direct_run().unwrap().ride_at, Some(30));
+        assert!(Args::try_from_tokens(&["--scene", "16", "--ride-at", "-1"]).is_err());
     }
 
     #[test]

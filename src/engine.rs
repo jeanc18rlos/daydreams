@@ -95,6 +95,8 @@ pub struct Engine {
     // whole run, re-asserted at the top of every frame rather than set once, because a focus
     // change drops every key level (main.rs) and a headless window may never be focused at all.
     dev_hold: RefCell<Vec<usize>>,
+    // EXT: dev tooling -- `--ride-at N`: rendered frames left until E is pressed once.
+    dev_ride_at: Cell<Option<i32>>,
     // EXT: this frame's gamepad edges, handed in by main.rs before run_frame.
     pad_events: Cell<crate::ext::gamepad::PadEvents>,
     // EXT: dev tooling -- wall time per rendered frame, reported on the `[shot]` line.
@@ -197,6 +199,7 @@ impl Engine {
             shot_path: RefCell::new(None),
             shot_after_frames: Cell::new(0),
             dev_hold: RefCell::new(Vec::new()),
+            dev_ride_at: Cell::new(None),
             pad_events: Cell::new(crate::ext::gamepad::PadEvents::default()),
             frame_clock: RefCell::new(crate::ext::frametime::FrameClock::new()),
             occlusion: RefCell::new(crate::ext::occlusion::Occlusion::new(gl)),
@@ -249,9 +252,18 @@ impl Engine {
     pub fn run_frame(&self, i_width: i32, i_height: i32) {
         // EXT: frame clock for shaders.
         crate::ext::view::set_time(self.timer.get_ticks() as f32 * 1e-9);
-        // EXT: dev tooling -- the keys a direct run holds down (see `dev_hold`).
+        // EXT: dev tooling -- the keys a direct run holds down (see `dev_hold`), and the one
+        // E press `--ride-at` makes: the same latch the key sets below, on its frame.
         for &k in self.dev_hold.borrow().iter() {
             self.input.borrow_mut().key[k] = true;
+        }
+        if let Some(left) = self.dev_ride_at.get() {
+            if left <= 1 {
+                self.pad_grab.set(true);
+                self.dev_ride_at.set(None);
+            } else {
+                self.dev_ride_at.set(Some(left - 1));
+            }
         }
         // EXT: and the dev frame-time record. Ticked here, at the top, so one interval spans a
         // whole frame including the swap main.rs does after run_frame returns.
@@ -477,9 +489,10 @@ impl Engine {
         self.maybe_screenshot(i_width, i_height);
     }
 
-    /// EXT: `--scene N --shot path [--frames K] [--yaw deg] [--pitch deg]` support. With a
-    /// scene: skips the title menu, loads it, optionally aims the camera, renders K frames (so
-    /// the fixed-step physics settles the player on the ground), saves a 24-bit BMP, and quits.
+    /// EXT: `--scene N --shot path [--frames K] [--yaw deg] [--pitch deg]` support
+    /// (`cli::DirectRun`). With a scene: skips the title menu, loads it, optionally aims the
+    /// camera, renders K frames (so the fixed-step physics settles the player on the ground),
+    /// saves a 24-bit BMP, and quits.
     ///
     /// Without a scene it only arms the screenshot and leaves the menu where it is, which is
     /// the only way to photograph the title screen and its backdrop -- loading a scene would
@@ -487,21 +500,14 @@ impl Engine {
     ///
     /// `hold` lists key slots to keep down every frame (`--forward`, `--strafe`, `--sprint`),
     /// so the shot can photograph the player walking or running and the `[shot]` position
-    /// print how far they travelled. `arrive` loads the scene as an elevator ride would
-    /// (`--arrive`, src/ext/elevator.rs).
-    pub fn start_direct(
-        &self,
-        scene: Option<crate::app::cli::DirectScene>,
-        shot: Option<std::path::PathBuf>,
-        frames: i32,
-        yaw: f32,
-        pitch: f32,
-        pos: Option<[f32; 3]>,
-        hold: &[usize],
-        arrive: bool,
-    ) {
-        use crate::app::cli::DirectScene;
-        *self.dev_hold.borrow_mut() = hold.to_vec();
+    /// print how far they travelled. `arrive` loads the scene as an elevator ride would, and
+    /// then the look is the cabin's unless a yaw or pitch was asked for; `ride_at` presses E
+    /// on that rendered frame (`--arrive`, `--ride-at`, src/ext/elevator.rs).
+    pub fn start_direct(&self, run: crate::app::cli::DirectRun) {
+        use crate::app::cli::{DirectRun, DirectScene};
+        let DirectRun { scene, shot, frames, yaw, pitch, pos, hold, arrive, ride_at } = run;
+        *self.dev_hold.borrow_mut() = hold;
+        self.dev_ride_at.set(ride_at);
         if let Some(scene) = scene {
             self.ext.borrow_mut().menu.close();
             if arrive {
@@ -518,7 +524,10 @@ impl Engine {
                     Rc::new(crate::ext::glbview::GlbViewer::new(path, translucent)),
                 ),
             }
-            self.player.borrow_mut().set_look(yaw.to_radians(), pitch.to_radians());
+            if !arrive || yaw.is_some() || pitch.is_some() {
+                let (yaw, pitch) = (yaw.unwrap_or(0.0), pitch.unwrap_or(0.0));
+                self.player.borrow_mut().set_look(yaw.to_radians(), pitch.to_radians());
+            }
             if let Some(p) = pos {
                 self.player
                     .borrow_mut()
