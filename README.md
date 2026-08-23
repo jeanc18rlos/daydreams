@@ -135,8 +135,9 @@ beside it, plus the licences:
 DayDreams/
   daydreams            (daydreams.exe on Windows)
   Meshes/  Textures/  Shaders/  assets/
-  LICENSE-ORIGINAL-MIT
-  THIRD_PARTY.md
+  LICENSE              (the project's own MIT)
+  LICENSE-ORIGINAL-MIT (CodeParade's, for the engine)
+  THIRD_PARTY.md       (every shipped asset, its source and licence)
 ```
 
 That is the zip layout for Windows and Linux, and what the CI `dist` job uploads. `tools/`,
@@ -153,9 +154,9 @@ just bundle            # = cargo bundle --profile dist
 open target/dist/bundle/osx/DayDreams.app
 ```
 
-The four resource directories land in `Contents/Resources/` and the binary in
-`Contents/MacOS/`; the asset-root resolution looks in `Contents/Resources/` when the binary is
-inside a bundle, so nothing needs a working directory. The bundle identifier
+The four resource directories and the three licence files land in `Contents/Resources/` and
+the binary in `Contents/MacOS/`; the asset-root resolution looks in `Contents/Resources/` when
+the binary is inside a bundle, so nothing needs a working directory. The bundle identifier
 `com.daydreams.game` is a placeholder, and `icon = []` because no icon exists yet — add an
 `.icns` and list it there when one does.
 
@@ -167,10 +168,13 @@ one that built it. The outline, each step needing an Apple Developer account:
 3. `xcrun notarytool submit DayDreams.zip --keychain-profile <profile> --wait`
 4. `xcrun stapler staple DayDreams.app`, then zip it again for distribution.
 
-The `release` profile keeps line tables (`debug = 1`); on macOS they live in the object files
-that `cargo` leaves in `target/`, not in the binary, so keep a `dsymutil target/release/daydreams`
-of each tagged build if crash logs are to be symbolicated later. `dist` strips symbols and is
-what ships.
+Crash logs from a `dist` build are **not symbolicated**: the profile strips the symbol table
+and keeps no line tables (`strip = "symbols"`, `debug = false`), so a backtrace from a shipped
+binary is addresses and whatever the exported names say. The `release` profile keeps line
+tables (`debug = 1`), which on macOS live in the object files under `target/`, not in the
+binary -- `dsymutil target/release/daydreams` collects them into a `.dSYM`. If shipped crash
+logs are to name source lines, keep `debug = 1` in `dist` (and drop the strip), build the
+`.dSYM` for each tagged build and keep it with the tag; as configured, they do not.
 
 ### Git LFS
 

@@ -116,7 +116,7 @@ jobs:
           mkdir -p stage/DayDreams
           cp target/dist/daydreams stage/DayDreams/
           cp -R Meshes Textures Shaders assets stage/DayDreams/
-          cp LICENSE-ORIGINAL-MIT THIRD_PARTY.md stage/DayDreams/
+          cp LICENSE LICENSE-ORIGINAL-MIT THIRD_PARTY.md stage/DayDreams/
 
       - name: Stage (Windows)
         if: runner.os == 'Windows'
@@ -125,7 +125,7 @@ jobs:
           New-Item -ItemType Directory -Force stage/DayDreams | Out-Null
           Copy-Item -Path target/dist/daydreams.exe -Destination stage/DayDreams/
           Copy-Item -Path Meshes, Textures, Shaders, assets -Destination stage/DayDreams/ -Recurse
-          Copy-Item -Path LICENSE-ORIGINAL-MIT, THIRD_PARTY.md -Destination stage/DayDreams/
+          Copy-Item -Path LICENSE, LICENSE-ORIGINAL-MIT, THIRD_PARTY.md -Destination stage/DayDreams/
 
       - uses: actions/upload-artifact@v4
         with:

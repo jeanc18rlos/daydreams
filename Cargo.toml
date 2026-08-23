@@ -129,15 +129,16 @@ collapsible_match = "allow"
 assertions_on_constants = "allow"
 
 # cargo-bundle (`cargo bundle --profile dist`) -- a .app on macOS, .deb on Linux. The four
-# resource directories are read by relative path at runtime, so they ship inside the bundle
-# next to the binary and the asset-root resolution finds them there.
+# resource directories ship inside the bundle, where the asset-root resolution looks first
+# (src/app/assets.rs); the three licence files ship beside them because the assets' licences
+# (CC-BY, OFL) require the credit to travel with the work.
 [package.metadata.bundle]
 name = "DayDreams"
 # Placeholder: no domain is registered for the project yet.
 identifier = "com.daydreams.game"
 category = "public.app-category.games"
 short_description = "A game built on a non-Euclidean rendering engine."
-resources = ["Meshes", "Textures", "Shaders", "assets"]
+resources = ["Meshes", "Textures", "Shaders", "assets", "LICENSE", "LICENSE-ORIGINAL-MIT", "THIRD_PARTY.md"]
 osx_minimum_system_version = "11.0"
 # No icon exists yet; an empty list keeps cargo-bundle from failing on a missing file.
 icon = []
