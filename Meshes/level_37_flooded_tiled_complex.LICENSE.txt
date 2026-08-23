@@ -1,0 +1,16 @@
+Model Information:
+* title:	Level 37: Flooded Tiled Complex
+* source:	https://sketchfab.com/3d-models/level-37-flooded-tiled-complex-fdc730ebac5b4c6aa9f620e5e405e84f
+* author:	Blenderust (https://sketchfab.com/narighillya)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Level 37: Flooded Tiled Complex" (https://sketchfab.com/3d-models/level-37-flooded-tiled-complex-fdc730ebac5b4c6aa9f620e5e405e84f) by Blenderust (https://sketchfab.com/narighillya) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+
+Provenance of this file: the four lines above are transcribed from the GLB's own
+`asset.extras` block (title, author, license, source), written by Sketchfab's exporter at
+download time. VERIFY ON SKETCHFAB: the page at the source URL is the authority; the
+embedded metadata is what it said when the file was downloaded.

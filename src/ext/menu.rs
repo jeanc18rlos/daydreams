@@ -170,6 +170,8 @@ const OPTIONS_LABELS: [&str; 5] =
 
 const CONTROLS_ROWS: [&str; 1] = ["BACK"];
 const CREDITS_ROWS: [&str; 1] = ["BACK"];
+/// Where the credits screen's BACK row goes: a small line's gap under the last credit line.
+const CREDITS_BACK_Y: f32 = SUB_LIST_Y + (CREDITS_TEXT.len() as f32 + 1.0) * SMALL_LINE_H;
 
 /// The key map, as (action, keyboard, gamepad). Kept here rather than derived from the input
 /// code because there is nothing to derive it from: the bindings live as literal key slots in
@@ -188,10 +190,12 @@ const KEYMAP: [(&str, &str, &str); 10] = [
     ("MUTE", "M", "CREATE"),
     ("FULLSCREEN", "ALT + ENTER", "PS BUTTON"),
 ];
-const CREDITS_TEXT: [&str; 7] = [
+const CREDITS_TEXT: [&str; 9] = [
     "ORIGINAL ENGINE: CODEPARADE (NONEUCLIDEAN, MIT)",
     "ESCHER RELATIVITY: BENOIT GAGNIER (CC-BY-4.0)",
     "BACKROOMS VR: CARLCAPU9 (CC-BY-4.0)",
+    "ELEVATOR: EFX (CC-BY-4.0)",
+    "POOL ROOMS, OVERGROWN ROOM: BLENDERUST (CC-BY-4.0)",
     "",
     "RUST PORT AND EXTENSIONS:",
     "GLOW + GLUTIN + WINIT, PORTAL RENDERER,",
@@ -402,7 +406,11 @@ impl Menu {
                     let y = h * (SUB_LIST_Y + i as f32 * SMALL_LINE_H);
                     ui.draw_text(line, cx, y, h * SMALL_SIZE, WHITE, Align::Center);
                 }
-                self.draw_rows(ui, &CREDITS_ROWS, LIST_Y + LINE_H * 2.0, LINE_H, ITEM_SIZE);
+                // BACK sits a clear small line under the last credit. The text column is
+                // `CREDITS_TEXT.len()` rows of `SMALL_LINE_H` from `SUB_LIST_Y`, so a credit
+                // added to the table pushes the row down rather than into the text; the
+                // `credits_fit_above_the_footer` test holds the whole column above the footer.
+                self.draw_rows(ui, &CREDITS_ROWS, CREDITS_BACK_Y, LINE_H, ITEM_SIZE);
             }
             Screen::Levels => self.draw_levels(ui, scene_names),
         }
@@ -761,6 +769,17 @@ mod tests {
         assert_eq!(m.screen, Screen::Controls);
         assert_eq!(step(&mut m, KEY_ENTER, 14), MenuAction::None);
         assert_eq!(m.screen, Screen::Options);
+    }
+
+    /// The credits column has a row budget: the BACK row is placed under the last credit
+    /// and the footer hints are at `HINT_Y`, so a credit line too many would put the two on
+    /// top of each other. Hold BACK's whole glyph box above the footer with a line to spare.
+    #[test]
+    fn credits_fit_above_the_footer() {
+        assert!(
+            CREDITS_BACK_Y + ITEM_SIZE + SMALL_LINE_H < HINT_Y,
+            "BACK at {CREDITS_BACK_Y} runs into the footer at {HINT_Y}"
+        );
     }
 
     #[test]

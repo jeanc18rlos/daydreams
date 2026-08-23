@@ -1,0 +1,16 @@
+Model Information:
+* title:	Elevator with Animation LOWPOLY
+* source:	https://sketchfab.com/3d-models/elevator-with-animation-lowpoly-7c53a9a7db554e9da8dececfd3eac339
+* author:	EFX (https://sketchfab.com/evan4129)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Elevator with Animation LOWPOLY" (https://sketchfab.com/3d-models/elevator-with-animation-lowpoly-7c53a9a7db554e9da8dececfd3eac339) by EFX (https://sketchfab.com/evan4129) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+
+Provenance of this file: the four lines above are transcribed from the GLB's own
+`asset.extras` block (title, author, license, source), written by Sketchfab's exporter at
+download time. VERIFY ON SKETCHFAB: the page at the source URL is the authority; the
+embedded metadata is what it said when the file was downloaded.

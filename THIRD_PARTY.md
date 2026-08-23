@@ -7,8 +7,8 @@ those entries are marked **ACTION REQUIRED** and are collected at the end.
 The project's own code is MIT (`Cargo.toml`; the text is the root [`LICENSE`](LICENSE)).
 **The copyright holder named there, "DayDreams contributors", is a placeholder** until the
 project decides who holds it -- a person, a company or that phrase on purpose. The in-game
-Credits screen (`src/ext/menu.rs`, `CREDITS_TEXT`) names the engine, Escher Relativity and
-Backrooms VR.
+Credits screen (`src/ext/menu.rs`, `CREDITS_TEXT`) names the engine, Escher Relativity,
+Backrooms VR, the elevator and the two Blenderust rooms.
 
 ## Engine: HackerPoet/NonEuclidean
 
@@ -72,6 +72,54 @@ Required credit, in the form the Escher file uses: *This work is based on "Backr
 
 **ACTION REQUIRED:** verify on Sketchfab. The embedded metadata is what Sketchfab wrote at
 download time; the page at the source URL is the authority, and the licence file says so.
+
+## Elevator with Animation LOWPOLY — `Meshes/elevator_with_animation_lowpoly.glb`
+
+| | |
+|---|---|
+| Source | <https://sketchfab.com/3d-models/elevator-with-animation-lowpoly-7c53a9a7db554e9da8dececfd3eac339> |
+| Author | EFX (<https://sketchfab.com/evan4129>) |
+| Licence | CC-BY-4.0 — [`Meshes/elevator_with_animation_lowpoly.LICENSE.txt`](Meshes/elevator_with_animation_lowpoly.LICENSE.txt), which ships beside the mesh. |
+| Where recorded | The licence file is a transcription of the GLB's `asset.extras` block (Sketchfab exporter `Sketchfab-16.68.0`). Shipped as downloaded: 1,054 triangles, nine JPEG/PNG maps, one animation ("Doors open", 10.4 s). Credited on the in-game Credits screen. |
+
+Required credit: *This work is based on "Elevator with Animation LOWPOLY"
+(<https://sketchfab.com/3d-models/elevator-with-animation-lowpoly-7c53a9a7db554e9da8dececfd3eac339>)
+by EFX (<https://sketchfab.com/evan4129>) licensed under CC-BY-4.0
+(<http://creativecommons.org/licenses/by/4.0/>).*
+
+**ACTION REQUIRED:** verify on Sketchfab, as for Backrooms VR above.
+
+## Backrooms Room With Plants (Overgrown) — `Meshes/backrooms_room_with_plants_overgrown.glb`
+
+| | |
+|---|---|
+| Source | <https://sketchfab.com/3d-models/backrooms-room-with-plants-overgrown-56a9d3e08160479aa287873a13fef455> |
+| Author | Blenderust (<https://sketchfab.com/narighillya>) |
+| Licence | CC-BY-4.0 — [`Meshes/backrooms_room_with_plants_overgrown.LICENSE.txt`](Meshes/backrooms_room_with_plants_overgrown.LICENSE.txt), which ships beside the mesh. |
+| Where recorded | The licence file is a transcription of the GLB's `asset.extras` block (Sketchfab exporter `Sketchfab-0.3.0`). Shipped as downloaded: 8.6k triangles, 17 JPEG/PNG maps, 18 PBR materials. Credited on the in-game Credits screen. |
+
+Required credit: *This work is based on "Backrooms Room With Plants (Overgrown)"
+(<https://sketchfab.com/3d-models/backrooms-room-with-plants-overgrown-56a9d3e08160479aa287873a13fef455>)
+by Blenderust (<https://sketchfab.com/narighillya>) licensed under CC-BY-4.0
+(<http://creativecommons.org/licenses/by/4.0/>).*
+
+**ACTION REQUIRED:** verify on Sketchfab, as for Backrooms VR above.
+
+## Level 37: Flooded Tiled Complex — `Meshes/level_37_flooded_tiled_complex.glb`
+
+| | |
+|---|---|
+| Source | <https://sketchfab.com/3d-models/level-37-flooded-tiled-complex-fdc730ebac5b4c6aa9f620e5e405e84f> |
+| Author | Blenderust (<https://sketchfab.com/narighillya>) |
+| Licence | CC-BY-4.0 — [`Meshes/level_37_flooded_tiled_complex.LICENSE.txt`](Meshes/level_37_flooded_tiled_complex.LICENSE.txt), which ships beside the mesh. |
+| Where recorded | The licence file is a transcription of the GLB's `asset.extras` block (Sketchfab exporter `Sketchfab-0.3.0`). Shipped as downloaded: 15k triangles, 11 JPEG/PNG maps, 11 PBR materials. Credited on the in-game Credits screen. |
+
+Required credit: *This work is based on "Level 37: Flooded Tiled Complex"
+(<https://sketchfab.com/3d-models/level-37-flooded-tiled-complex-fdc730ebac5b4c6aa9f620e5e405e84f>)
+by Blenderust (<https://sketchfab.com/narighillya>) licensed under CC-BY-4.0
+(<http://creativecommons.org/licenses/by/4.0/>).*
+
+**ACTION REQUIRED:** verify on Sketchfab, as for Backrooms VR above.
 
 ## Classic Interior Door — `Meshes/Classic_Interior_Door.glb`
 
@@ -185,10 +233,11 @@ cargo tree --format "{p} {l}" --prefix none | sort -u
    Not distributable. Replace.
 2. **`Meshes/Classic_Interior_Door.glb`** — licence unconfirmed, author unrecorded. Find the
    Sketchfab page; record both in `Meshes/intro_door.ATTRIBUTION.txt`; credit or remove.
-3. **`Meshes/backrooms_vr.glb`** — CC-BY-4.0 by carlcapu9 per the file's own metadata.
-   Verify on Sketchfab, add a licence file beside the mesh and the credit line to the
-   Credits screen. (The licence file and the credit line are in place; the Sketchfab
-   check is what remains.)
+3. **`Meshes/backrooms_vr.glb`**, **`Meshes/elevator_with_animation_lowpoly.glb`**,
+   **`Meshes/backrooms_room_with_plants_overgrown.glb`**,
+   **`Meshes/level_37_flooded_tiled_complex.glb`** — CC-BY-4.0 per each file's own
+   metadata (carlcapu9, EFX, Blenderust, Blenderust). The licence files and the credit
+   lines are in place; the Sketchfab check of each page is what remains.
 4. **`Shaders/grassblade.frag`** — ideas credited to a CC BY-NC-SA 3.0 Shadertoy. Needs a
    legal read for a commercial build, or the three borrowed constants re-derived.
 5. **`assets/ui/cursors_src.png`** and **`Textures/cube_projection.bmp`** — provenance not

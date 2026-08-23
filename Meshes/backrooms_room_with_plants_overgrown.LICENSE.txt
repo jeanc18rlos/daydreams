@@ -1,0 +1,16 @@
+Model Information:
+* title:	Backrooms Room With Plants (Overgrown)
+* source:	https://sketchfab.com/3d-models/backrooms-room-with-plants-overgrown-56a9d3e08160479aa287873a13fef455
+* author:	Blenderust (https://sketchfab.com/narighillya)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Backrooms Room With Plants (Overgrown)" (https://sketchfab.com/3d-models/backrooms-room-with-plants-overgrown-56a9d3e08160479aa287873a13fef455) by Blenderust (https://sketchfab.com/narighillya) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+
+Provenance of this file: the four lines above are transcribed from the GLB's own
+`asset.extras` block (title, author, license, source), written by Sketchfab's exporter at
+download time. VERIFY ON SKETCHFAB: the page at the source URL is the authority; the
+embedded metadata is what it said when the file was downloaded.
