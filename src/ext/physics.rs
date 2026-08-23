@@ -11,9 +11,10 @@
 //!
 //! Rapier owns the props' bodies and nothing else. The player stays on the ported physics --
 //! the feel of the walk, the head bob, the portal warp and the collision epsilon all hang off
-//! it -- and is mirrored into this world as a **kinematic capsule** spanning the player's two
-//! hit spheres, moved to the player's eye every step, so a prop on the carpet is shoved aside
-//! by someone walking into it while the player never feels the prop. The static world is
+//! it -- and is mirrored into this world as a **kinematic cylinder** the height of the
+//! player's two hit spheres ([`PLAYER_RADIUS`], [`FOOT_CLEARANCE`]), moved to the player's
+//! eye every step, so a prop on the carpet is shoved aside by someone walking into it while
+//! the player never feels the prop. The static world is
 //! rebuilt on every scene load from what the scene's objects already declare for the ported
 //! collision pass: every `ObjectT::trimesh()` as a fixed triangle mesh, and every rectangle
 //! collider as a thin fixed box -- except on meshes carrying more than [`RECT_CAP`] of them,
@@ -69,6 +70,18 @@ pub const RECT_HALF_THICKNESS: f32 = 0.01;
 /// warp, a `--pos` -- and the capsule is moved there outright rather than swept, which would
 /// fling every prop on the line. A sprinting step covers 7 mm.
 pub const TELEPORT_DIST: f32 = 0.5;
+/// The player's mirror is a cylinder standing this far above the feet, not the capsule over
+/// the two hit spheres the brief asked for: a capsule's round foot, bottom at floor level,
+/// met a ball on the carpet with a contact normal pointing down into the floor, trod it 3 cm
+/// into the carpet and spat it out BEHIND the player (the review's push probe). A flat-sided
+/// body that starts above a floor-level prop's centre meets it sideways, and the contact
+/// pushes it ahead. Three centimetres: under the apple's centre (r 0.045) and the die's
+/// (half 0.03), and the scenes with props are flat scanned floors -- the static world has
+/// no say in where a kinematic body goes, so nothing the player walks over matters here.
+pub const FOOT_CLEARANCE: f32 = 0.03;
+/// The cylinder's radius: wider than the hit spheres' `GH_PLAYER_RADIUS`, so a prop is
+/// pushed clear of the feet rather than rolled under them.
+pub const PLAYER_RADIUS: f32 = 0.28;
 /// How far `lift_all` tips a prop, in radians, about the floor diagonal: past the 54.7
 /// degrees at which a cube balances on a corner, so a die lands on one and has to roll
 /// over onto another face rather than rock back onto the one it left with.
@@ -161,12 +174,12 @@ struct Prop {
     id: BodyId,
 }
 
-/// The rapier world, the player's capsule in it, the static colliders of the current scene
+/// The rapier world, the player's cylinder in it, the static colliders of the current scene
 /// and the props' bodies. See the module docs.
 pub struct PhysicsWorld {
     world: RapierWorld,
     player: RigidBodyHandle,
-    /// Where the capsule was last put, to tell a walk from a teleport (`TELEPORT_DIST`).
+    /// Where the cylinder was last put, to tell a walk from a teleport (`TELEPORT_DIST`).
     player_at: Option<Vector3>,
     statics: Vec<ColliderHandle>,
     props: Vec<Prop>,
@@ -211,23 +224,22 @@ impl Default for PhysicsWorld {
 }
 
 impl PhysicsWorld {
-    /// An empty world at the engine's step and gravity, holding only the player's capsule.
+    /// An empty world at the engine's step and gravity, holding only the player's cylinder.
     pub fn new() -> PhysicsWorld {
         let mut world = RapierWorld::new();
         world.gravity = PVec::new(0.0, GH_GRAVITY, 0.0);
         world.integration_parameters.dt = GH_DT;
-        // The capsule spans the player's two hit spheres (Player.cpp:9-10): one at the eye,
-        // one a player's height below it less a radius, both of `GH_PLAYER_RADIUS`. Its
-        // straight segment runs from the eye down to the lower sphere's centre.
-        let drop = GH_PLAYER_HEIGHT - GH_PLAYER_RADIUS;
-        let (player, _) = world.insert(
-            RigidBodyBuilder::kinematic_position_based(),
-            ColliderBuilder::capsule_y(0.5 * drop, GH_PLAYER_RADIUS).translation(PVec::new(
-                0.0,
-                -0.5 * drop,
-                0.0,
-            )),
-        );
+        // The cylinder covers the player's two hit spheres (Player.cpp:9-10): from the top of
+        // the head sphere at the eye down to `FOOT_CLEARANCE` above the feet, which are a
+        // player's height below the eye. Built at `p_scale` 1: the scale tunnels shrink the
+        // player, but no prop lives in a scaled scene, so the mirror is not rescaled.
+        let (top, bottom) = (GH_PLAYER_RADIUS, FOOT_CLEARANCE - GH_PLAYER_HEIGHT);
+        let (player, _) =
+            world.insert(
+                RigidBodyBuilder::kinematic_position_based(),
+                ColliderBuilder::cylinder(0.5 * (top - bottom), PLAYER_RADIUS)
+                    .translation(PVec::new(0.0, 0.5 * (top + bottom), 0.0)),
+            );
         PhysicsWorld {
             world,
             player,
@@ -304,7 +316,7 @@ impl PhysicsWorld {
             }
             boxes += mesh.colliders.len();
         }
-        // The capsule goes wherever the player is next seen, not swept there from the old
+        // The cylinder goes wherever the player is next seen, not swept there from the old
         // scene.
         self.player_at = None;
         log::debug!(
@@ -437,7 +449,7 @@ impl PhysicsWorld {
 
     // ── The step ─────────────────────────────────────────────────────────────────────────
 
-    /// One fixed step of `GH_DT`, with the player's capsule moved to `eye` first -- swept
+    /// One fixed step of `GH_DT`, with the player's cylinder moved to `eye` first -- swept
     /// there if the move is a step's worth, put there if it is a teleport (`TELEPORT_DIST`).
     pub fn step(&mut self, eye: Vector3) {
         let t0 = Instant::now();
@@ -662,7 +674,7 @@ mod tests {
     }
 
     #[test]
-    fn the_player_capsule_pushes_a_prop_it_walks_into() {
+    fn the_player_pushes_a_ball_it_walks_into_ahead_and_never_into_the_floor() {
         let mut w = PhysicsWorld::new();
         w.add_static_trimesh(&floor());
         let id = w.add_body(
@@ -672,22 +684,29 @@ mod tests {
             Vector3::new(0.0, 0.045, 0.0),
             &Matrix4::identity(),
         );
-        // Stand a metre off, let the ball settle, then walk through it at 3 m/s.
+        // Stand a metre off, let the ball settle, then walk through it at 3 m/s. At every
+        // step the ball is ahead of the player's front face and never under the carpet: the
+        // capsule this replaced trod it into the floor and dropped it behind (FOOT_CLEARANCE).
         let mut eye = Vector3::new(-1.0, GH_PLAYER_HEIGHT, 0.0);
         for _ in 0..500 {
             w.step(eye);
         }
+        let mut lowest = f32::MAX;
         for _ in 0..400 {
             eye.x += 3.0 * GH_DT;
             w.step(eye);
+            let (p, _) = w.pose(id).unwrap();
+            lowest = lowest.min(p.y);
+            assert!(p.x > eye.x + PLAYER_RADIUS - 0.01, "ball fell behind: {p:?} vs eye {eye:?}");
         }
         let (p, _) = w.pose(id).unwrap();
         assert!(p.x > 0.3, "ball was not pushed: {p:?}");
         assert!(p.y < 0.3, "ball should stay near the floor: {p:?}");
+        assert!(lowest > 0.04, "ball was pressed into the floor: lowest centre {lowest}");
     }
 
     #[test]
-    fn a_teleport_does_not_sweep_the_capsule_through_a_prop() {
+    fn a_teleport_does_not_sweep_the_player_through_a_prop() {
         let mut w = PhysicsWorld::new();
         w.add_static_trimesh(&floor());
         let id = w.add_body(

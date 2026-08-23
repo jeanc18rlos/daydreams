@@ -1016,11 +1016,18 @@ walls' own fog, when the scene is an interior; the ported sun term anywhere else
 
 **What rapier owns and what the port keeps.** Rapier owns the props' bodies and nothing else.
 The player stays on the ported physics -- the walk, the head bob, the portal warp and the
-collision epsilon all hang off it -- and is mirrored into the world as a **kinematic capsule**
-spanning the player's two hit spheres (`Player.cpp:9-10`), moved to the player's eye every
-step, so a prop on the carpet is shoved aside by someone walking into it while the player never
-feels the prop (a jump of more than half a metre in one step -- a respawn, a portal, `--pos` --
-puts the capsule there rather than sweeping it, which would fling everything on the line). The
+collision epsilon all hang off it -- and is mirrored into the world as a **kinematic
+cylinder** the height of the player's two hit spheres (`Player.cpp:9-10`), 0.28 m in radius,
+standing 3 cm above the feet, moved to the player's eye every step, so a prop on the carpet is
+shoved aside by someone walking into it while the player never feels the prop (a jump of more
+than half a metre in one step -- a respawn, a portal, `--pos` -- puts the cylinder there rather
+than sweeping it, which would fling everything on the line). A cylinder and not the capsule
+over the two spheres the brief asked for: a capsule's round foot at floor level met the apple
+with a contact normal pointing into the floor, trod it three centimetres into the carpet and
+spat it out behind the player; a flat-sided body that starts above the prop's centre meets it
+sideways and bulldozes it ahead (the push probe below: the apple stays 0.33 m ahead of the
+eye at every sample, at its resting height). It is built at `p_scale` 1: the scale tunnels
+shrink the player, but no prop lives in a scaled scene, so the mirror is not rescaled. The
 static world is rebuilt on every scene load (`Engine::load_scene`, once the object list is
 complete) from what the scene's objects already declare for the ported pass: every
 `ObjectT::trimesh()` as a fixed triangle mesh -- the collider's own `parry3d` mesh, shared, not
@@ -1351,7 +1358,7 @@ objects are unaffected.
 other objects' *mesh colliders* (`Engine.cpp:155-192`), so grabbed props collide with level
 geometry but pass through each other. They cannot be stacked. The rigid-body props are the
 exception ([Real physics](#real-physics--extphysicsrs-extrigidrs)): those collide with each
-other, and with nothing on the ported path but the player's capsule.
+other, and with nothing on the ported path but the player's cylinder.
 
 **No HUD.** There is no crosshair, so aiming a grab is currently guesswork at screen centre.
 
