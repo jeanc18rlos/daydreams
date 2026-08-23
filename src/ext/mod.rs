@@ -44,6 +44,7 @@
 //! | `carve`    | Carving a box out of a triangle soup, generic over the vertex, for the loader |
 //! | `interior` | A glTF interior as a level: model, collider, fence, cap and respawn as one function |
 //! | `painting` | Portraits whose eyes follow the pass camera and whose faces change only unobserved |
+//! | `window`   | A grabbable, resizable, locked window-portal into a far copy of another level's room |
 
 pub mod audio;
 pub mod backrooms;
@@ -82,6 +83,7 @@ pub mod ui;
 pub mod ui_atlas;
 pub mod view;
 pub mod visibility;
+pub mod window;
 
 use audio::{Audio, Sfx};
 use grab::GrabState;

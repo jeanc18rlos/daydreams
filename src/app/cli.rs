@@ -90,6 +90,17 @@ pub struct Args {
     #[arg(long, hide = true, requires = "scene", value_name = "FRAME")]
     pub ride_at: Option<u32>,
 
+    /// With `--scene`: the Backrooms' window is built at this physical scale
+    /// (`ext/window.rs`), so a screenshot can show it at door size without a grab. Hidden:
+    /// dev tooling; the README's "The window" section has the commands.
+    #[arg(long, hide = true, requires = "scene", value_name = "S")]
+    pub window_scale: Option<f32>,
+
+    /// With `--scene`: the window is built already unlocked, as if its key had been used.
+    /// Hidden: dev tooling.
+    #[arg(long, hide = true, requires = "scene")]
+    pub unlock_window: bool,
+
     /// Panic after the first frame, to exercise the crash dialog. Hidden: it is a test of the
     /// platform layer, not a feature.
     #[arg(long, hide = true)]
@@ -243,6 +254,16 @@ impl Args {
         })
     }
 
+    /// How the Backrooms' window is built (`window::set_preset`): the default unless
+    /// `--window-scale` / `--unlock-window` say otherwise.
+    pub fn window_preset(&self) -> crate::ext::window::Preset {
+        let default = crate::ext::window::Preset::default();
+        crate::ext::window::Preset {
+            p_scale: self.window_scale.unwrap_or(default.p_scale),
+            unlocked: self.unlock_window,
+        }
+    }
+
     /// The key slots `--forward` / `--strafe` / `--sprint` hold down every frame
     /// (see `Engine::start_direct`).
     pub fn held_keys(&self) -> Vec<usize> {
@@ -374,6 +395,21 @@ mod tests {
         assert_eq!(a.ride_at, Some(30));
         assert_eq!(a.direct_run().unwrap().ride_at, Some(30));
         assert!(Args::try_from_tokens(&["--scene", "16", "--ride-at", "-1"]).is_err());
+    }
+
+    #[test]
+    fn the_window_flags_need_a_scene_and_make_a_preset() {
+        use crate::ext::window::Preset;
+        assert!(Args::try_from_tokens(&["--window-scale", "7"]).is_err());
+        assert!(Args::try_from_tokens(&["--unlock-window"]).is_err());
+        assert!(Args::try_from_tokens(&["--scene", "16", "--window-scale", "big"]).is_err());
+        let a = Args::try_from_tokens(&["--scene", "16"]).unwrap();
+        assert_eq!(a.window_preset(), Preset::default());
+        let a = Args::try_from_tokens(&["--scene", "16", "--window-scale", "7", "--unlock-window"])
+            .unwrap();
+        assert_eq!(a.window_preset(), Preset { p_scale: 7.0, unlocked: true });
+        let a = Args::try_from_tokens(&["--scene", "16", "--unlock-window"]).unwrap();
+        assert_eq!(a.window_preset(), Preset { p_scale: 1.0, unlocked: true });
     }
 
     #[test]
