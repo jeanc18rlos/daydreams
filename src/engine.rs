@@ -95,7 +95,8 @@ pub struct Engine {
     // EXT: dev tooling -- `--shot path` saves the next rendered frame here, then quits.
     shot_path: RefCell<Option<String>>,
     shot_after_frames: Cell<i32>,
-    // EXT: dev tooling -- key slots `--forward` / `--sprint` hold down for the whole run.
+    // EXT: dev tooling -- key slots `--forward` / `--strafe` / `--sprint` hold down for the
+    // whole run.
     // Re-asserted at the top of every frame rather than set once, because a focus change
     // drops every key level (main.rs) and a headless window may never be focused at all.
     dev_hold: RefCell<Vec<usize>>,
@@ -471,9 +472,9 @@ impl Engine {
     /// the only way to photograph the title screen and its backdrop -- loading a scene would
     /// close the menu that is the thing being looked at.
     ///
-    /// `hold` lists key slots to keep down every frame (`--forward`, `--sprint`), so the shot
-    /// can photograph the player walking or running and the `[shot]` position print how far
-    /// they travelled.
+    /// `hold` lists key slots to keep down every frame (`--forward`, `--strafe`, `--sprint`),
+    /// so the shot can photograph the player walking or running and the `[shot]` position
+    /// print how far they travelled.
     #[allow(clippy::too_many_arguments)] // one flag each; a struct would only rename them
     pub fn start_direct(
         &self,

@@ -92,8 +92,9 @@ pub fn request_respawn(r: Respawn) {
 
 /// Carry out a pending request. Called by `Engine::update` after the portal pass, exactly
 /// once per step. `set_position` moves `prev_pos` with `pos`, so the next step's portal test
-/// sees no segment; the velocity is zeroed so nothing of the fall survives, and the body's own
-/// yaw is folded into the camera's so the heading asked for is the heading got.
+/// sees no segment; the velocity is zeroed so nothing of the fall survives; and the body's own
+/// yaw -- which a portal warp sets, and which the camera's adds to -- is cleared so the
+/// heading asked for is the heading got.
 pub fn apply_respawn(player: &mut Player) {
     let Some(r) = RESPAWN.with(|c| c.take()) else { return };
     player.base.set_position(r.pos);
