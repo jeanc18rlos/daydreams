@@ -142,7 +142,17 @@ impl Portal {
 
         //Render portal's view from new camera
         let rec_level = ctx.engine.rec_level();
+        // EXT: only the quad's screen footprint of that framebuffer is ever sampled (see the
+        // projective lookup in Shaders/portal.frag), so the nested pass is scissored to it.
+        // The box is in the nested framebuffer's pixels: its viewport stretches this pass's
+        // projection over the whole texture, so NDC maps straight to it. See src/ext/scissor.rs.
+        let clip = crate::ext::scissor::quad_clip(&self.base.local_to_world(), &cam.matrix());
+        let scissor = crate::ext::scissor::ScissorGuard::begin(
+            ctx.gl,
+            crate::ext::scissor::footprint(&clip, GH_FBO_SIZE, GH_FBO_SIZE),
+        );
         self.frame_buf[(rec_level - 1) as usize].render(ctx, &portal_cam, cur_fbo, warp.to_portal);
+        scissor.end(ctx.gl);
         cam.use_viewport(ctx.gl);
 
         //Now we can render the portal texture to the screen

@@ -34,6 +34,7 @@
 //! | `trimesh`  | Triangle-mesh collision (parry3d) beside the ported rectangles   |
 //! | `backrooms` | The scanned, light-baked Backrooms as solid scenery             |
 //! | `sprint`   | Running: Shift to hold, L3 to toggle, with an FOV kick and footsteps |
+//! | `scissor`  | Portal passes scissored to the quad's screen footprint           |
 
 pub mod audio;
 pub mod backrooms;
@@ -52,6 +53,7 @@ pub mod outline;
 pub mod raycast;
 pub mod room;
 pub mod rotate;
+pub mod scissor;
 pub mod settings;
 pub mod skybake;
 pub mod sprint;
