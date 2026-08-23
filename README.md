@@ -802,6 +802,18 @@ Where it went, in order of effect:
   plane. Now a portal whose quad lies wholly outside the pass's frustum is settled on the CPU
   (it would pass no samples either way, so the answer is identical), and a pass with no
   portal in view skips the query block altogether. Facing away from the door, no pass stalls.
+* **The readback that remained is one frame late** (`src/ext/occlusion.rs`). The queries are
+  still issued every pass, but the answer used is the one the same slot produced *last*
+  frame, read with `GL_QUERY_RESULT_AVAILABLE` first; a slot with no result -- never issued,
+  out of the frustum last frame, or not yet available -- counts as visible. No pass ever
+  stalls. A slot is one portal seen from one pass, and a pass is named by the chain of
+  portals it is seen through, so the same portal seen through two different portals keeps two
+  answers. What this changes on screen: a portal that becomes fully hidden is drawn for one
+  extra frame (it is hidden, so nothing shows), and a portal uncovered after being fully hidden
+  is first drawn on the frame *after* it appears -- for that one frame the uncovered sliver,
+  one frame's motion wide, shows what was drawn behind the quad. Portals entering from
+  outside the frustum are unaffected: the CPU pre-test above settles those in the current
+  frame.
 * **The blade patch is generated, indexed and culled** (`src/ext/grassgen.rs`,
   `src/ext/grassfield.rs`). The 124 MB `grass_patch.obj` is gone; the same scatter runs in
   20 ms at startup and is pinned for the life of the engine. Ten shared vertices per blade
@@ -846,7 +858,8 @@ Small additions, each tagged `// EXT:`:
 | `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`8`–`=`/`'` key mappings; `Shift` into the `VK_SHIFT` slot and the sprint levels |
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
 | `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum and eye, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery |
-| `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and query pool; the old scene kept alive across `load_scene`; the triangle-mesh rounds in the collision pass |
+| `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene kept alive across `load_scene`; the triangle-mesh rounds in the collision pass |
+| `portal.rs` | the nested pass scissored to the quad's screen footprint |
 | `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4` |
 | `props.rs` | `Sky::draw` takes the eye from the inverse it already computes |
 | `main.rs` | gamepad polling in `about_to_wait`; `--no-vsync`; key levels dropped on focus loss |

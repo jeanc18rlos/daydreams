@@ -35,6 +35,7 @@
 //! | `backrooms` | The scanned, light-baked Backrooms as solid scenery             |
 //! | `sprint`   | Running: Shift to hold, L3 to toggle, with an FOV kick and footsteps |
 //! | `scissor`  | Portal passes scissored to the quad's screen footprint           |
+//! | `occlusion` | Portal occlusion queries read one frame late, never stalling   |
 
 pub mod audio;
 pub mod backrooms;
@@ -49,6 +50,7 @@ pub mod grassfield;
 pub mod grassgen;
 pub mod hud;
 pub mod menu;
+pub mod occlusion;
 pub mod outline;
 pub mod raycast;
 pub mod room;
