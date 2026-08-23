@@ -86,7 +86,9 @@ fn window_attributes() -> WindowAttributes {
         .with_position(LogicalPosition::new(GH_SCREEN_X, GH_SCREEN_Y));
 
     // if (GH_START_FULLSCREEN) { ToggleFullscreen(); }   (Engine.cpp:403-405)
-    if GH_START_FULLSCREEN {
+    // EXT: `--windowed` overrides the constant so dev runs (and parallel headless screenshot
+    // jobs) do not each take the whole display.
+    if start_fullscreen() {
         attributes.with_fullscreen(Some(Fullscreen::Borderless(None)))
     } else {
         attributes
@@ -230,7 +232,7 @@ impl App {
             // `window_attributes` honours the same constant. If the two disagreed, the first
             // Alt+Enter would try to ENTER a fullscreen the window was already in and do
             // nothing visible.
-            is_fullscreen: GH_START_FULLSCREEN,
+            is_fullscreen: start_fullscreen(),
             cursor_locked: false,
             modifiers: ModifiersState::empty(),
             i_width: GH_SCREEN_WIDTH as i32,
@@ -600,6 +602,11 @@ struct DevArgs {
     yaw: f32,
     pitch: f32,
     pos: Option<[f32; 3]>,
+}
+
+/// EXT: whether the window opens fullscreen: `GH_START_FULLSCREEN` unless `--windowed` is given.
+fn start_fullscreen() -> bool {
+    GH_START_FULLSCREEN && !std::env::args().any(|a| a == "--windowed")
 }
 
 fn parse_dev_args() -> DevArgs {
