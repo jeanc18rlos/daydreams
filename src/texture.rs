@@ -55,13 +55,18 @@ pub fn decode_bmp(data: &[u8], rows: i32, cols: i32) -> Result<Bmp, String> {
     // 24-bit path (so GL t=0 lands on the image TOP, same as every other texture here).
     let bpp = u16::from_le_bytes([input[28], input[29]]);
     let (w, h) = (width as usize, height as usize);
+    // EXT: checked, because the header is untrusted input: a 32-bit width and height
+    // multiplied by the pixel size can wrap a usize, and a wrapped `need` would pass the
+    // length check and then index past the slice.
+    let too_big = || format!("{width}x{height} does not fit in memory");
     match bpp {
         32 => {
-            let need = 54 + w * h * 4;
+            let size = w.checked_mul(h).and_then(|n| n.checked_mul(4)).ok_or_else(too_big)?;
+            let need = size.checked_add(54).ok_or_else(too_big)?;
             if data.len() < need {
                 return Err(format!("truncated: {} bytes, {width}x{height}x32 needs {need}", data.len()));
             }
-            let mut img = vec![0u8; w * h * 4];
+            let mut img = vec![0u8; size];
             for y in (0..h).rev() {
                 let ptr = y * w * 4;
                 img[ptr..ptr + w * 4].copy_from_slice(&data[pos..pos + w * 4]);
@@ -70,18 +75,29 @@ pub fn decode_bmp(data: &[u8], rows: i32, cols: i32) -> Result<Bmp, String> {
             Ok(Bmp { width, height, bpp, pixels: img })
         }
         24 => {
-            let padding = (w * 3) % 4;
-            let stride = w * 3 + if padding != 0 { 4 - padding } else { 0 };
-            let need = 54 + stride * h;
+            let row_bytes = w.checked_mul(3).ok_or_else(too_big)?;
+            let padding = row_bytes % 4;
+            let stride = row_bytes + if padding != 0 { 4 - padding } else { 0 };
+            let need = stride.checked_mul(h).and_then(|n| n.checked_add(54)).ok_or_else(too_big)?;
             if data.len() < need {
                 return Err(format!("truncated: {} bytes, {width}x{height}x24 needs {need}", data.len()));
             }
-            // PORT: C++ `assert` -> debug_assert! (was: assert(width % cols == 0), Texture.cpp:22-23).
-            debug_assert!(width % cols == 0);
-            debug_assert!(height % rows == 0);
+            // EXT: an error, not an assert, because the atlas shape is data too: `rows` and
+            // `cols` are what the scene asked for and the file is what is on disk, and a
+            // mismatch between them is a bad asset, not a programming error. The C++ asserted
+            // (was: assert(width % cols == 0); assert(height % rows == 0), Texture.cpp:22-23),
+            // which in its release build meant a division by zero or a scrambled atlas.
+            if rows <= 0 || cols <= 0 {
+                return Err(format!("atlas of {rows}x{cols} blocks; both counts must be positive"));
+            }
+            if width % cols != 0 || height % rows != 0 {
+                return Err(format!("{width}x{height} does not divide into {rows}x{cols} blocks"));
+            }
             let block_w = width / cols;
             let block_h = height / rows;
-            let mut img = vec![0u8; w * h * 3];
+            let block_len = (block_w * block_h) as usize;
+            // `row_bytes * h` is at most `stride * h`, which fit above.
+            let mut img = vec![0u8; row_bytes * h];
             //for (int y = height; y--> 0;)
             for y in (0..height).rev() {
                 let row = y / block_h;
@@ -89,8 +105,11 @@ pub fn decode_bmp(data: &[u8], rows: i32, cols: i32) -> Result<Bmp, String> {
                 for x in 0..width {
                     let col = x / block_w;
                     let tx = x % block_w;
-                    let ptr =
-                        (((row * cols + col) * (block_w * block_h) + ty * block_w + tx) * 3) as usize;
+                    // In usize: the block index times the block area is the pixel count, which
+                    // is within the buffer just sized but can be past i32 on a large atlas.
+                    let ptr = ((row * cols + col) as usize * block_len
+                        + (ty * block_w + tx) as usize)
+                        * 3;
                     img[ptr..ptr + 3].copy_from_slice(&data[pos..pos + 3]);
                     pos += 3;
                 }
@@ -341,6 +360,32 @@ mod tests {
         let mut bad = bmp(1, 1, 24, &[vec![0; 4]]);
         bad[0] = b'X';
         assert!(decode_bmp(&bad, 1, 1).unwrap_err().contains("signature"));
+    }
+
+    #[test]
+    fn atlas_shape_must_divide_the_image() {
+        let two_by_two = bmp(2, 2, 24, &[vec![0; 8], vec![0; 8]]);
+        assert!(decode_bmp(&two_by_two, 2, 2).is_ok());
+        assert!(decode_bmp(&two_by_two, 2, 3).unwrap_err().contains("does not divide"));
+        assert!(decode_bmp(&two_by_two, 3, 1).unwrap_err().contains("does not divide"));
+        assert!(decode_bmp(&two_by_two, 0, 1).unwrap_err().contains("positive"));
+        assert!(decode_bmp(&two_by_two, 1, -1).unwrap_err().contains("positive"));
+        // The 32-bit path takes no atlas shape, so the counts are not checked there.
+        let rgba = bmp(1, 1, 32, &[vec![0; 4]]);
+        assert!(decode_bmp(&rgba, 0, 0).is_ok());
+    }
+
+    #[test]
+    fn absurd_dimensions_are_errors_not_overflows() {
+        // A header claiming i32::MAX on both axes. The byte count is just under 2^64, so a
+        // 64-bit usize holds it and the error is "truncated"; a 32-bit target wraps and gets
+        // "fit in memory". Either way it is an Err and not a wrapped `need` that passes the
+        // length check and lets the pixel walk index past the slice.
+        for bpp in [24u16, 32] {
+            let huge = bmp(i32::MAX, i32::MAX, bpp, &[]);
+            let err = decode_bmp(&huge, 1, 1).unwrap_err();
+            assert!(err.contains("truncated") || err.contains("fit in memory"), "{err}");
+        }
     }
 
     #[test]
