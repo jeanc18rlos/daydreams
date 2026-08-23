@@ -903,7 +903,8 @@ impl Engine {
             unsafe {
                 gl.clear(glow::DEPTH_BUFFER_BIT);
             }
-            self.sky.draw(gl, cam);
+            // EXT: `sky->Draw(cam)` (Engine.cpp:211) moves below the object loop -- see
+            // `Sky::draw` for why.
         } else {
             unsafe {
                 gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
@@ -931,6 +932,12 @@ impl Engine {
             for i in 0..v_objects.len() {
                 v_objects[i].borrow().draw(&ctx, cam, cur_fbo);
             }
+        }
+
+        // EXT: the sky, last, into whatever the scene left uncovered (was first, Engine.cpp:211).
+        // Before the portals: their quads are drawn over it like any other surface.
+        if GH_USE_SKY {
+            self.sky.draw(gl, cam);
         }
 
         //Draw portals if possible
