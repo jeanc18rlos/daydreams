@@ -38,7 +38,7 @@ grep -rn '// PORT:' src
 
 ## Building and running
 
-Requires a Rust toolchain — stable, **1.82 or newer** (`rust-version` in `Cargo.toml`;
+Requires a Rust toolchain — stable, **1.85 or newer** (`rust-version` in `Cargo.toml`;
 `rust-toolchain.toml` selects stable with `rustfmt` and `clippy`) — and a GPU/driver offering
 **OpenGL 3.3 Core** or better. macOS grants 4.1 Core, which is sufficient. Only core-profile entry
 points are used — no `EXT`/`ARB` suffixed calls, no immediate mode.

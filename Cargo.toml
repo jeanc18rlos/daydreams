@@ -2,10 +2,12 @@
 name = "daydreams"
 version = "0.1.0"
 edition = "2021"
-# The floor the code needs: `Option::is_none_or` (engine.rs, raycast.rs, trimesh.rs) is 1.82.
-# The committed Cargo.lock resolves to crates that ask for more (ordered-float 5.5 via
-# parry3d wants 1.90), so an older toolchain would have to re-resolve; CI builds on stable.
-rust-version = "1.82"
+# The code itself needs 1.82 (`Option::is_none_or` in engine.rs, raycast.rs, trimesh.rs); the
+# direct dependencies `toml` 1.x and `clap` 4.6 declare 1.85, and a floor below theirs would be
+# a promise cargo cannot keep. The committed Cargo.lock resolves to crates that ask for more
+# still (ordered-float 5.5 via parry3d wants 1.90), so an older toolchain would have to
+# re-resolve; CI builds on stable.
+rust-version = "1.85"
 authors = ["Jean Rojas <jeanc16rlos@gmail.com>"]
 description = "DayDreams -- a game built on a Rust port of CodeParade's NonEuclidean rendering engine (HackerPoet/NonEuclidean)"
 license = "MIT"
