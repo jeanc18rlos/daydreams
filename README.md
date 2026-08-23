@@ -55,7 +55,7 @@ collision pass is `O(objects² × hitSpheres × colliders)`, so `Cargo.toml` set
 dev profile to keep it real-time. Release is still recommended.
 
 ```sh
-cargo test        # 144 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, and the extensions' pure logic
+cargo test        # 150 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, and the extensions' pure logic
 ```
 
 ## Controls
