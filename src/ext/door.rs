@@ -232,14 +232,9 @@ impl Door {
         self.leaf.euler = Vector3::new(0.0, self.base.euler.y + self.angle * self.swing_sign, 0.0);
     }
 
-    /// Where a scene should put this door's portal: centre of the opening, same yaw, and the
-    /// scale the ported portal quad needs to fill a 2*HALF_W x 2*HALF_H opening.
+    /// Where a scene should put this door's portal. See [`portal_placement`].
     pub fn portal_transform(&self) -> (Vector3, Vector3, Vector3) {
-        let centre = self
-            .base
-            .local_to_world()
-            .mul_point(Vector3::new(0.0, HALF_H, 0.0));
-        (centre, self.base.euler, Vector3::new(HALF_W, HALF_H * 0.999, 1.0))
+        portal_placement(self.base.pos, self.base.euler.y)
     }
 
     pub fn openness(&self) -> f32 {
@@ -307,6 +302,18 @@ impl ObjectT for Door {
         self.model.draw_part("frame", &self.base, &self.shader, cam, ctx);
         self.model.draw_part("leaf", &self.leaf, &self.shader, cam, ctx);
     }
+}
+
+/// The portal that fills a door standing at `pos` with yaw `yaw`: `(pos, euler, scale)` for
+/// the portal's `Object` -- the centre of the opening, the same yaw, and the scale the ported
+/// portal quad needs to fill a 2*HALF_W x 2*HALF_H opening. A free function of the placement
+/// alone, with no door or GL behind it, so a test can reproduce a scene's portal pair exactly.
+pub fn portal_placement(pos: Vector3, yaw: f32) -> (Vector3, Vector3, Vector3) {
+    let mut frame = Object::new();
+    frame.pos = pos;
+    frame.euler.y = yaw;
+    let centre = frame.local_to_world().mul_point(Vector3::new(0.0, HALF_H, 0.0));
+    (centre, frame.euler, Vector3::new(HALF_W, HALF_H * 0.999, 1.0))
 }
 
 /// Yaw that makes a door's local +Z face world direction `dir` (horizontal).

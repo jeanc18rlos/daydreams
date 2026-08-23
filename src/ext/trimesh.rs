@@ -185,7 +185,7 @@ mod tests {
         );
         // At x = 0.8 it rests on the face and is left alone from then on.
         let rest = c.push_sphere(Vector3::new(0.9, 0.0, 0.0) + push, 0.2);
-        assert!(rest.map_or(true, |p| p.mag() < 1e-5), "{rest:?}");
+        assert!(rest.is_none_or(|p| p.mag() < 1e-5), "{rest:?}");
         // Well inside, it touches nothing.
         assert!(c.push_sphere(Vector3::zero(), 0.2).is_none());
     }

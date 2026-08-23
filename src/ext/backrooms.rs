@@ -22,6 +22,16 @@
 //! building in front of it. [`DOOR_SPOT`] is that spot in the model's own coordinates, and
 //! [`Backrooms::new`] takes the WORLD point it should land on and places the model accordingly,
 //! so a level reasons about the door and the placement follows.
+//!
+//! # Falling out
+//!
+//! The scan's walls are single-sided and its collision is "keep the sphere on the side its
+//! centre is on" (`ext/trimesh.rs`). A sphere that starts a step inside a wall slab -- a seam,
+//! a `--pos` into a wall, a corner two pushes could not agree on -- is pushed out the wrong
+//! side, where there is no carpet, and falls. Nothing under the building would ever stop it,
+//! so instead [`fell_out`] says when a player has gone under, and the level respawns them at
+//! the arrival point (see `level16.rs`). A net under the carpet was the first answer, and it
+//! left the player standing in the dark under the floor for ever.
 
 use crate::camera::Camera;
 use crate::ext::gltf_model::{Anchor, Fit, GltfModel, Load, PartSpec};
@@ -43,12 +53,16 @@ pub const FLOOR_Y: f32 = -0.12;
 
 /// Where the arrival door stands, in model coordinates, and the way it faces.
 ///
-/// The model's east end is an open hall 23 m long and 4 m wide -- x in [-16.5, 6.8], z in
-/// [3, 7] -- before the maze of rooms begins to the west. The door stands on the carpet near
-/// the hall's east wall (which is at x = 6.78) and faces it, so a player stepping out of the
-/// door's far side is looking straight down the length of the hall. Centred in the hall's
-/// width, 1.2 m clear of the end wall: enough to walk round behind the door, not enough to
-/// waste the hall. Verified against a screenshot from the spot, not only the occupancy plot.
+/// The model's east end is an open hall some 23 m long -- x from about -16.5 to the end wall
+/// at x = 6.78 -- before the maze of rooms begins to the west. Its wall FACES are at z = 3.48
+/// and z = 7.07 (the slabs behind them are thicker than the coarse occupancy plot first
+/// suggested, which put the south wall at z = 3), so the clear width is about 3.6 m centred on
+/// z = 5.3. The door stands on the carpet near the end wall and faces it, so a player stepping
+/// out of the door's far side is looking straight down the length of the hall. A little south
+/// of the centre line -- 1.5 m from the south face, 2.1 from the north -- and 1.2 m clear of
+/// the end wall: enough to walk round behind the door, not enough to waste the hall. Verified
+/// against a screenshot from the spot; the tests below measure the faces from the model
+/// itself, so a nudge can never put a frame post inside a wall unnoticed.
 pub const DOOR_SPOT: Vector3 = Vector3 {
     x: 5.6,
     y: FLOOR_Y,
@@ -60,6 +74,39 @@ pub const DOOR_FACING: Vector3 = Vector3 {
     y: 0.0,
     z: 0.0,
 };
+
+/// How far under the carpet a player may be before they count as having fallen out of the
+/// building (see the module docs). Half a metre: more than any skirting or stray chair leg
+/// dips below the carpet level, far less than a fall takes to become a problem.
+pub const FALL_DEPTH: f32 = 0.5;
+
+/// The one part this model is loaded as. A constant so the tests can probe the same geometry
+/// the scene collides with, without a GL context.
+const PARTS: [PartSpec<'static>; 1] = [PartSpec {
+    name: PART,
+    roots: &["Sketchfab_model"],
+    pre: None,
+    // Irrelevant under Fit::Identity, which is the point of it.
+    anchor: Anchor::Hinge,
+}];
+
+fn load_spec() -> Load<'static> {
+    Load { path: MODEL, parts: &PARTS, fit: Fit::Identity, max_map: MAP }
+}
+
+/// Whether a player whose position (eye height, as `Player` keeps it) is `pos` has fallen
+/// out under the building: feet more than [`FALL_DEPTH`] below the carpet at `carpet_y`
+/// while still within the fenced footprint `(lo, hi)` on x and z. Outside that footprint
+/// nothing is under them either, but nothing of the building's is to blame and the scene's
+/// fence is what keeps them from getting there.
+pub fn fell_out(pos: Vector3, carpet_y: f32, (lo, hi): (Vector3, Vector3)) -> bool {
+    let feet = pos.y - crate::game_header::GH_PLAYER_HEIGHT;
+    feet < carpet_y - FALL_DEPTH
+        && pos.x >= lo.x
+        && pos.x <= hi.x
+        && pos.z >= lo.z
+        && pos.z <= hi.z
+}
 
 pub struct Backrooms {
     base: Object,
@@ -73,21 +120,7 @@ impl Backrooms {
     /// the model's axes stay the world's, so [`DOOR_FACING`] is the door's facing in world
     /// space too.
     pub fn new(gl: &Rc<glow::Context>, res: &Resources, door_world: Vector3) -> Backrooms {
-        let model = GltfModel::acquire(
-            gl,
-            &Load {
-                path: MODEL,
-                parts: &[PartSpec {
-                    name: PART,
-                    roots: &["Sketchfab_model"],
-                    pre: None,
-                    // Irrelevant under Fit::Identity, which is the point of it.
-                    anchor: Anchor::Hinge,
-                }],
-                fit: Fit::Identity,
-                max_map: MAP,
-            },
-        );
+        let model = GltfModel::acquire(gl, &load_spec());
 
         let mut base = Object::new();
         // No mesh: nothing to rasterise through draw_impl and no rectangle colliders. The
@@ -136,22 +169,95 @@ impl ObjectT for Backrooms {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ext::door::{HALF_W, POST_DEPTH};
+    use crate::game_header::GH_PLAYER_HEIGHT;
 
-    /// The door spot has to be inside the hall the module docs describe, or the player arrives
-    /// inside a wall. The hall's extent is a property of the asset, stated here so a moved
-    /// constant fails loudly rather than on a screenshot.
+    /// The faces of the hall around the door spot, in model coordinates, measured from the
+    /// model's own triangles (no GL: `GltfModel::probe_triangles`).
+    struct Hall {
+        /// z of the south wall face, the nearest one below the spot.
+        south: f32,
+        /// z of the north wall face.
+        north: f32,
+        /// x of the end wall face the door faces.
+        east: f32,
+        /// y of the carpet under the spot.
+        floor: f32,
+    }
+
+    fn measure_hall() -> Hall {
+        let (pos, idx) = GltfModel::probe_triangles(&load_spec(), PART);
+        let v = |i: u32| {
+            let p = pos[i as usize];
+            Vector3::new(p[0], p[1], p[2])
+        };
+        // Mid-wall height: a wall face has to span it, which rules out skirting, cornice
+        // and the strips of ceiling slab that also face sideways.
+        let mid_y = FLOOR_Y + 1.0;
+        // A metre either side of the spot is the footprint the door and its swing occupy.
+        let reach = 1.0;
+        let (mut south, mut north, mut east, mut floor) = (f32::MIN, f32::MAX, f32::MAX, f32::MIN);
+        for t in idx.chunks_exact(3) {
+            let (a, b, c) = (v(t[0]), v(t[1]), v(t[2]));
+            let n = (b - a).cross(c - a).normalized_safe();
+            let lo = Vector3::new(a.x.min(b.x).min(c.x), a.y.min(b.y).min(c.y), a.z.min(b.z).min(c.z));
+            let hi = Vector3::new(a.x.max(b.x).max(c.x), a.y.max(b.y).max(c.y), a.z.max(b.z).max(c.z));
+            let centre = (a + b + c) / 3.0;
+            let spans_mid = lo.y <= mid_y && hi.y >= mid_y;
+            if n.z.abs() > 0.9 && spans_mid && lo.x <= DOOR_SPOT.x + reach && hi.x >= DOOR_SPOT.x - reach {
+                if centre.z < DOOR_SPOT.z {
+                    south = south.max(hi.z);
+                } else {
+                    north = north.min(lo.z);
+                }
+            }
+            if n.x.abs() > 0.9 && spans_mid && lo.z <= DOOR_SPOT.z + reach && hi.z >= DOOR_SPOT.z - reach && centre.x > DOOR_SPOT.x {
+                east = east.min(lo.x);
+            }
+            // The carpet: the highest upward face under the spot that is below head height.
+            if n.y > 0.9
+                && lo.x <= DOOR_SPOT.x
+                && hi.x >= DOOR_SPOT.x
+                && lo.z <= DOOR_SPOT.z
+                && hi.z >= DOOR_SPOT.z
+                && hi.y < mid_y
+            {
+                floor = floor.max(hi.y);
+            }
+        }
+        Hall { south, north, east, floor }
+    }
+
+    /// The door spot has to sit on the carpet in the hall the module docs describe, with its
+    /// frame posts clear of both walls by at least a player's width -- so a moved constant
+    /// fails here rather than on a screenshot, and the numbers in the docs are the model's.
     #[test]
-    fn door_spot_is_in_the_east_hall() {
+    fn door_spot_is_on_the_carpet_between_the_hall_walls() {
+        let h = measure_hall();
+        // The facts the docs state, as measured.
+        assert!((h.south - 3.48).abs() < 0.01, "south face at z = {}", h.south);
+        assert!((h.north - 7.07).abs() < 0.01, "north face at z = {}", h.north);
+        assert!((h.east - 6.78).abs() < 0.01, "end wall at x = {}", h.east);
+        assert!((h.floor - FLOOR_Y).abs() < 0.01, "carpet at y = {}", h.floor);
+
+        // The frame's posts reach HALF_W + POST_DEPTH either side of the spot along z (the
+        // door faces x), and a player must fit between a post and the wall to walk round.
+        let post = HALF_W + POST_DEPTH;
+        let clearance = 2.0 * crate::game_header::GH_PLAYER_RADIUS;
         assert!(
-            DOOR_SPOT.x > -16.5 && DOOR_SPOT.x < 6.78 - 1.0,
-            "x = {}",
-            DOOR_SPOT.x
+            DOOR_SPOT.z - post - clearance > h.south,
+            "south post at z = {} against the wall face at {}",
+            DOOR_SPOT.z - post,
+            h.south
         );
         assert!(
-            DOOR_SPOT.z > 3.0 + 0.5 && DOOR_SPOT.z < 7.0 - 0.5,
-            "z = {}",
-            DOOR_SPOT.z
+            DOOR_SPOT.z + post + clearance < h.north,
+            "north post at z = {} against the wall face at {}",
+            DOOR_SPOT.z + post,
+            h.north
         );
+        // Room behind the door to walk round it, and for its leaf to swing.
+        assert!(h.east - DOOR_SPOT.x > 1.0, "{} m from the end wall", h.east - DOOR_SPOT.x);
         assert_eq!(DOOR_SPOT.y, FLOOR_Y);
     }
 
@@ -160,5 +266,22 @@ mod tests {
     fn door_facing_is_a_horizontal_unit_vector() {
         assert_eq!(DOOR_FACING.y, 0.0);
         assert!((DOOR_FACING.mag() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fell_out_means_under_the_carpet_inside_the_footprint() {
+        let bounds = (Vector3::new(-10.0, -2.0, -5.0), Vector3::new(10.0, 3.0, 5.0));
+        let standing = Vector3::new(0.0, GH_PLAYER_HEIGHT, 0.0);
+        assert!(!fell_out(standing, 0.0, bounds));
+        // Dipped a little: a skirting, a step, not a fall.
+        assert!(!fell_out(standing - Vector3::new(0.0, FALL_DEPTH * 0.9, 0.0), 0.0, bounds));
+        // Past the depth: out.
+        let under = standing - Vector3::new(0.0, FALL_DEPTH * 1.1, 0.0);
+        assert!(fell_out(under, 0.0, bounds));
+        // The same depth outside the footprint is not the building's problem.
+        assert!(!fell_out(under + Vector3::new(11.0, 0.0, 0.0), 0.0, bounds));
+        assert!(!fell_out(under + Vector3::new(0.0, 0.0, -6.0), 0.0, bounds));
+        // Measured against the carpet wherever it is.
+        assert!(!fell_out(under, -1.0, bounds));
     }
 }

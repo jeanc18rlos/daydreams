@@ -17,20 +17,25 @@
 //!   the sky glimpsed through it take -- warm, and right for the place.
 //! * **It is placed by its door.** The level says where the return door stands (`FAR`) and
 //!   `Backrooms::new` puts the model's own door spot on that point, carpet at world y = 0.
+//! * **It can be fallen out of.** Single-sided walls push a sphere caught inside them to
+//!   whichever side its centre is on, and the wrong side has no floor. A player under the
+//!   carpet is put back at the arrival point (`ARRIVAL`), facing down the hall, by a
+//!   `RoomLogic` -- see `ext::backrooms::fell_out` for the rule.
 //!
 //! Returning is symmetrical: the door on the carpet leads back to the meadow.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::ext::backrooms::{Backrooms, DOOR_FACING};
+use crate::ext::backrooms::{fell_out, Backrooms, DOOR_FACING};
 use crate::ext::bounds::bounds_box;
 use crate::ext::door::{yaw_facing, Door, DoorLink};
 use crate::ext::grassfield::GrassField;
+use crate::ext::room::{request_respawn, Respawn, RoomLogic};
 use crate::ext::terrain;
 use crate::ext::view;
 use crate::game_header::GH_PLAYER_HEIGHT;
-use crate::object::{Object, ObjectT};
+use crate::object::ObjectT;
 use crate::player::Player;
 use crate::portal::{connect, Portal};
 use crate::resources::Resources;
@@ -58,6 +63,14 @@ const DOOR_POS: Vector3 = Vector3 {
 /// walls that lead nowhere; a metre of margin lets the player stand in one without the fence
 /// showing through it, and not walk out of it.
 const FENCE_MARGIN: f32 = 1.0;
+/// Where a player who has fallen out of the building is put back: a stride inside the arrival
+/// door, at standing height on the carpet, which is where walking through it lands them. They
+/// face down the hall, away from the door, as they would have on arrival.
+const ARRIVAL: Vector3 = Vector3 {
+    x: FAR.x - 1.0,
+    y: FAR.y + GH_PLAYER_HEIGHT,
+    z: FAR.z,
+};
 
 /// A door plus the portal that fills it.
 #[allow(clippy::too_many_arguments)] // a scene-construction helper; every argument is a placement
@@ -140,20 +153,20 @@ impl Scene for Level16 {
             ),
         ))) as Rc<RefCell<dyn ObjectT>>);
 
-        // A net under the whole fenced footprint, at the model's lowest point. The model's own
-        // floors stop the player everywhere they can walk; this only matters if a scan seam
-        // somewhere lets them out of the building, where a fall with no floor under it would
-        // otherwise never end. ground.obj is a 2x2 quad with a collider and no shader here, so
-        // it collides without being drawn (Object.cpp:21).
-        let mut net = Object::new();
-        net.mesh = Some(res.acquire_mesh("ground.obj"));
-        net.pos = Vector3::new(0.5 * (lo.x + hi.x), lo.y, 0.5 * (lo.z + hi.z));
-        net.scale = Vector3::new(
-            0.5 * (hi.x - lo.x) + FENCE_MARGIN,
-            1.0,
-            0.5 * (hi.z - lo.z) + FENCE_MARGIN,
+        // Under the carpet there is nothing, on purpose: a player who ends up there (see the
+        // module docs) is put back at the arrival point rather than caught by a net and left
+        // standing in the dark. The rule is checked every step against the fenced footprint
+        // and the carpet level, which is FAR.y by construction (`carpet_lands_at_the_doors_foot`).
+        let footprint = (
+            Vector3::new(lo.x - FENCE_MARGIN, lo.y, lo.z - FENCE_MARGIN),
+            Vector3::new(hi.x + FENCE_MARGIN, hi.y, hi.z + FENCE_MARGIN),
         );
-        objs.push(Rc::new(RefCell::new(net)) as Rc<RefCell<dyn ObjectT>>);
+        let arrival = Respawn::facing(ARRIVAL, -DOOR_FACING);
+        objs.push(Rc::new(RefCell::new(RoomLogic::new(move |ctx| {
+            if fell_out(ctx.player_pos, FAR.y, footprint) {
+                request_respawn(arrival);
+            }
+        }))) as Rc<RefCell<dyn ObjectT>>);
 
         // The same door, from the carpet. It faces the hall's end wall, so stepping out of it
         // means looking down the hall; it leads back.
@@ -174,8 +187,9 @@ impl Scene for Level16 {
 mod tests {
     use super::*;
     use crate::ext::backrooms::DOOR_SPOT;
-    use crate::ext::door::{HALF_H, HALF_W};
+    use crate::ext::door::portal_placement;
     use crate::game_header::GH_PI;
+    use crate::object::Object;
 
     /// The whole weather trick depends on the far world sitting past the split.
     #[test]
@@ -196,14 +210,15 @@ mod tests {
     /// `connect` must carry a player across that turn. This reproduces the transform
     /// `connect_warps` builds for walking in through `here` (portal.rs: `there_l2w * here_w2l`)
     /// and the re-aim `Physical::try_portal` applies to it, on the transforms the two doors'
-    /// portals actually get from `Door::portal_transform`.
+    /// portals actually get -- `door_with_portal` and this both call `portal_placement`.
     #[test]
     fn walking_through_lands_in_the_hall_facing_down_it() {
         let portal = |pos: Vector3, facing: Vector3| {
+            let (centre, euler, scale) = portal_placement(pos, yaw_facing(facing));
             let mut p = Object::new();
-            p.pos = pos + Vector3::new(0.0, HALF_H, 0.0);
-            p.euler.y = yaw_facing(facing);
-            p.scale = Vector3::new(HALF_W, HALF_H * 0.999, 1.0);
+            p.pos = centre;
+            p.euler = euler;
+            p.scale = scale;
             p
         };
         let here = portal(DOOR_POS, Vector3::new(0.0, 0.0, 1.0));
@@ -222,6 +237,10 @@ mod tests {
             (q - expect).mag() < 1e-3,
             "landed at {q:?}, expected {expect:?}"
         );
+        // The respawn point is a stride further along the same line: where an arrival would
+        // be a moment later, not somewhere else in the building.
+        let along = ARRIVAL - expect;
+        assert!(along.x < -0.5 && along.y.abs() < 1e-6 && along.z.abs() < 1e-6, "{along:?}");
 
         // Physical::try_portal re-aims the camera yaw from the warped forward vector.
         let yaw_in = 0.0f32; // looking -z at the meadow door, as the spawn does

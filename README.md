@@ -915,18 +915,26 @@ a place rather than a picture:
 
 | What | Where |
 |------|-------|
-| **A general glTF load.** The door loader fitted one model to one height and packed PBR maps at 512. `Load { fit, max_map }` now chooses between that and `Fit::Identity` (source metres, source origin -- the scan is already to scale and already Y-up once the root node's rotation is applied), and per-material `unlit` skips the PBR pack entirely: the base map goes up as shipped, at its own size and with its own wrap mode, and `baseColorFactor` / `emissiveFactor x KHR_materials_emissive_strength` are uniforms. The door's path is byte-identical. | `ext/gltf_model.rs`, `Shaders/gltfunlit.*` |
+| **A general glTF load.** The door loader fitted one model to one height and packed PBR maps at 512. `Load { fit, max_map }` now chooses between that and `Fit::Identity` (source metres, source origin -- the scan is already to scale and already Y-up once the root node's rotation is applied), and per-material `unlit` skips the PBR pack entirely: the base map goes up as shipped, at its own size and with its own wrap mode, and `baseColorFactor` / `emissiveFactor x KHR_materials_emissive_strength` are uniforms. A part is drawn with one shader, so its materials must all be unlit or all PBR -- the loader asserts it. The door's path is byte-identical. | `ext/gltf_model.rs`, `Shaders/gltfunlit.*` |
 | **Triangle-mesh collision.** The engine only knew axis-aligned rectangles declared on OBJ `c` lines. The whole scan becomes one parry3d `TriMesh`, built once in world space; the collision pass asks it for the deepest sphere penetration, applies the push exactly as it applies a rectangle's (on_hit, on_collide, matrices rebuilt), and asks again, up to eight rounds. The player walks on the carpet, is stopped by walls, skirting and armchairs, and the grab raycast sees the same surfaces. | `ext/trimesh.rs`, `ObjectT::trimesh` |
 | **Frustum culling.** The model is drawn by the meadow's main pass too, 1,000 units away. A six-plane test from the pass camera's matrix (oblique near plane included) skips the draw when the part's bounding sphere is wholly outside. | `ext/cull.rs` |
 
 The model is placed by its door: `ext/backrooms.rs` names a spot of open carpet in model
-coordinates (`DOOR_SPOT`, in the 23 m hall at the building's east end, 1.2 m clear of the end
-wall) and `Backrooms::new` takes the world point it should land on, so the level reasons about
-the return door and the placement follows. An invisible fence one metre outside the model's
-extent, and a net at its lowest point, keep the player inside whatever the scan's seams allow.
-The backrooms shader ignores the weather grade every other surface takes -- its lighting is
-painted in -- and adds a squared-distance fog toward dark yellow-brown so the far end of the
-maze fades rather than popping at the 100-unit far plane.
+coordinates (`DOOR_SPOT`, in the 23 m hall at the building's east end -- 3.6 m clear between
+its wall faces at z = 3.48 and 7.07 -- 1.2 m clear of the end wall) and `Backrooms::new` takes
+the world point it should land on, so the level reasons about the return door and the placement
+follows. A test measures those faces from the GLB itself (`GltfModel::probe_triangles`, no GL
+context needed) and checks the door's frame posts clear them by a player's width, so the
+constant cannot be nudged into a wall. An invisible fence one metre outside the model's extent
+keeps the player inside whatever the scan's seams allow; under the carpet there is nothing, on
+purpose. The walls are single-sided and the collider keeps a sphere on whichever side its centre
+is on, so a sphere caught inside a wall slab can be pushed out the far side, where there is no
+floor -- a net there left the player standing in the dark for ever, so instead a `RoomLogic`
+(`ext/backrooms.rs::fell_out`, `ext/room.rs::Respawn`) puts anyone half a metre under the carpet
+back at the arrival point, facing down the hall. The backrooms shader ignores the weather grade
+every other surface takes -- its lighting is painted in -- and adds a squared-distance fog toward
+dark yellow-brown so the far end of the maze fades rather than popping at the 100-unit far
+plane.
 
 Frame cost, measured with `glFinish` after each frame on a shared M3 Max at 2560x1440 (so
 absolute numbers are pessimistic; the comparison is what matters): meadow spawn in the intro

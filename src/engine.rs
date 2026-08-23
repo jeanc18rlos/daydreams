@@ -881,14 +881,16 @@ impl Engine {
             }
         }
 
-        // EXT: close the world, on scenes that declare a period (the intro meadow's flat torus,
-        // src/ext/terrain.rs). A no-op everywhere else.
+        // EXT: a room's request to move the player (src/ext/room.rs), then close the world on
+        // scenes that declare a period (the intro meadow's flat torus, src/ext/terrain.rs).
+        // Both no-ops nearly everywhere.
         //
         // LAST in the step, and specifically AFTER the portal pass: try_portal has just consumed
         // a continuous prev_pos -> pos segment, and moving the player before it would hand it a
         // segment stretching a whole period across the meadow -- which sweeps the doorway and
         // teleports the player into the sea. Collision has also finished by here, so the wrap
         // cannot fight a push out of a hillside either.
+        crate::ext::room::apply_respawn(&mut self.player.borrow_mut());
         crate::ext::terrain::wrap_player(&mut self.player.borrow_mut());
     }
 

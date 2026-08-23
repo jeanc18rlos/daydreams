@@ -32,7 +32,12 @@ kira = "0.12.3"
 # decoded images wholesale (six 4096-square RGBA maps would be 400 MB resident).
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "KHR_materials_unlit", "KHR_materials_emissive_strength"] }
-parry3d = "0.30.2"
+# Triangle-mesh collision for scanned scenery (src/ext/trimesh.rs): `TriMesh`, its BVH, point
+# projection and ray casts. Those live behind "alloc"; "required-features" is the crate's own
+# dim3 + f32 pair, which it refuses to build without; "std" for the allocator-backed BVH. What
+# this drops from the default set is "spade", a Delaunay triangulator only the convex
+# decomposition and polyline-extraction routines use -- nothing here calls them.
+parry3d = { version = "0.30.2", default-features = false, features = ["required-features", "std", "alloc"] }
 
 [profile.release]
 opt-level = 3
