@@ -1089,6 +1089,66 @@ mod tests {
         assert!((flat - facing * KEY_OUT).mag() < 1e-6);
     }
 
+    /// The key's silhouette lives in three places -- the shader's defines, the generator's
+    /// constants and `KEY_ON_PLANE` here -- held together by nothing but this: the numbers
+    /// must agree, and the shipped mesh must be the generator's length.
+    #[test]
+    fn the_shader_the_generator_and_the_mesh_agree_on_the_key() {
+        let frag = std::fs::read_to_string(crate::app::assets::path("Shaders/painting.frag"))
+            .expect("Shaders/painting.frag");
+        let py = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/gen_key.py"),
+        )
+        .expect("tools/gen_key.py");
+        // `#define NAME value` / `NAME = value  # ...`: the numbers after the name, in order.
+        fn numbers(line: &str) -> Vec<f32> {
+            line.replace("vec3", "")
+                .replace("vec2", "")
+                .split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
+                .filter_map(|t| t.parse::<f32>().ok())
+                .collect()
+        }
+        let define = |name: &str| -> Vec<f32> {
+            let line = frag
+                .lines()
+                .find(|l| l.starts_with(&format!("#define {name} ")))
+                .unwrap_or_else(|| panic!("no #define {name}"));
+            numbers(&line[name.len() + 8..])
+        };
+        let py_const = |name: &str| -> Vec<f32> {
+            let line = py
+                .lines()
+                .find(|l| l.starts_with(&format!("{name} =")))
+                .unwrap_or_else(|| panic!("no {name} in gen_key.py"));
+            numbers(line.split('#').next().unwrap()[name.len() + 2..].trim())
+        };
+        for (shader, generator) in [
+            ("KEY_LENGTH", "LENGTH"),
+            ("KEY_BOW_R", "BOW_R"),
+            ("KEY_BOW_HOLE", "BOW_HOLE"),
+            ("KEY_SHAFT_HW", "SHAFT_HW"),
+        ] {
+            assert_eq!(define(shader), py_const(generator), "{shader} vs {generator}");
+        }
+        let teeth: Vec<f32> = [define("KEY_TOOTH1"), define("KEY_TOOTH2")].concat();
+        assert_eq!(teeth.len(), 6);
+        assert_eq!(teeth, py_const("TEETH"), "the teeth");
+        // The spot on the picture plane, shader vs scene.
+        assert_eq!(define("KEY_ON_PLANE"), vec![KEY_ON_PLANE.0, KEY_ON_PLANE.1]);
+        // The shipped mesh spans the generator's length along x.
+        let obj = std::fs::read_to_string(crate::app::assets::path("Meshes/key.obj"))
+            .expect("Meshes/key.obj");
+        let xs: Vec<f32> = obj
+            .lines()
+            .filter(|l| l.starts_with("v "))
+            .filter_map(|l| l.split_whitespace().nth(1)?.parse().ok())
+            .collect();
+        assert!(!xs.is_empty(), "Meshes/key.obj has no vertices (an LFS pointer?)");
+        let span = xs.iter().cloned().fold(f32::MIN, f32::max)
+            - xs.iter().cloned().fold(f32::MAX, f32::min);
+        assert!((span - py_const("LENGTH")[0]).abs() < 1e-4, "mesh spans {span}");
+    }
+
     #[test]
     fn taking_the_key_is_final() {
         // Taken while out: no removal, fully blended, and nothing the spot does matters.

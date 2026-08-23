@@ -20,7 +20,9 @@ Run from the repository root:  python3 tools/gen_key.py
 import math
 import os
 
-# ── The silhouette, in metres (mirrored in Shaders/painting.frag) ───────────────────────────
+# ── The silhouette, in metres (mirrored in Shaders/painting.frag; a test in painting.rs
+# reads both files and the generated mesh and fails when they disagree -- run
+# `cargo test --release the_shader_the_generator` after changing a number here) ────────────
 # 9 cm: as long as the sweet spot's grazing view of the canvas can show between the frame's
 # uprights (painting.rs, `KEY_ON_PLANE`).
 LENGTH = 0.09        # bow's far rim to the tip
