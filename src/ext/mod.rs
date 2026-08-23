@@ -34,6 +34,7 @@
 //! | `trimesh`  | Triangle-mesh collision (parry3d) beside the ported rectangles   |
 //! | `backrooms` | The scanned, light-baked Backrooms as solid scenery             |
 //! | `sprint`   | Running: Shift to hold, L3 to toggle, with an FOV kick and footsteps |
+//! | `meadow`   | The intro's meadow, door and title vantage, shared by the scenes that open on it |
 
 pub mod audio;
 pub mod backrooms;
@@ -47,6 +48,7 @@ pub mod grab;
 pub mod grassfield;
 pub mod grassgen;
 pub mod hud;
+pub mod meadow;
 pub mod menu;
 pub mod outline;
 pub mod raycast;

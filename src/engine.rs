@@ -565,7 +565,7 @@ impl Engine {
     /// EXT: a frame while a menu is open. Both menus draw the world and then the menu over it;
     /// what differs is which world. The pause menu shows the game the player is standing in,
     /// frozen where they left it. The title screen shows the intro level as a backdrop from the
-    /// vantage that level composes for it (`level15::title_view`), stepped rather than frozen.
+    /// vantage composed for it (`ext::meadow::title_view`), stepped rather than frozen.
     /// The black wash between the two is drawn by `Menu::draw`, which knows how much its
     /// current screen needs.
     fn render_menu_frame(&self, i_width: i32, i_height: i32) {
@@ -1089,7 +1089,7 @@ impl Engine {
     ///   level just left, or a mouse swept across the window, cannot walk the shot away. The
     ///   real input is put back afterwards untouched; the menu has already read this frame's
     ///   edges from it, and `run_frame` still ends the frame on it.
-    /// * **The camera is parked, not simulated.** `level15::title_view` composes the shot, and
+    /// * **The camera is parked, not simulated.** `ext::meadow::title_view` composes the shot, and
     ///   the player is pinned there after every step. Pinning is not belt-and-braces: the door
     ///   stands on a knoll, and a player left standing on it slides gently down the slope --
     ///   over the minutes a title screen can be left up, the composed shot would drift off it.
@@ -1126,7 +1126,7 @@ impl Engine {
 
     /// EXT: put the player back on the backdrop's tripod. See `step_title_backdrop`.
     fn park_backdrop_camera(&self) {
-        let (eye, yaw, pitch) = crate::level15::title_view();
+        let (eye, yaw, pitch) = crate::ext::meadow::title_view();
         let mut player = self.player.borrow_mut();
         // set_position, not a bare write: it moves prev_pos with pos, which is what stops the
         // step counting the pin as motion -- otherwise the portal pass would see a segment from

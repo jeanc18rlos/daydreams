@@ -73,7 +73,7 @@ fn hold_open() -> bool {
 
 /// Player distance at which the leaf starts opening / has closed again. `CLOSE_DIST` is public
 /// because it is the radius a camera has to stand outside of for `set_hold_open` to be doing
-/// any work -- `level15::title_view` is placed against it and tests that it still is.
+/// any work -- `ext::meadow::title_view` is placed against it and tests that it still is.
 const OPEN_DIST: f32 = 4.5;
 pub const CLOSE_DIST: f32 = 5.5;
 /// Fully open angle, and the per-step ease factor at 500 Hz (~0.45 s to open).

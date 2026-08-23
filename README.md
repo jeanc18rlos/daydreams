@@ -599,7 +599,7 @@ counterpart and is not part of HackerPoet/NonEuclidean.
 
 The split is enforced by convention and visible in the source: the port carries **220
 `// PORT:` comments** citing the original line each deviation came from, while additions carry
-**`// EXT:`** comments. New code lives in `src/ext/` and `src/level7..11.rs`; the ported files
+**`// EXT:`** comments. New code lives in `src/ext/` and `src/level7..16.rs`; the ported files
 were touched only where a hook was unavoidable, and each of those is a handful of lines.
 
 ## New scenes
@@ -908,7 +908,9 @@ The new sky applies to every scene; the ported gradient-only sky is kept as
 
 ## Backrooms (scene `'`)
 
-The intro again -- same meadow, same white door -- except that through the door is
+The intro again -- same meadow, same white door, both built by `ext/meadow.rs`, which the two
+scenes share along with the far world's origin and the title screen's vantage -- except that
+through the door is
 `Meshes/backrooms_vr.glb`: a Sketchfab light-bake of the Backrooms, 29 primitives, 70k
 triangles, 27 maps, every material `KHR_materials_unlit`. Three things had to exist for it to be
 a place rather than a picture:
