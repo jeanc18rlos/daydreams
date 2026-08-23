@@ -1,4 +1,4 @@
-//! EXT: Scene `'` -- "Backrooms". Not part of the C++ port.
+//! EXT: Scene `'` -- "Backrooms". Not part of the C++ port. NEW GAME starts here.
 //!
 //! The intro's meadow and its white door, exactly as in `level15` (both are `ext/meadow.rs`)
 //! -- but the door no longer opens onto a sunset sea. It opens onto the Backrooms: a scanned,
@@ -25,16 +25,21 @@
 //!   whichever side its centre is on, and the wrong side has no floor. A player under the
 //!   carpet is put back at the arrival point (`ARRIVAL`), facing down the hall, by a
 //!   `RoomLogic` -- see `ext::backrooms::fell_out` for the rule.
-//!
-//! Returning is symmetrical: the door on the carpet leads back to the meadow.
+//! * **There is no way back.** The door on the carpet is the same door, and a player who has
+//!   just stepped through it is looking at it -- but the first step they take past the split
+//!   (`meadow::in_far_world`), both doors vanish (`DoorLink::vanish`) and both portals are
+//!   taken out of the scene (`room::request_remove_portals`). What is left at the hall's end
+//!   is its bare wall. The meadow stays loaded, a kilometre away and culled, because the
+//!   title screen is still looking at it. The title's own camera never crosses, so the
+//!   backdrop keeps its door.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::ext::backrooms::{fell_out, Backrooms, GroundCap, DOOR_FACING};
 use crate::ext::bounds::bounds_box;
-use crate::ext::meadow::{door_with_portal, load_meadow, FAR};
-use crate::ext::room::{request_respawn, Respawn, RoomLogic};
+use crate::ext::meadow::{door_with_portal, in_far_world, load_meadow, FAR};
+use crate::ext::room::{request_remove_portals, request_respawn, Respawn, RoomLogic};
 use crate::ext::view;
 use crate::game_header::GH_PLAYER_HEIGHT;
 use crate::object::ObjectT;
@@ -106,12 +111,24 @@ impl Scene for Level16 {
         }))) as Rc<RefCell<dyn ObjectT>>);
 
         // The same door, from the carpet. It faces the hall's end wall, so stepping out of it
-        // means looking down the hall; it leads back.
+        // means looking down the hall.
+        let link = meadow.link_there.clone();
         let there =
             door_with_portal(gl, res, FAR, DOOR_FACING, false, meadow.link_there, objs, portals);
 
-        // Walk in here, walk out there -- and back.
+        // Walk in here, walk out there...
         connect(&meadow.here, &there);
+
+        // ...and that is all. The first step past the split -- the step after the warp --
+        // takes both doors and both portals away for good (see the module docs). The title
+        // backdrop's camera is parked on the meadow and never gets here.
+        let portal_ids = [meadow.here.borrow().id, there.borrow().id];
+        objs.push(Rc::new(RefCell::new(RoomLogic::new(move |ctx| {
+            if !link.vanished() && in_far_world(ctx.player_pos) {
+                link.vanish();
+                request_remove_portals(&portal_ids);
+            }
+        }))) as Rc<RefCell<dyn ObjectT>>);
     }
 }
 

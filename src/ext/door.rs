@@ -17,6 +17,11 @@
 //! * [`set_hold_open`] overrides the proximity test and holds every door in the scene open;
 //!   the title screen uses it to keep its backdrop's door standing open from a vantage no
 //!   player would ever trigger it from.
+//! * A linked pair can **vanish** ([`DoorLink::vanish`]): both frames stop drawing, stop
+//!   colliding and stop glowing, for good. The Backrooms does this the moment the player has
+//!   crossed into it -- the way in is one way -- and removes the portals through the engine
+//!   at the same time (`ext::room::request_remove_portals`), since a door that is gone must
+//!   not leave a hole in the air that still leads somewhere.
 //!
 //! The door is one object: `draw` draws the frame and then the leaf, whose transform is rebuilt
 //! every fixed step from the hinge and the swing angle. Scenes push the door and set up the
@@ -39,6 +44,8 @@ use std::rc::Rc;
 pub struct DoorLink {
     mine: Rc<Cell<f32>>,
     partner: Rc<Cell<f32>>,
+    /// Shared by both halves: once set, neither door exists any more. See the module docs.
+    vanished: Rc<Cell<bool>>,
 }
 
 impl DoorLink {
@@ -46,8 +53,29 @@ impl DoorLink {
     pub fn pair() -> (DoorLink, DoorLink) {
         let x = Rc::new(Cell::new(0.0));
         let y = Rc::new(Cell::new(0.0));
-        (DoorLink { mine: x.clone(), partner: y.clone() }, DoorLink { mine: y, partner: x })
+        let vanished = Rc::new(Cell::new(false));
+        (
+            DoorLink { mine: x.clone(), partner: y.clone(), vanished: vanished.clone() },
+            DoorLink { mine: y, partner: x, vanished },
+        )
     }
+
+    /// Make both doors of the pair disappear, permanently. A clone of either half will do:
+    /// the flag is shared.
+    pub fn vanish(&self) {
+        self.vanished.set(true);
+    }
+
+    pub fn vanished(&self) -> bool {
+        self.vanished.get()
+    }
+}
+
+/// Whether a leaf should be open, given everything that can ask it to be. A vanished door
+/// answers no to all of it: the title's hold-open, the player standing on its threshold, a
+/// partner that is open -- none of them can bring back a door that is gone.
+fn wants_open(vanished: bool, near: bool, held: bool, partner_wants: bool) -> bool {
+    !vanished && (near || held || partner_wants)
 }
 
 thread_local! {
@@ -248,6 +276,18 @@ impl ObjectT for Door {
     }
 
     fn update(&mut self, ctx: &UpdateCtx) {
+        if self.link.as_ref().is_some_and(DoorLink::vanished) {
+            // Gone: the posts stop colliding (the engine reads colliders off `base.mesh`), the
+            // leaf sits shut so a door that came back by some bug would at least be closed,
+            // and the glow it published is withdrawn. `draw` draws nothing.
+            self.base.mesh = None;
+            self.angle = 0.0;
+            self.place_leaf();
+            if self.glows {
+                crate::ext::view::set_glow(Vector3::zero(), 0.0);
+            }
+            return;
+        }
         let hinge = self.hinge_world();
         let mut d = ctx.player_pos - hinge;
         d.y = 0.0;
@@ -263,7 +303,7 @@ impl ObjectT for Door {
         } else {
             false
         };
-        let want_open = near || held || partner_wants;
+        let want_open = wants_open(false, near, held, partner_wants);
         if !opening && want_open {
             // Swing toward the player when they are the one approaching: a positive angle
             // about the hinge carries the leaf's free edge to local -z (Matrix4::rot_y maps +x
@@ -292,6 +332,9 @@ impl ObjectT for Door {
     }
 
     fn draw(&self, ctx: &RenderCtx, cam: &Camera, _fbo: Option<glow::Framebuffer>) {
+        if self.link.as_ref().is_some_and(DoorLink::vanished) {
+            return;
+        }
         // Frustum cull the whole door at once. The frame stands on its origin, HALF_H * 2 tall
         // and a little over HALF_W either side; the open leaf reaches a further 2 * HALF_W out
         // from the hinge. A sphere of this radius about the foot covers every pose.
@@ -379,5 +422,31 @@ mod tests {
     #[test]
     fn hysteresis_is_real() {
         const { assert!(CLOSE_DIST > OPEN_DIST) }
+    }
+
+    /// Vanishing is shared by the pair and seen through any clone of either half.
+    #[test]
+    fn vanish_reaches_both_halves_of_the_link() {
+        let (here, there) = DoorLink::pair();
+        let kept = there.clone();
+        assert!(!here.vanished() && !there.vanished());
+        kept.vanish();
+        assert!(here.vanished() && there.vanished());
+    }
+
+    /// Neither proximity, nor the title's hold-open, nor an open partner opens a vanished door.
+    #[test]
+    fn a_vanished_door_ignores_every_reason_to_open() {
+        assert!(wants_open(false, true, false, false));
+        assert!(wants_open(false, false, true, false));
+        assert!(wants_open(false, false, false, true));
+        assert!(!wants_open(false, false, false, false));
+        for near in [false, true] {
+            for held in [false, true] {
+                for partner in [false, true] {
+                    assert!(!wants_open(true, near, held, partner));
+                }
+            }
+        }
     }
 }
