@@ -1,25 +1,35 @@
 //! EXT: portraits whose eyes follow you, and whose faces change only while you are not
 //! looking. Not part of the C++ port.
 //!
-//! A `Painting` is a canvas -- the ported `quad.obj` drawn with `Shaders/painting.*`, which
-//! paints the sitter procedurally -- inside a gilt frame of four thin `cube.obj` bars drawn the
-//! way any ported prop is. It hangs flush on a wall and has two behaviours built on two
-//! things the engine already does:
+//! A `Painting` is a canvas -- the ported `quad.obj` drawn with `Shaders/painting.*` -- inside
+//! a gilt frame of four thin `cube.obj` bars drawn the way any ported prop is. The picture is
+//! a public-domain painting the user cut into a sheet -- the sitter with blank eye sockets
+//! and no mouth, and cutouts of the eyes and of three mouths -- which `tools/gen_portraits.py`
+//! turns into a base texture, a parts atlas and the numbers in `ext/portrait_atlas.rs`: where
+//! each part sits on the base and where the eye openings are ([`Portrait`]). The shader lays
+//! the parts over the base. The painting hangs flush on a wall and has two behaviours built
+//! on two things the engine already does:
 //!
 //! * **The eyes follow the camera of the pass.** Every draw receives the pass camera's eye
-//!   (`RenderCtx.eye`); the painting turns that into a point in its own canvas metres and the
-//!   shader displaces each iris toward it. Because it is the PASS eye, a portrait seen through
-//!   a portal looks at the portal camera -- at the person in the doorway, not at some spot on
-//!   the meadow a thousand units away.
+//!   (`RenderCtx.eye`); the painting turns that into a point in its own canvas metres and
+//!   from it an offset per eye in the base's UV ([`iris_offsets`]), and the shader slides the
+//!   eye part by that offset inside the eye's opening -- the iris and pupil by the whole of
+//!   it, the sclera easing to nothing at the lid, so the lids stay put and nothing tears
+//!   (`IRIS_CORE`, `GAZE_LIMIT`). A look further to the viewer's left than the warp carries
+//!   crossfades to the sheet's left-looking eyes; the sheets have no right-looking pair, so
+//!   to the right the warp saturates and stays. Because it is the PASS eye, a portrait seen
+//!   through a portal looks at the portal camera -- at the person in the doorway, not at
+//!   some spot on the meadow a thousand units away.
 //! * **The face changes only while unobserved** -- Level10's statues, applied to an expression.
 //!   [`Watch::seen_from`] is `ext::visibility`'s cone-and-line-of-sight test, extended to see
 //!   through the scene's portals (below), and [`Expression`] advances only after [`GRACE`]
-//!   seconds of nobody looking: the brows lower, the mouth flattens and the gaze stops
-//!   following and stares straight out. Look away and back, and it is different; you never
-//!   catch it moving. The next unobserved stretch puts it back, so it alternates. The eyes
-//!   have a memory too ([`Gaze`]): while nobody looks they stay aimed at where the viewer was
-//!   last seen from, and when looked at again they slide from there to the viewer over
-//!   [`REACQUIRE`] seconds -- so turning back finds them on the spot you left.
+//!   seconds of nobody looking, one step round a cycle of three: the smile goes sad and the
+//!   eyes turn to the left, frozen on where you were last seen from; then the mouth goes
+//!   angry and the eyes come back to you; then the smile again. Look away and back, and it
+//!   is different; you never catch it moving. The eyes have a memory too ([`Gaze`]): while
+//!   nobody looks they stay aimed at where the viewer was last seen from, and when looked
+//!   at again they slide from there to the viewer over [`REACQUIRE`] seconds -- so turning
+//!   back finds them on the spot you left.
 //!
 //! # The key in the painting
 //!
@@ -50,12 +60,15 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use glow::HasContext;
+
 use crate::camera::Camera;
 use crate::collider::Collider;
 use crate::ext::backrooms::WALL_FOG;
 use crate::ext::cull::object_sphere;
 use crate::ext::door::{yaw_facing, DoorLink};
 use crate::ext::key::Key;
+use crate::ext::portrait_atlas::Portrait;
 use crate::ext::visibility::{has_line_of_sight, in_view_cone, WATCH_HALF_ANGLE};
 use crate::ext::{hint, room};
 use crate::game_header::GH_DT;
@@ -64,11 +77,15 @@ use crate::object::{Object, ObjectT, RenderCtx, UpdateCtx};
 use crate::portal::{Portal, Warp};
 use crate::resources::Resources;
 use crate::scene::{PObjectVec, PPortalVec};
+use crate::texture::Texture;
 use crate::vector::{Matrix4, Vector3};
 
 /// Seconds a painting must go unobserved before its expression changes. Long enough that a
 /// glance across it, or a head turn that sweeps it out of the cone and back, changes nothing.
 pub const GRACE: f32 = 0.4;
+/// Seconds a changed expression crossfades over, from the change: well inside the grace, so
+/// that a glance that ends a stretch finds the new face settled, never half-way.
+pub const FADE: f32 = 0.25;
 /// Seconds over which the eyes slide from where the viewer was to where they are, once looked
 /// at again. Slow enough to be seen, which is the point.
 pub const REACQUIRE: f32 = 0.6;
@@ -97,19 +114,101 @@ const CANVAS_DEPTH: f32 = 0.012;
 /// a plane -- a bump a centimetre proud of the face would occlude a point on the face itself.
 const PROBE_OUT: f32 = 0.15;
 
-/// The expression state machine: neutral or changed, advancing only while unobserved.
-#[derive(Clone, Copy, Debug, Default)]
+// ── The iris warp ────────────────────────────────────────────────────────────────────────────
+/// Inside this fraction of an eye opening's radius the eye part moves by the whole gaze
+/// offset; from there to the lid the movement eases out (a smoothstep): the shader's
+/// `iris_core`. The ease's steepest slope is 1.5 / (1 - IRIS_CORE) per unit radius, and an
+/// offset times that slope must stay under the radius or the warp folds over itself; the
+/// limits below keep it at about half (`the_warp_never_folds`).
+pub const IRIS_CORE: f32 = 0.35;
+/// How far the iris travels per unit tangent of the viewing angle, as a fraction of the eye
+/// opening's width: a viewer 45 degrees off the canvas's normal pulls it a quarter of the
+/// eye's width toward them, before the clamp.
+pub const GAZE_K: f32 = 0.25;
+/// The furthest the iris goes, as a fraction of the eye's width across and of its height up
+/// and down: twelve percent of the width (the eyes are real paintings, and a pupil jammed
+/// into the corner reads as a squint), and fifteen of the height, which the lids would hide
+/// anyway. Both are within what the warp carries without folding (`IRIS_CORE`).
+pub const GAZE_LIMIT: (f32, f32) = (0.12, 0.15);
+/// How many times the leftward limit the look must call for before the left-looking eyes
+/// have fully taken over from the warped centre ones: the crossfade runs from one limit to
+/// this many, so the two are never swapped for a look the warp could have carried.
+pub const LEFT_FULL: f32 = 2.5;
+/// The viewer's distance off the canvas is taken as at least this, so the tangent is bounded:
+/// a viewer level with the canvas (or behind it) gets the iris pinned at the limit toward
+/// their side rather than a divide by zero.
+const GAZE_MIN_Z: f32 = 0.05;
+
+/// The three faces a portrait cycles through while unobserved ([`Expression`]): the mouth
+/// each one wears and whether the eyes have turned to the left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    /// The sitter as painted: the smile, the eyes on you.
+    Smile,
+    /// The mouth sad, the eyes turned to the viewer's left and frozen on where you were.
+    SadAway,
+    /// The mouth angry, the eyes back on you.
+    Angry,
+}
+
+impl Stage {
+    fn next(self) -> Stage {
+        match self {
+            Stage::Smile => Stage::SadAway,
+            Stage::SadAway => Stage::Angry,
+            Stage::Angry => Stage::Smile,
+        }
+    }
+
+    /// The mouth, as an index into the atlas's three: smile, sad, angry.
+    fn mouth(self) -> usize {
+        match self {
+            Stage::Smile => 0,
+            Stage::SadAway => 1,
+            Stage::Angry => 2,
+        }
+    }
+
+    fn eyes_left(self) -> f32 {
+        if self == Stage::SadAway {
+            1.0
+        } else {
+            0.0
+        }
+    }
+}
+
+/// The expression state machine: a [`Stage`], advancing one step round the cycle per
+/// unobserved stretch, with a short crossfade from the stage before.
+#[derive(Clone, Copy, Debug)]
 pub struct Expression {
-    changed: bool,
+    stage: Stage,
+    /// The stage before the last change, for the crossfade.
+    prev: Stage,
+    /// Seconds since the last change, capped at [`FADE`].
+    faded: f32,
     /// Seconds of the current unobserved stretch.
     unseen: f32,
     /// Whether this stretch has already had its one change.
     flipped: bool,
 }
 
+impl Default for Expression {
+    fn default() -> Expression {
+        Expression {
+            stage: Stage::Smile,
+            prev: Stage::Smile,
+            faded: FADE,
+            unseen: 0.0,
+            flipped: false,
+        }
+    }
+}
+
 impl Expression {
     /// One fixed step: `observed` is this step's answer, `dt` its length in seconds.
     pub fn step(&mut self, observed: bool, dt: f32) {
+        self.faded = (self.faded + dt).min(FADE);
         if observed {
             self.unseen = 0.0;
             self.flipped = false;
@@ -117,13 +216,44 @@ impl Expression {
         }
         self.unseen += dt;
         if !self.flipped && self.unseen > GRACE {
-            self.changed = !self.changed;
+            self.prev = self.stage;
+            self.stage = self.stage.next();
+            self.faded = 0.0;
             self.flipped = true;
         }
     }
 
-    pub fn changed(&self) -> bool {
-        self.changed
+    #[cfg(test)]
+    pub fn stage(&self) -> Stage {
+        self.stage
+    }
+
+    /// How far the crossfade from `prev` to `stage` has come, 0..1, eased.
+    fn blend(&self) -> f32 {
+        let t = (self.faded / FADE).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    /// The three mouths' weights -- smile, sad, angry -- summing to one: the shader's
+    /// `mouth_w`.
+    pub fn mouth_weights(&self) -> [f32; 3] {
+        let t = self.blend();
+        let mut w = [0.0; 3];
+        w[self.prev.mouth()] += 1.0 - t;
+        w[self.stage.mouth()] += t;
+        w
+    }
+
+    /// How far the eyes have turned to the left-looking variant, 0..1.
+    pub fn eyes_left(&self) -> f32 {
+        let t = self.blend();
+        self.prev.eyes_left() * (1.0 - t) + self.stage.eyes_left() * t
+    }
+
+    /// Whether the eyes are turned away and frozen on the last sighting rather than
+    /// following the viewer: the [`Stage::SadAway`] stage, from its change on.
+    pub fn eyes_frozen(&self) -> bool {
+        self.stage == Stage::SadAway
     }
 }
 
@@ -172,6 +302,41 @@ impl Gaze {
         let t = t * t * (3.0 - 2.0 * t);
         anchor + (eye - anchor) * t
     }
+
+    /// Where the viewer was last seen from, with no slide toward `eye`: the eyes frozen
+    /// there ([`Stage::SadAway`]). `eye` itself before the first look.
+    pub fn remembered(&self, eye: Vector3) -> Vector3 {
+        self.anchor.unwrap_or(eye)
+    }
+}
+
+/// The iris offsets for a viewer at `v` in canvas metres (x along the wall, y up, z out of
+/// the canvas toward the room), for a canvas `size` metres wide and high with its eye
+/// openings at `eyes` (base UV: centre, radii; left then right, `Portrait::eyes`). Per eye:
+/// the tangent of the angle from the opening's centre to the viewer, times `GAZE_K` of the
+/// opening's width, clamped to the `GAZE_LIMIT` ellipse, in base UV with v down -- the
+/// shader's `gaze` -- and how far toward the left-looking variant the look calls for, 0 up
+/// to the clamp and 1 at `LEFT_FULL` times it. Both eyes aim at the same point, so the
+/// nearer eye turns a little further.
+pub fn iris_offsets(v: Vector3, size: (f32, f32), eyes: &[[f32; 4]; 2]) -> ([f32; 4], f32) {
+    let (w, h) = size;
+    let vz = v.z.max(GAZE_MIN_Z);
+    let mut out = [0.0; 4];
+    let mut left: f32 = 0.0;
+    for (i, &[cx, cy, rx, ry]) in eyes.iter().enumerate() {
+        let (ex, ey) = ((cx - 0.5) * w, (0.5 - cy) * h);
+        let (width, height) = (2.0 * rx * w, 2.0 * ry * h);
+        let k = GAZE_K * width;
+        let (gx, gy) = ((v.x - ex) / vz * k, (v.y - ey) / vz * k);
+        let (lx, ly) = (GAZE_LIMIT.0 * width, GAZE_LIMIT.1 * height);
+        let n = ((gx / lx).powi(2) + (gy / ly).powi(2)).sqrt();
+        let s = if n > 1.0 { 1.0 / n } else { 1.0 };
+        out[2 * i] = gx * s / w;
+        out[2 * i + 1] = -gy * s / h;
+        let over = ((-gx / lx - 1.0) / (LEFT_FULL - 1.0)).clamp(0.0, 1.0);
+        left = left.max(over * over * (3.0 - 2.0 * over));
+    }
+    (out, left)
 }
 
 /// What a painting looks through to decide whether it is being looked at: the scene's solid
@@ -278,12 +443,14 @@ pub const EMERGE: f32 = 0.5;
 /// collider, `Painting::canvas`), and the taken key is held just off the picture.
 pub const KEY_OUT: f32 = 0.07;
 /// Where the key sits on the picture plane, in its (u, v) metres from the canvas centre:
-/// over the sitter's collar, and a little toward the far end of the canvas. The sweet spot's
+/// across the sitter's bodice -- on the Mona Lisa, below the neckline's embroidery and
+/// above the folded arms, where the dress is dark and gold reads; lower, the smear ran
+/// over the gold sleeve -- and a little toward the far end of the canvas. The sweet spot's
 /// view is grazing enough that the frame's near upright hides the canvas past x = 0.18 of
 /// its 0.4 half-width, and the far end stretches more than the near one, so a 9 cm key
 /// centred a centimetre toward the far end is what fits (`tools/gen_key.py`). THE SAME
 /// NUMBERS AS `KEY_ON_PLANE` in `Shaders/painting.frag`.
-pub const KEY_ON_PLANE: (f32, f32) = (-0.010, -0.27);
+pub const KEY_ON_PLANE: (f32, f32) = (-0.010, -0.16);
 /// The 3D key is pitched this far about its length, its face turned up toward the light --
 /// the `prop` shader's hemisphere is lit from above (Shaders/prop.frag): facing the sweet
 /// spot squarely, edge-on to the lamps, it would come out of the canvas dull. A quarter of a
@@ -480,10 +647,19 @@ pub struct Painting {
     /// The ported `quad.obj`, drawn with `canvas`'s transform.
     quad: Rc<Mesh>,
     bars: [Object; 4],
-    /// World to canvas metres, without the canvas's scale: what the shader's gaze wants.
+    gl: Rc<glow::Context>,
+    /// Which painting, and its two textures.
+    portrait: &'static Portrait,
+    base: Rc<Texture>,
+    parts: Rc<Texture>,
+    /// The portrait's part rects, flattened for the shader's uniform arrays: seven atlas
+    /// rects, seven placement rects, two eye ellipses.
+    part_atlas: [f32; 28],
+    part_place: [f32; 28],
+    eyes: [f32; 8],
+    /// World to canvas metres, without the canvas's scale: what the gaze wants.
     rigid_w2l: Matrix4,
     size: (f32, f32),
-    seed: u32,
     watch: Watch,
     /// The point the observed test asks about.
     probe: Vector3,
@@ -498,16 +674,26 @@ pub struct Painting {
 }
 
 impl Painting {
-    /// A `size.0` x `size.1` metre portrait centred at `centre`, hanging on a wall whose
-    /// normal (toward the room) is `facing`; `seed` picks the sitter and `watch` is what it
-    /// decides "being looked at" through. With a `key`, the sitter wears one (module docs).
+    /// The canvas size for a portrait hung `width` metres wide: its height follows the base
+    /// texture's aspect.
+    pub fn size_for(portrait: &Portrait, width: f32) -> (f32, f32) {
+        let (w, h) = portrait.base_size;
+        (width, width * h as f32 / w as f32)
+    }
+
+    /// A `width` metre wide portrait of `portrait` centred at `centre`, hanging on a wall
+    /// whose normal (toward the room) is `facing`; `phase` staggers its observation tests and
+    /// `watch` is what it decides "being looked at" through. With a `key`, the sitter wears
+    /// one (module docs).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         gl: &Rc<glow::Context>,
         res: &Resources,
         centre: Vector3,
         facing: Vector3,
-        size: (f32, f32),
-        seed: u32,
+        width: f32,
+        portrait: &'static Portrait,
+        phase: u32,
         watch: Watch,
         key: Option<KeySpec>,
     ) -> Painting {
@@ -515,6 +701,7 @@ impl Painting {
         // The painting's own frame: x along the wall, y up, z off the wall toward the room.
         let rigid = Matrix4::trans(centre) * Matrix4::rot_y(yaw);
         let rigid_w2l = Matrix4::rot_y(-yaw) * Matrix4::trans(-centre);
+        let size = Painting::size_for(portrait, width);
         let (w, h) = size;
 
         let key = key.map(|spec| {
@@ -592,16 +779,32 @@ impl Painting {
             bar(Vector3::new(0.0, -0.5 * h, z), rail, roll, 0.0),
         ];
 
+        let mut part_atlas = [0.0; 28];
+        let mut part_place = [0.0; 28];
+        for (i, part) in portrait.parts.iter().enumerate() {
+            part_atlas[4 * i..4 * i + 4].copy_from_slice(&part.atlas);
+            part_place[4 * i..4 * i + 4].copy_from_slice(&part.place);
+        }
+        let mut eyes = [0.0; 8];
+        eyes[..4].copy_from_slice(&portrait.eyes[0]);
+        eyes[4..].copy_from_slice(&portrait.eyes[1]);
+
         Painting {
             canvas,
             quad,
             bars,
+            gl: Rc::clone(gl),
+            portrait,
+            base: res.acquire_texture(portrait.base, 1, 1),
+            parts: res.acquire_texture(portrait.parts_texture, 1, 1),
+            part_atlas,
+            part_place,
+            eyes,
             rigid_w2l,
             size,
-            seed,
             watch,
             probe: centre + facing.normalized_safe() * PROBE_OUT,
-            steps: seed % WATCH_EVERY,
+            steps: phase % WATCH_EVERY,
             seen_from: None,
             expression: Expression::default(),
             gaze: Gaze::default(),
@@ -672,17 +875,39 @@ impl ObjectT for Painting {
         let local_to_world = self.canvas.local_to_world();
         let mvp = cam.matrix() * local_to_world;
         let eye = ctx.eye;
-        // This pass's eye, through the gaze memory, into canvas metres.
-        let v = self.rigid_w2l.mul_point(self.gaze.target(eye));
+        // This pass's eye, through the gaze memory -- or frozen on the last sighting while
+        // the eyes are turned away -- into canvas metres, and from there the iris offsets.
+        let target = if self.expression.eyes_frozen() {
+            self.gaze.remembered(eye)
+        } else {
+            self.gaze.target(eye)
+        };
+        let v = self.rigid_w2l.mul_point(target);
+        let (gaze, look_left) = iris_offsets(v, self.size, &self.portrait.eyes);
+        let [smile, sad, angry] = self.expression.mouth_weights();
         shader.use_program();
         shader.set_mvp(Some(&mvp), None);
         shader.set_mat4("model", &local_to_world);
         shader.set_vec4("cam_pos", [eye.x, eye.y, eye.z, 1.0]);
         shader.set_vec4("fog_color", WALL_FOG);
-        shader.set_vec4("viewer_local", [v.x, v.y, v.z, 1.0]);
         shader.set_vec4("size", [self.size.0, self.size.1, 0.0, 0.0]);
-        shader.set_f32("seed", self.seed as f32);
-        shader.set_f32("expression", if self.expression.changed() { 1.0 } else { 0.0 });
+        // The base on unit 0 and the parts on unit 1; unit 0 is left active, as
+        // Object::draw_impl binds its texture with no active_texture call of its own.
+        unsafe {
+            self.gl.active_texture(glow::TEXTURE1);
+            self.parts.use_texture();
+            self.gl.active_texture(glow::TEXTURE0);
+            self.base.use_texture();
+        }
+        shader.set_i32("base", 0);
+        shader.set_i32("parts", 1);
+        shader.set_vec4_array("part_atlas", &self.part_atlas);
+        shader.set_vec4_array("part_place", &self.part_place);
+        shader.set_vec4_array("eye", &self.eyes);
+        shader.set_vec4("gaze", gaze);
+        shader.set_f32("iris_core", IRIS_CORE);
+        shader.set_f32("eye_left", look_left.max(self.expression.eyes_left()));
+        shader.set_vec4("mouth_w", [smile, sad, angry, 0.0]);
         // The key: its sweet spot, how far out it is, and whether the paint glints. A
         // portrait without one says so in `key_view.w` and the shader draws nothing.
         let (view, state, glint) = match &self.key {
@@ -705,8 +930,8 @@ mod tests {
     use super::*;
 
     /// Drive the state machine with a script of `(observed, seconds)` stretches at the fixed
-    /// step, returning the expression after each stretch.
-    fn run(script: &[(bool, f32)]) -> Vec<bool> {
+    /// step, returning the stage after each stretch.
+    fn run(script: &[(bool, f32)]) -> Vec<Stage> {
         let mut e = Expression::default();
         let mut out = Vec::new();
         for &(observed, secs) in script {
@@ -714,20 +939,27 @@ mod tests {
             for _ in 0..steps {
                 e.step(observed, GH_DT);
             }
-            out.push(e.changed());
+            out.push(e.stage());
         }
         out
     }
 
     #[test]
-    fn starts_neutral_and_never_changes_while_watched() {
-        assert_eq!(run(&[(true, 10.0)]), [false]);
+    fn starts_smiling_and_never_changes_while_watched() {
+        use Stage::*;
+        assert_eq!(run(&[(true, 10.0)]), [Smile]);
+        let e = Expression::default();
+        assert_eq!(e.mouth_weights(), [1.0, 0.0, 0.0]);
+        assert_eq!(e.eyes_left(), 0.0);
+        assert!(!e.eyes_frozen());
     }
 
     #[test]
-    fn changes_once_after_the_grace_and_alternates_per_stretch() {
+    fn changes_once_after_the_grace_and_cycles_per_stretch() {
+        use Stage::*;
         // A glance away shorter than the grace changes nothing; a longer one changes it once,
-        // however long it goes on; the next stretch puts it back.
+        // however long it goes on; each later stretch takes the next step round the cycle --
+        // sad and looking away, angry and looking back, the smile again.
         let out = run(&[
             (false, GRACE * 0.5),
             (true, 0.1),
@@ -737,15 +969,189 @@ mod tests {
             (false, GRACE + 0.05),
             (true, 0.1),
             (false, GRACE + 0.05),
+            (true, 0.1),
+            (false, GRACE + 0.05),
         ]);
-        assert_eq!(out, [false, false, true, true, true, false, false, true]);
+        assert_eq!(
+            out,
+            [Smile, Smile, SadAway, SadAway, SadAway, Angry, Angry, Smile, Smile, SadAway]
+        );
     }
 
     #[test]
     fn a_look_resets_the_grace() {
         // Two unobserved stretches each just under the grace, with a look between: no change.
         let out = run(&[(false, GRACE * 0.9), (true, GH_DT), (false, GRACE * 0.9)]);
-        assert_eq!(out, [false, false, false]);
+        assert_eq!(out, [Stage::Smile; 3]);
+    }
+
+    /// A change crossfades from the face before over `FADE` -- the weights always sum to
+    /// one -- and is settled before the grace could end the stretch it happened in.
+    #[test]
+    fn a_change_crossfades_and_settles_within_the_grace() {
+        let mut e = Expression::default();
+        for _ in 0..((GRACE + GH_DT * 1.5) / GH_DT) as u32 {
+            e.step(false, GH_DT);
+        }
+        assert_eq!(e.stage(), Stage::SadAway);
+        let w = e.mouth_weights();
+        assert!(w[0] > 0.9 && (w.iter().sum::<f32>() - 1.0).abs() < 1e-5, "just changed: {w:?}");
+        assert!(e.eyes_left() < 0.1 && e.eyes_frozen());
+        for _ in 0..((FADE * 0.5) / GH_DT) as u32 {
+            e.step(false, GH_DT);
+        }
+        let w = e.mouth_weights();
+        assert!(
+            w[0] > 0.3 && w[1] > 0.3 && (w.iter().sum::<f32>() - 1.0).abs() < 1e-5,
+            "mid-fade: {w:?}"
+        );
+        assert!(e.eyes_left() > 0.3 && e.eyes_left() < 0.7);
+        for _ in 0..((FADE * 0.6) / GH_DT) as u32 {
+            e.step(false, GH_DT);
+        }
+        assert_eq!(e.mouth_weights(), [0.0, 1.0, 0.0]);
+        assert_eq!(e.eyes_left(), 1.0);
+        const { assert!(FADE < GRACE) };
+        // The next change, to angry, brings the eyes back: frozen no more.
+        for _ in 0..((GRACE * 2.0) / GH_DT) as u32 {
+            e.step(true, GH_DT);
+        }
+        for _ in 0..((GRACE + FADE * 2.0) / GH_DT) as u32 {
+            e.step(false, GH_DT);
+        }
+        assert_eq!(e.stage(), Stage::Angry);
+        assert_eq!(e.mouth_weights(), [0.0, 0.0, 1.0]);
+        assert!(e.eyes_left() == 0.0 && !e.eyes_frozen());
+    }
+
+    /// The Mona Lisa's eyes, on a canvas 0.8 m wide, as `iris_offsets` sees them: both a
+    /// little above the centre, the left one at u 0.37 and the right at 0.47, openings two
+    /// and a half to three and a half percent of the width in half-width.
+    const EYES: [[f32; 4]; 2] = [[0.371, 0.174, 0.0257, 0.0080], [0.473, 0.173, 0.0342, 0.0095]];
+    const SIZE: (f32, f32) = (0.8, 0.9365);
+
+    #[test]
+    fn the_irises_follow_the_viewer_and_converge() {
+        // Square on and far off: no offset, and no call for the left variant.
+        let (g, left) = iris_offsets(Vector3::new(0.0, 0.15, 5.0), SIZE, &EYES);
+        assert!(g.iter().all(|x| x.abs() < 2e-3), "{g:?}");
+        assert_eq!(left, 0.0);
+        // A viewer a metre off the canvas, half a metre to the right (+x) and level with the
+        // eyes (0.305 up): both irises go right (+u), the right eye -- nearer the viewer --
+        // further, and nothing up or down to speak of; the left variant is not called for.
+        let (g, left) = iris_offsets(Vector3::new(0.5, 0.305, 1.0), SIZE, &EYES);
+        assert!(g[0] > 0.0 && g[2] > 0.0, "{g:?}");
+        assert!(g[2] > g[0], "the nearer eye turns further: {g:?}");
+        assert!(g[1].abs() < 1e-3 && g[3].abs() < 1e-3, "{g:?}");
+        assert_eq!(left, 0.0);
+        // A viewer above: the irises go up, which in top-origin UV is -v.
+        let (g, _) = iris_offsets(Vector3::new(0.0, 1.0, 1.0), SIZE, &EYES);
+        assert!(g[1] < 0.0 && g[3] < 0.0, "{g:?}");
+        // The clamp: a viewer level with the canvas, far to the right, pins each iris at
+        // GAZE_LIMIT of its eye's width and no further.
+        let (g, _) = iris_offsets(Vector3::new(3.0, 0.305, 0.0), SIZE, &EYES);
+        for (i, e) in EYES.iter().enumerate() {
+            let width = 2.0 * e[2];
+            assert!((g[2 * i] - GAZE_LIMIT.0 * width).abs() < 1e-5, "eye {i}: {g:?}");
+        }
+        // To the left, past the clamp, the left-looking eyes take over, fully at LEFT_FULL
+        // times the limit; a look the warp carries does not call for them at all.
+        let (g, left) = iris_offsets(Vector3::new(-3.0, 0.305, 0.0), SIZE, &EYES);
+        assert!(g[0] < 0.0 && left == 1.0, "{g:?} {left}");
+        let (_, left) = iris_offsets(Vector3::new(-0.2, 0.305, 2.0), SIZE, &EYES);
+        assert_eq!(left, 0.0);
+        let (_, mid) = iris_offsets(Vector3::new(-0.6, 0.305, 1.0), SIZE, &EYES);
+        assert!(mid > 0.0 && mid < 1.0, "part way to the left variant: {mid}");
+    }
+
+    /// The warp is `uv - g * w(r)` with `w = 1 - smoothstep(IRIS_CORE, 1, r)`: it folds --
+    /// two source points land on one -- if the offset times the ease's steepest slope
+    /// reaches the radius along it. Neither limit does, with margin.
+    #[test]
+    fn the_warp_never_folds() {
+        let slope = 1.5 / (1.0 - IRIS_CORE);
+        // Across: the offset is GAZE_LIMIT.0 of the width, 2 * GAZE_LIMIT.0 of the radius.
+        let across = 2.0 * GAZE_LIMIT.0 * slope;
+        let up = 2.0 * GAZE_LIMIT.1 * slope;
+        assert!(across < 0.7, "across: {across} of the radius per unit");
+        assert!(up < 0.7, "up: {up}");
+        // And the shader takes the same core.
+        let frag = std::fs::read_to_string(crate::app::assets::path("Shaders/painting.frag"))
+            .expect("Shaders/painting.frag");
+        assert!(frag.contains("smoothstep(iris_core, 1.0, r)"));
+    }
+
+    /// The generated atlas (`tools/gen_portraits.py`): every part's atlas rect lies inside
+    /// its texture and its placement rect inside the base, each eye's opening inside its
+    /// eye part, and the only parts that overlap on the base are a variant's two eye halves.
+    #[test]
+    fn the_portrait_atlas_is_consistent() {
+        use crate::ext::portrait_atlas::{PART_ORDER, PORTRAITS};
+        use crate::texture::decode_bmp;
+        let inside = |r: &[f32; 4]| {
+            r[0] >= 0.0 && r[1] >= 0.0 && r[2] <= 1.0 && r[3] <= 1.0 && r[0] < r[2] && r[1] < r[3]
+        };
+        let overlap =
+            |a: &[f32; 4], b: &[f32; 4]| a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+        for p in &PORTRAITS {
+            for tex in [p.base, p.parts_texture] {
+                let bytes =
+                    std::fs::read(crate::app::assets::path(&format!("Textures/{tex}"))).expect(tex);
+                let bmp = decode_bmp(&bytes, 1, 1).expect(tex);
+                let expect = if tex == p.base { p.base_size } else { p.parts_size };
+                assert_eq!((bmp.width as u32, bmp.height as u32), expect, "{tex}");
+                assert_eq!(bmp.bpp, 32, "{tex}");
+            }
+            for (i, part) in p.parts.iter().enumerate() {
+                assert!(
+                    inside(&part.atlas),
+                    "{} {}: atlas {:?}",
+                    p.name,
+                    PART_ORDER[i],
+                    part.atlas
+                );
+                assert!(
+                    inside(&part.place),
+                    "{} {}: place {:?}",
+                    p.name,
+                    PART_ORDER[i],
+                    part.place
+                );
+                for (j, other) in p.parts.iter().enumerate().skip(i + 1) {
+                    // Eye parts may overlap one another -- a variant's two halves partition
+                    // their alpha through the seam, and the centre and left variants of one
+                    // eye are crossfaded, not summed -- and the mouths sit on one another by
+                    // design, their weights summing to one. An eye may never touch a mouth:
+                    // those really are summed.
+                    let same_kind = (i < 4) == (j < 4);
+                    assert!(
+                        same_kind || !overlap(&part.place, &other.place),
+                        "{}: {} overlaps {}",
+                        p.name,
+                        PART_ORDER[i],
+                        PART_ORDER[j]
+                    );
+                }
+            }
+            for (i, &[cx, cy, rx, ry]) in p.eyes.iter().enumerate() {
+                for variant in [0, 2] {
+                    let r = &p.parts[variant + i].place;
+                    assert!(
+                        cx - rx > r[0] && cx + rx < r[2] && cy - ry > r[1] && cy + ry < r[3],
+                        "{}: eye {i} ({cx}, {cy}, {rx}, {ry}) outside part {}",
+                        p.name,
+                        PART_ORDER[variant + i]
+                    );
+                }
+                assert!(rx > ry, "{}: an eye opening is wider than it is high", p.name);
+            }
+            // The left eye is left of the right one, and the mouth below both.
+            assert!(p.eyes[0][0] < p.eyes[1][0]);
+            assert!(p.parts[4].place[1] > p.eyes[0][1] + p.eyes[0][3]);
+            // And the Mona Lisa, the key's portrait, is the first: level16 hangs it on the
+            // even seeds, the key's among them.
+            assert_eq!(PORTRAITS[0].name, "mona");
+        }
     }
 
     #[test]
@@ -1071,12 +1477,14 @@ mod tests {
         assert!((out.dot(facing) - KEY_OUT).abs() < 1e-5, "{out:?}");
         assert!(out.normalized().dot((view - rest).normalized()) > 0.9999);
         // The grab's ray, eye through the floating key, meets the canvas rectangle within
-        // the picture (the canvas is the 0.8 x 1.0 quad, +-1 scaled); straight out along the
-        // normal it would miss the picture by a third of a metre.
+        // the picture (the canvas is the Mona Lisa's 0.8 x 0.94 quad, +-1 scaled); straight
+        // out along the normal it would miss the picture by a third of a metre.
+        let (w, h) = Painting::size_for(&crate::ext::portrait_atlas::PORTRAITS[0], 0.8);
+        assert!((h - 0.9365).abs() < 0.002, "the Mona Lisa's canvas is {h} high");
         let mut canvas = Object::new();
         canvas.pos = rigid.mul_point(Vector3::new(0.0, 0.0, CANVAS_DEPTH));
         canvas.euler.y = yaw_facing(facing);
-        canvas.scale = Vector3::new(0.4, 0.5, 1.0);
+        canvas.scale = Vector3::new(0.5 * w, 0.5 * h, 1.0);
         let rect = Collider::rect(Vector3::zero(), Vector3::unit_x(), Vector3::unit_y());
         let hits = |key: Vector3| {
             ray_collider(view, (key - view).normalized(), &canvas.local_to_world(), &rect)

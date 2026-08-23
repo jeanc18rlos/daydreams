@@ -1,32 +1,38 @@
 #version 150
 precision highp float;
 
-// EXT: a procedural oil portrait whose eyes follow the viewer, for src/ext/painting.rs.
+// EXT: a painted portrait whose eyes follow the viewer, for src/ext/painting.rs.
 //
-// There is no portrait image in the asset set, so the sitter is drawn here from signed-distance
-// shapes: a vignetted ground, shoulders and a collar, a neck, hair behind and over an oval
-// head, two almond eyes with whites, irises and pupils, brows, a nose line and a mouth. `seed`
-// picks the sitter -- ground, skin, hair, iris and collar colours, and the head's width -- so
-// a row of them reads as a row of different people. Over the lot go the things that make it a
-// painting rather than a clip-art face: a low-frequency brush mottle, the canvas weave and a
-// faint craquelure, the last two fading out where their period falls under a couple of pixels
-// so they never alias into noise from across the hall.
+// The portrait is two textures made by tools/gen_portraits.py from a hand-edited sheet of a
+// public-domain painting (src/ext/portrait_atlas.rs holds the numbers): `base` is the sitter
+// with blank eye sockets and no mouth, and `parts` an atlas of seven cutouts with alpha --
+// both eyes looking at the viewer, both eyes looking to the viewer's left, and a smiling, a
+// sad and an angry mouth. Each part has a rect in the atlas and a placement rect on the
+// base, in the base's own UV; the fragment samples the base, then lays the parts over it:
+// the two eye parts of the centre variant crossfaded with the left variant's by `eye_left`,
+// and the three mouths weighted by `mouth_w`. Parts are summed premultiplied, so two parts
+// may overlap only where their alphas partition (the Vermeer's eye halves do, through the
+// bridge of the nose).
 //
-// The eyes: `viewer_local` is the point the sitter looks at, in the canvas's own metres (x
-// right, y up, z out of the canvas toward the room), already chosen by the CPU from this
-// pass's eye -- so a portrait seen through a portal looks at the portal camera. Each iris is
-// displaced toward it by the tangent of the angle from that eye, clamped so it stays inside the
-// white; both eyes converge on the same point, so the nearer eye turns a little further. The
-// whites never move.
+// THE EYES: inside each eye's ellipse (`eye[i]`, the lid edge at r = 1) the part is sampled
+// at a warped UV, `uv - gaze_i * w(r)` with `w` 1 at the centre and falling to 0 at the
+// lid: the iris and pupil slide toward the viewer by the whole offset, the sclera squeezes
+// toward the far corner and stretches from the near one, and the lids do not move. The
+// offset is in base UV and is the CPU's (painting.rs `iris_offsets`): the tangent of the
+// angle from each eye to this pass's viewer, scaled, and clamped to a fraction of the eye's
+// width that the warp carries without folding -- the falloff's steepest slope times the
+// offset must stay under the ellipse's radius, which `iris_core` and the clamp together
+// guarantee. A look further to the viewer's left than the clamp allows crossfades to the
+// left-looking variant (the sheets have no right-looking one: rightward the centre variant
+// warps to its clamp and stays there).
 //
-// `expression` is the unobserved twist (see painting.rs): 0 is the neutral sitter, 1 the
-// changed one -- brows lowered and knitted, the mouth gone flat and thin, the eyes narrowed,
-// and the gaze no longer following but fixed straight out of the canvas. It is NOT the
-// weather `mood` every other shader takes; the portrait is lit flat, like the walls' bake.
+// UV: the loader leaves GL t=0 at the image TOP, and quad.obj's v is 1 at the top, so the
+// quad's v is flipped once here and everything from the atlas is top-origin after that.
 //
-// Lighting is flat plus the same squared-distance fog as gltfunlit.frag toward `fog_color`,
-// which the caller sets to the walls' own fog tone, so a painting at the far end of the hall
-// fades with the wall it hangs on.
+// Over it all a light varnish vignette and the same squared-distance fog as gltfunlit.frag
+// toward `fog_color`, the walls' own fog tone, so a portrait at the far end of the hall
+// fades with the wall it hangs on. The sources are paintings already: no canvas weave or
+// craquelure is added.
 //
 // THE KEY (painting.rs, "The key in the painting"): one portrait carries a key painted in
 // anamorphosis. The undistorted key lives on a virtual picture plane through the canvas
@@ -39,12 +45,18 @@ precision highp float;
 // fades the painted key out as the real one comes off the canvas (0 painted .. 1 gone) and
 // `key_glint` is 1 while the player stands in the sweet spot: the paint catches the light.
 
+uniform sampler2D base;     // the sitter, sockets blank and no mouth
+uniform sampler2D parts;    // the eye and mouth cutouts, with alpha
 uniform vec4 cam_pos;       // this pass's eye, world space
 uniform vec4 fog_color;     // what the far end fades to; rgb used
-uniform vec4 viewer_local;  // the gaze target in canvas metres; see above
 uniform vec4 size;          // canvas width and height in metres (x, y)
-uniform float seed;         // which sitter
-uniform float expression;   // 0 neutral .. 1 changed
+uniform vec4 part_atlas[7]; // each part's rect in `parts`, (u0, v0, u1, v1), PART_ORDER
+uniform vec4 part_place[7]; // each part's rect on the base, the same form
+uniform vec4 eye[2];        // the eye openings, left then right: centre (xy), radii (zw)
+uniform vec4 gaze;          // the iris offsets in base UV: left eye xy, right eye zw
+uniform float eye_left;     // 0 the centre eyes .. 1 the left-looking ones
+uniform float iris_core;    // the warp's core radius, painting.rs IRIS_CORE; see `warped`
+uniform vec4 mouth_w;       // the mouths' weights: smile, sad, angry (x, y, z)
 uniform vec4 key_view;      // the sweet spot in canvas metres (xyz); w = 1 if there is a key
 uniform float key_state;    // 0 painted .. 1 gone
 uniform float key_glint;    // 1 while the player stands in the sweet spot
@@ -54,16 +66,6 @@ in vec2 ex_uv;
 in vec3 ex_world;
 
 out vec4 fragColor;
-
-// ── Gaze ─────────────────────────────────────────────────────────────────────────────────────
-// Metres of iris travel per unit tangent of the viewing angle, and the furthest the iris may
-// go: the whites are 0.040 wide and the iris 0.017, so 0.016 keeps a sliver of white beyond it.
-#define GAZE_K 0.014
-#define GAZE_LIMIT 0.016
-// The viewer's distance off the canvas is taken as at least this, so the tangent is bounded:
-// a viewer level with the canvas (or behind it) gets the iris pinned at GAZE_LIMIT toward
-// their side rather than a divide by zero.
-#define GAZE_MIN_Z 0.05
 
 // ── The key ──────────────────────────────────────────────────────────────────────────────────
 // The silhouette's numbers, in metres, in the key's own frame (x along its length, bow at -x,
@@ -79,61 +81,12 @@ out vec4 fragColor;
 // The teeth as (x0, x1, depth): a rectangle from the centreline down to y = -depth.
 #define KEY_TOOTH1 vec3(0.034, 0.045, 0.013)
 #define KEY_TOOTH2 vec3(0.020, 0.028, 0.010)
-// Where the key sits on the picture plane, in its (u, v) metres from the canvas centre: over
-// the sitter's collar, like a pendant, and a little toward the far end of the canvas, because
-// the near end is behind the frame's upright from the sweet spot. Mirrored in painting.rs
+// Where the key sits on the picture plane, in its (u, v) metres from the canvas centre:
+// across the sitter's bodice, below the neckline and above the arms, where the dress is
+// dark and gold reads, and a little toward the far end of the canvas, because the near end
+// is behind the frame's upright from the sweet spot. Mirrored in painting.rs
 // (`KEY_ON_PLANE`), which puts the 3D key at the same spot.
-#define KEY_ON_PLANE vec2(-0.010, -0.27)
-
-// ── Hashes and noise ─────────────────────────────────────────────────────────────────────────
-float hash1(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
-float hash21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-vec2 hash22(vec2 p) {
-	p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
-	return fract(sin(p) * 43758.5453);
-}
-
-float vnoise(vec2 p) {
-	vec2 i = floor(p);
-	vec2 f = fract(p);
-	f = f * f * (3.0 - 2.0 * f);
-	float a = hash21(i);
-	float b = hash21(i + vec2(1.0, 0.0));
-	float c = hash21(i + vec2(0.0, 1.0));
-	float d = hash21(i + vec2(1.0, 1.0));
-	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
-float fbm(vec2 p) {
-	return 0.5 * vnoise(p) + 0.25 * vnoise(p * 2.03 + 7.1) + 0.125 * vnoise(p * 4.07 + 3.3);
-}
-
-// Distance between the nearest and second-nearest cell seeds: zero along cell borders, which
-// is where old varnish cracks.
-float cracks(vec2 p) {
-	vec2 i = floor(p);
-	vec2 f = fract(p);
-	float d1 = 8.0;
-	float d2 = 8.0;
-	for (int y = -1; y <= 1; y++) {
-		for (int x = -1; x <= 1; x++) {
-			vec2 g = vec2(float(x), float(y));
-			vec2 r = g + hash22(i + g) - f;
-			float d = dot(r, r);
-			if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) { d2 = d; }
-		}
-	}
-	return sqrt(d2) - sqrt(d1);
-}
-
-// ── Shapes: signed distances, negative inside ────────────────────────────────────────────────
-float sdEllipse(vec2 q, vec2 r) { return (length(q / r) - 1.0) * min(r.x, r.y); }
-float sdSegment(vec2 p, vec2 a, vec2 b) {
-	vec2 pa = p - a;
-	vec2 ba = b - a;
-	float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
-	return length(pa - ba * h);
-}
+#define KEY_ON_PLANE vec2(-0.010, -0.16)
 
 float sdBox(vec2 p, vec2 half_size) {
 	vec2 d = abs(p) - half_size;
@@ -171,182 +124,57 @@ vec2 anamorph(vec2 p, vec3 view) {
 // Anti-aliased coverage of a distance, one pixel wide.
 float fill(float d, float px) { return 1.0 - smoothstep(-px, px, d); }
 
-// ── Palettes ─────────────────────────────────────────────────────────────────────────────────
-const vec3 GROUND[4] = vec3[4](
-	vec3(0.30, 0.24, 0.14),   // umber
-	vec3(0.14, 0.18, 0.22),   // slate blue
-	vec3(0.26, 0.11, 0.10),   // burgundy
-	vec3(0.13, 0.19, 0.14)    // bottle green
-);
-const vec3 SKIN[3] = vec3[3](
-	vec3(0.86, 0.70, 0.58),
-	vec3(0.72, 0.54, 0.40),
-	vec3(0.46, 0.31, 0.22)
-);
-const vec3 HAIR[4] = vec3[4](
-	vec3(0.10, 0.08, 0.06),   // black
-	vec3(0.32, 0.20, 0.10),   // brown
-	vec3(0.48, 0.22, 0.10),   // auburn
-	vec3(0.62, 0.60, 0.56)    // grey
-);
-const vec3 IRIS[4] = vec3[4](
-	vec3(0.30, 0.18, 0.08),   // brown
-	vec3(0.30, 0.42, 0.52),   // blue
-	vec3(0.28, 0.38, 0.22),   // green
-	vec3(0.40, 0.32, 0.14)    // hazel
-);
-const vec3 COLLAR[3] = vec3[3](
-	vec3(0.88, 0.86, 0.80),   // white linen
-	vec3(0.80, 0.72, 0.52),   // cream
-	vec3(0.36, 0.10, 0.10)    // dark red
-);
+// Part `i` sampled at the base UV `uv`, premultiplied: clear outside its placement rect.
+// The sample is unconditional (no branch round a texture fetch, so the mip level stays
+// right) with the rect's UV clamped: the atlas pads every part with clear pixels inside its
+// rect, so the clamped edge is clear too, and the step masks the rest.
+vec4 part(int i, vec2 uv) {
+	vec4 pl = part_place[i];
+	vec2 t = (uv - pl.xy) / (pl.zw - pl.xy);
+	vec2 inside = step(vec2(0.0), t) * step(t, vec2(1.0));
+	vec4 at = part_atlas[i];
+	vec4 c = texture(parts, mix(at.xy, at.zw, clamp(t, 0.0, 1.0)));
+	c.a *= inside.x * inside.y;
+	return vec4(c.rgb * c.a, c.a);
+}
 
-// One eye, its brow, and the lashes, in a frame whose +x points AWAY from the nose, so the same
-// code draws both sides: `q` is the fragment relative to the eye's centre, `gaze` the iris
-// offset in that frame, `hw` the head width factor. Layers the eye over `col`.
-vec3 eye(vec3 col, vec2 q, vec2 gaze, vec3 iris_col, vec3 brow_col, float hw, float expr, float px) {
-	vec2 r = vec2(0.040 * hw, 0.021 * (1.0 - 0.15 * expr));
-	float d_white = sdEllipse(q, r);
-	float m_white = fill(d_white, px);
-
-	// The white, shaded under the upper lid.
-	vec3 white = vec3(0.86, 0.83, 0.76) * (1.0 - 0.35 * smoothstep(0.2, 1.0, q.y / r.y));
-	// Iris and pupil, clipped to the white. The iris darkens toward its rim (the limbal ring).
-	vec2 c = q - gaze;
-	float ri = 0.017;
-	float dc = length(c);
-	vec3 iris = iris_col * (1.25 - 0.8 * smoothstep(0.3, 1.0, dc / ri));
-	float m_iris = fill(dc - ri, px);
-	float m_pupil = fill(dc - 0.0075, px);
-	// A catchlight, fixed on the iris so the eye reads as wet whichever way it looks.
-	float m_light = fill(length(c - vec2(-0.006, 0.006)) - 0.0035, px);
-	vec3 e = mix(white, iris, m_iris);
-	e = mix(e, vec3(0.03, 0.02, 0.02), m_pupil);
-	e = mix(e, vec3(0.95, 0.94, 0.90), m_light * 0.9);
-	col = mix(col, e, m_white);
-
-	// Lashes: a dark line along the upper rim, thinning toward the inner corner.
-	float lash = fill(abs(d_white) - 0.0022 * (0.6 + 0.4 * smoothstep(-r.x, r.x, q.x)), px)
-		* smoothstep(-0.004, 0.004, q.y);
-	col = mix(col, vec3(0.08, 0.05, 0.04), lash * 0.85);
-
-	// The brow: an arc from the inner end to the outer, higher at the outer end when at ease.
-	// Changed: the whole brow drops and the inner end drops further -- knitted.
-	float drop = 0.018 * expr;
-	vec2 inner = vec2(-0.045 * hw, 0.044 - drop - 0.012 * expr);
-	vec2 outer = vec2(0.050 * hw, 0.052 - drop);
-	float along = clamp((q.x - inner.x) / (outer.x - inner.x), 0.0, 1.0);
-	float thick = 0.0075 * (1.0 - 0.55 * along);
-	float m_brow = fill(sdSegment(q, inner, outer) - thick, px);
-	col = mix(col, brow_col, m_brow * 0.92);
-	return col;
+// The base UV to sample an eye part at: inside the opening `e`, slid against the gaze
+// offset `g` by the falloff (header) -- the whole offset inside `iris_core` of the radius,
+// easing to none at the lid. The CPU sizes the offset's clamp from the same core so the
+// warp never folds (painting.rs `IRIS_CORE`).
+vec2 warped(vec2 uv, vec4 e, vec2 g) {
+	float r = length((uv - e.xy) / e.zw);
+	float w = 1.0 - smoothstep(iris_core, 1.0, r);
+	return uv - g * w;
 }
 
 void main(void) {
-	// Canvas metres, origin at the centre: y spans +-h/2, x spans +-w/2.
-	vec2 p = (ex_uv - 0.5) * size.xy;
-	float px = fwidth(p.y) * 1.0 + 1e-5;
+	// Top-origin UV into the base (header).
+	vec2 buv = vec2(ex_uv.x, 1.0 - ex_uv.y);
+	vec3 col = texture(base, buv).rgb;
 
-	// ── The sitter: which of the palettes, and how broad a face.
-	// The indices are stepped so that no two of the first eight seeds share both a ground and
-	// a hair: the second four take the grounds in order and the hairs one step on.
-	float s = floor(seed + 0.5);
-	vec3 ground = GROUND[int(mod(s, 4.0))];
-	vec3 skin = SKIN[int(mod(s * 2.0 + 1.0, 3.0))];
-	vec3 hair = HAIR[int(mod(s + floor(s / 4.0), 4.0))];
-	vec3 iris_col = IRIS[int(mod(s * 3.0 + 1.0, 4.0))];
-	vec3 collar = COLLAR[int(mod(s + 1.0, 3.0))];
-	float hw = 0.90 + 0.20 * hash1(s + 7.3);
-	float expr = clamp(expression, 0.0, 1.0);
-
-	// ── Ground: a vignette that is brightest behind the head, with a broad brushy mottle.
-	float halo = 1.0 - smoothstep(0.08, 0.70, length((p - vec2(0.0, 0.12)) * vec2(1.0, 0.85)));
-	vec3 col = ground * (0.45 + 0.75 * halo) * (0.88 + 0.24 * fbm(p * 9.0 + s * 3.1));
-
-	// ── Shoulders and coat, from below the frame, shaded from the left.
-	vec2 head_c = vec2(0.0, 0.08);
-	vec2 head_r = vec2(0.150 * hw, 0.200);
-	float d_coat = sdEllipse(p - vec2(0.0, -0.74), vec2(0.48, 0.50));
-	vec3 coat = vec3(0.11, 0.09, 0.08) * (0.7 + 0.5 * smoothstep(0.35, -0.35, p.x));
-	col = mix(col, coat, fill(d_coat, px));
-	// The collar: a V opening at the throat.
-	float d_collar = max(abs(p.x) - (0.045 + 1.1 * (-0.22 - p.y)), max(p.y + 0.22, -0.36 - p.y));
-	col = mix(col, collar * (0.8 + 0.3 * smoothstep(0.1, -0.1, p.x)), fill(d_collar, px));
-
-	// ── Neck, in the chin's shadow.
-	float d_neck = max(abs(p.x) - 0.078 * hw, max(p.y - 0.0, -0.30 - p.y));
-	col = mix(col, skin * 0.66, fill(d_neck, px));
-
-	// ── Hair behind the head: a larger oval, streaked, cut off at a length the sitter chose --
-	// from above the ears to the shoulders.
-	float hair_end = head_c.y - head_r.y * mix(0.15, 1.15, hash1(s + 3.9));
-	float d_hair = max(sdEllipse(p - vec2(0.0, 0.12), head_r * vec2(1.25, 1.16)), hair_end - p.y);
-	float streak = 0.78 + 0.44 * vnoise(vec2(p.x * 70.0, p.y * 9.0) + s);
-	col = mix(col, hair * streak, fill(d_hair, px));
-
-	// ── The head: lit from the upper left, a little colour in the cheeks.
-	float d_head = sdEllipse(p - head_c, head_r);
-	float shade = 0.82 + 0.26 * smoothstep(1.0, -0.7, (p.x + 0.25 * (p.y - head_c.y)) / head_r.x);
-	float blush = 0.35 * (1.0 - smoothstep(0.0, 0.07, length((p - vec2(0.0, 0.02)) * vec2(0.75, 1.0) - vec2(0.0, 0.0))))
-		* smoothstep(0.03, 0.08, abs(p.x));
-	vec3 face = skin * shade;
-	face = mix(face, face * vec3(1.06, 0.86, 0.84), blush);
-	col = mix(col, face, fill(d_head, px));
-
-	// ── Hair over the head: everything in the hair oval above a curved hairline, whose height
-	// and how far it comes down at the temples are the sitter's too.
-	float hairline = head_c.y + head_r.y * (mix(0.50, 0.72, hash1(s + 1.7)) - mix(0.15, 0.45, hash1(s + 5.1)) * pow(p.x / head_r.x, 2.0));
-	float d_fringe = max(d_hair, hairline - p.y);
-	// The forehead just under it is in its shadow.
-	col *= 1.0 - 0.22 * fill(d_head, px) * (1.0 - smoothstep(0.0, 0.035, hairline - p.y)) * step(p.y, hairline);
-	col = mix(col, hair * streak * 0.95, fill(d_fringe, px));
-
-	// ── Nose: the bridge as a fine line, and a soft shadow under the tip.
-	float d_bridge = sdSegment(p, vec2(-0.003, 0.095), vec2(0.011 * hw, 0.028)) - 0.0022;
-	col = mix(col, skin * 0.55, fill(d_bridge, px) * 0.6);
-	float d_tip = sdEllipse(p - vec2(0.003 * hw, 0.018), vec2(0.020 * hw, 0.008));
-	col = mix(col, skin * 0.62, fill(d_tip, px) * 0.55);
-
-	// ── Mouth: a lip line that smiles at the ends when at ease and flattens, thinner, when
-	// changed.
-	float mw = 0.046 * hw;
-	float mx = clamp(p.x, -mw, mw);
-	float curve = mix(0.011, -0.003, expr);
-	vec2 on_lip = vec2(mx, -0.045 + curve * (mx * mx) / (mw * mw));
-	float lip_th = mix(0.0062, 0.0038, expr) * (1.0 - 0.45 * (mx * mx) / (mw * mw));
-	float m_mouth = fill(length(p - on_lip) - lip_th, px);
-	col = mix(col, vec3(0.46, 0.21, 0.19), m_mouth * 0.9);
-
-	// ── Eyes. The gaze: the tangent of the angle from each eye to the viewer, scaled and
-	// clamped; straight ahead when changed.
-	vec3 v = viewer_local.xyz;
-	float vz = max(v.z, GAZE_MIN_Z);
-	vec3 brow = hair * 0.7;
-	for (int side = 0; side < 2; side++) {
-		float sgn = (side == 0) ? -1.0 : 1.0;   // -1 the sitter's right (screen left), +1 left
-		vec2 e = vec2(sgn * 0.062 * hw, head_c.y + 0.12 * head_r.y);
-		vec2 g = (v.xy - e) / vz * GAZE_K;
-		float gl = length(g);
-		if (gl > GAZE_LIMIT) {
-			g *= GAZE_LIMIT / gl;
-		}
-		g *= 1.0 - expr;
-		// Into the eye's own frame: +x away from the nose.
-		vec2 q = vec2(sgn * (p.x - e.x), p.y - e.y);
-		vec2 gq = vec2(sgn * g.x, g.y);
-		col = eye(col, q, gq, iris_col, brow, hw, expr, px);
+	// ── The parts, premultiplied and summed: eyes, left then right, each the centre
+	// variant crossfaded with the left one at the warped UV; then the weighted mouths.
+	vec4 acc = vec4(0.0);
+	for (int i = 0; i < 2; i++) {
+		vec2 g = (i == 0) ? gaze.xy : gaze.zw;
+		vec2 uv = warped(buv, eye[i], g);
+		acc += mix(part(i, uv), part(2 + i, uv), eye_left);
 	}
+	acc += part(4, buv) * mouth_w.x + part(5, buv) * mouth_w.y + part(6, buv) * mouth_w.z;
+	col = col * (1.0 - min(acc.a, 1.0)) + acc.rgb;
 
-	// ── The key, in gold leaf over the coat, where a pendant would hang. Sampled through the
-	// anamorphosis, so the smear's anti-aliasing width is the distance field's own footprint
-	// per pixel, not the canvas's. Gone (key_state 1) once the real key has come off.
+	// ── The key, in gold leaf, sampled through the anamorphosis so the smear's
+	// anti-aliasing width is the distance field's own footprint per pixel, not the
+	// canvas's. Gone (key_state 1) once the real key has come off.
+	vec2 p = (ex_uv - 0.5) * size.xy;   // canvas metres, origin at the centre, y up
 	if (key_view.w > 0.5 && key_state < 1.0) {
 		vec2 q = anamorph(p, key_view.xyz) - KEY_ON_PLANE;
 		float qpx = max(fwidth(q.x), fwidth(q.y)) + 1e-5;
 		float dk = sdKey(q);
 		float m_key = fill(dk, qpx) * (1.0 - key_state);
 		// Leaf: a warm gold, darker toward the silhouette's edge as a painted outline, with
-		// a light from the upper left as the sitter has.
+		// a light from the upper left.
 		vec3 leaf = vec3(0.86, 0.68, 0.24) * (0.80 + 0.30 * smoothstep(-0.06, 0.06, q.y - q.x));
 		leaf *= 1.0 - 0.45 * (1.0 - smoothstep(0.0, 0.0025, -dk));
 		// In the sweet spot the leaf catches the light: a band of highlight sweeps along it.
@@ -355,22 +183,9 @@ void main(void) {
 		col = mix(col, leaf, m_key);
 	}
 
-	// ── Paint, canvas and varnish. Brush mottle everywhere; weave and craquelure fade out
-	// where a period falls under a couple of pixels, so at distance they leave a clean tone
-	// rather than noise.
-	col *= 0.93 + 0.14 * fbm(p * 70.0 + s * 11.0);
-	float weave_f = 160.0;
-	float weave_px = fwidth(p.x * weave_f);
-	float weave_fade = 1.0 - smoothstep(0.25, 0.6, weave_px);
-	float weave = sin(p.x * weave_f * 6.2832) * sin(p.y * weave_f * 6.2832);
-	col *= 1.0 + 0.035 * weave * weave_fade;
-	float crack_f = 28.0;
-	float crack_fade = 1.0 - smoothstep(0.06, 0.2, fwidth(p.x * crack_f));
-	float crack = 1.0 - smoothstep(0.0, 0.035, cracks(p * crack_f + s * 5.0));
-	col *= 1.0 - 0.08 * crack * crack_fade;
-	// Old varnish: a warm cast, darkest in the corners.
+	// ── Old varnish: a warm cast, darkest in the corners.
 	float edge = min(min(ex_uv.x, 1.0 - ex_uv.x), min(ex_uv.y, 1.0 - ex_uv.y));
-	col *= vec3(1.0, 0.96, 0.88) * (0.78 + 0.22 * smoothstep(0.0, 0.22, edge));
+	col *= vec3(1.0, 0.97, 0.90) * (0.80 + 0.20 * smoothstep(0.0, 0.22, edge));
 
 	// ── The hall's fog, so the portrait fades with its wall.
 	float d = length(ex_world - cam_pos.xyz) * 0.0195;

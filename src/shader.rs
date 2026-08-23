@@ -254,6 +254,15 @@ impl Shader {
         }
     }
 
+    /// EXT: set a `vec4[]` uniform on the currently bound program from a flat slice, four
+    /// floats per element, as many elements as the slice holds (the portraits' part rects).
+    pub fn set_vec4_array(&self, name: &str, v: &[f32]) {
+        debug_assert!(v.len() % 4 == 0);
+        if let Some(loc) = self.uniform(name) {
+            unsafe { self.gl.uniform_4_f32_slice(Some(&loc), v) }
+        }
+    }
+
     /// EXT: set a `mat4` uniform on the currently bound program. Transposed on upload, like
     /// `set_mvp`, because `Matrix4` is row-major.
     pub fn set_mat4(&self, name: &str, m: &Matrix4) {
