@@ -46,9 +46,11 @@ suffixed calls, no immediate mode.
 cargo run --release
 ```
 
-> **Run it from the project root.** All assets are loaded through *relative* paths
-> (`Meshes/`, `Shaders/`, `Textures/`), matching the original's `Resources.cpp`. Launching the binary
-> from `target/release/` directly will panic on the first missing shader.
+> **Run it from anywhere.** The original loads everything through *relative* paths (`Meshes/`,
+> `Shaders/`, `Textures/`), so it had to be started from its own folder. The port resolves an
+> asset root once at startup instead -- see [Asset root](#asset-root) below -- so `cargo run`,
+> the bare binary and a `.app` bundle all find their files, and a launch that cannot is a
+> dialog rather than a panic on the first missing shader.
 
 A debug build is playable but not free: the fixed-step loop runs at 500 Hz (`GH_DT = 0.002`) and the
 collision pass is `O(objects² × hitSpheres × colliders)`, so `Cargo.toml` sets `opt-level = 2` on the
@@ -205,13 +207,18 @@ The original swallows every asset and GL error, then renders nothing and gives y
 
 | Site | C++ behaviour | Port |
 | --- | --- | --- |
-| `shader.rs:58` | link failure → writes `<vert>.link.log`, sets `progId = 0`, returns | log to stderr, panic |
-| `shader.rs:100` | missing shader file → empty source string, then a compile error | panic with the io error |
-| `shader.rs:118` | compile failure → writes `<fname>.log`, returns 0 | log to stderr, panic |
-| `shader.rs:136` | no `;` after `"\nin "` → walks backwards from `npos` (UB) | panic |
-| `texture.rs:26` | missing `.bmp` → `texId = 0`, binds the default texture forever | panic |
-| `mesh.rs:433` | failed `.obj` open → returns from the ctor before `glGen*`, leaving garbage handles that `Draw` then uses | empty mesh, GL setup still runs — a well-defined no-op |
-| `frame_buffer.rs:115` | incomplete FBO → returns silently, half-constructed | same control flow, plus a warning |
+| `shader.rs` | link failure → writes `<vert>.link.log`, sets `progId = 0`, returns | `AssetError::ShaderLink` carrying the info log |
+| `shader.rs` | missing shader file → empty source string, then a compile error | `AssetError::Io` |
+| `shader.rs` | compile failure → writes `<fname>.log`, returns 0 | `AssetError::ShaderCompile` carrying the info log |
+| `shader.rs` | no `;` after `"\nin "` → walks backwards from `npos` (UB) | `AssetError::ShaderCompile` |
+| `texture.rs` | missing `.bmp` → `texId = 0`, binds the default texture forever | `AssetError::Io`; a truncated or non-24/32-bit file is `AssetError::BadBmp` |
+| `mesh.rs` | failed `.obj` open → returns from the ctor before `glGen*`, leaving garbage handles that `Draw` then uses | `AssetError::Io` -- a mesh that is asked for and not shipped is a packaging bug, not an invisible object |
+| `frame_buffer.rs` | incomplete FBO → returns silently, half-constructed | same control flow, plus a warning; the `glGen*` failures are `AssetError::Gl` |
+
+The loaders return the error; `Resources::acquire_*` (and the glTF `acquire`) stay infallible
+for the scene code and route any `Err` through one sink, `app::crash::fatal`, which logs it,
+shows the [crash dialog](#crash-dialog) and exits with code 1. See [Typed asset
+errors](#typed-asset-errors-and-the-fatal-sink).
 
 ### Immediate-mode debug drawing dropped — `collider.rs:70`, `mesh.rs:509`, `object.rs:109`, `engine.rs:499`
 
@@ -913,11 +920,14 @@ Small additions, each tagged `// EXT:`:
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
 | `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery |
 | `frame_buffer.rs` | sized attachments instead of `GH_FBO_SIZE` square |
-| `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects kept alive across `load_scene` (its portals dropped first); the triangle-mesh rounds in the collision pass; a room's respawn request applied after the portal pass; the `--forward`/`--strafe`/`--sprint` held keys |
+| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects kept alive across `load_scene` (its portals dropped first); the triangle-mesh rounds in the collision pass; a room's respawn request applied after the portal pass; the `--forward`/`--strafe`/`--sprint` held keys |
 | `portal.rs` | the nested pass scissored to the quad's screen footprint |
-| `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4` |
+| `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4`; `new` returns `Result<_, AssetError>` and the attribute scan is a pure, tested `scrape_attribs` |
+| `texture.rs` | `new` returns `Result<_, AssetError>`; the BMP byte walk is a pure, tested `decode_bmp` |
+| `mesh.rs` | `new` returns `Result<_, AssetError>`: a missing `.obj` is an error, not an empty mesh |
+| `resources.rs` | every `acquire_*` turns a loader's `Err` into `app::crash::fatal` |
 | `props.rs` | `Sky::draw` takes the eye from the inverse it already computes, and draws at the far plane under `GL_LEQUAL` so it can go last |
-| `main.rs` | gamepad polling in `about_to_wait`; the dev flags (`--no-vsync`, `--forward`, `--strafe`, `--sprint`, …); key levels dropped on focus loss |
+| `main.rs` | gamepad polling in `about_to_wait`; the platform layer's startup order (panic hook, command line, logging, asset root -- all in `src/app/`); the hidden `--panic-test`; key levels dropped on focus loss |
 
 ### One bug this surfaced
 
@@ -1017,9 +1027,38 @@ skips the title, loads scene 14, aims the camera, renders 120 frames (so physics
 screenshot and exits. This is how the shaders were iterated without a human in the loop, and how
 the throughput numbers above were measured (600 frames, wall-clock).
 
+The command line is `clap` (`src/app/cli.rs`); `--help` lists it in full, and a value that does
+not parse is an error rather than a silent default (`--frames ten` used to run 90 frames):
+
+```
+Usage: daydreams [OPTIONS] [COMMAND]
+
+Commands:
+  gen-terrain  Regenerate Meshes/meadow_tile.obj from ext::terrain::height and exit
+
+Options:
+      --windowed           Open a 1280x720 window instead of taking the whole display
+      --no-vsync           Swap interval 0, so `[shot]` frame times measure the renderer rather than the panel
+      --assets <DIR>       Directory holding Shaders/, Meshes/, Textures/ and assets/ (also: DAYDREAMS_ASSETS)
+      --log-level <LEVEL>  off, error, warn, info, debug or trace (also: DAYDREAMS_LOG). Default info
+      --no-log-file        Log to the terminal only; do not write the per-user log file
+      --scene <N>          Skip the title and load scene N (0-based, in key order)
+      --shot <FILE>        Save a screenshot here after --frames frames and quit. Alone: the title screen
+      --frames <K>         Frames to render before the screenshot, so physics settles [default: 90]
+      --yaw <DEG>          Camera yaw in degrees (with --scene) [default: 0]
+      --pitch <DEG>        Camera pitch in degrees (with --scene) [default: 0]
+      --pos <X,Y,Z>        Player position (with --scene)
+      --forward            Hold W for the whole run
+      --strafe             Hold A for the whole run
+      --sprint             Hold Shift for the whole run
+  -h, --help               Print help
+  -V, --version            Print version
+```
+
 `--shot` **without** `--scene` leaves the menu alone and photographs whatever the game boots into,
 which is the title screen and the intro level running behind it — loading a scene would close the
-menu that is the thing being looked at.
+menu that is the thing being looked at. `--yaw`, `--pitch`, `--pos` and the held keys only mean
+something with `--scene`.
 
 `--pos x,y,z` places the player; `--windowed` opens a 1280×720 window instead of taking the
 display; `--no-vsync` requests a swap interval of 0 so the `[shot]` line's second half — `avg
@@ -1031,3 +1070,96 @@ shot itself shows the sprint's 68° projection. `--strafe --sprint` covers the s
 `--strafe` alone: a sidestep never sprints. `[load] scene N in M ms` is printed on every
 scene load. The numbers in [Load time and frame cost](#load-time-and-frame-cost) are
 `--shot --frames 600 --no-vsync` at fullscreen.
+
+The `[shot]`, `[load]` and `[grass]` measurement lines are **info**-level log lines (see
+[Logging](#logging)); the tooling that greps for them needs the default level or higher, and
+`--log-level warn` hides them. `--shot` paths are taken as given, relative to the working
+directory like any other output file. Finder's `-psn_0_NNN` argument is filtered out before
+parsing, so a double-clicked bundle starts clean.
+
+`daydreams gen-terrain` is the one subcommand: it rewrites `Meshes/meadow_tile.obj` under the
+asset root from `ext::terrain::height` and exits (see [Meadow](#meadow-grass-and-clouds-scene-)).
+
+### Logging
+
+Every line the game has to say goes through the `log` facade (`src/app/logging.rs`) to two
+sinks: the terminal, as `[LEVEL] message`, and a file with timestamps and module paths in the
+per-user log directory -- `~/Library/Application Support/DayDreams/logs/` on macOS,
+`%LOCALAPPDATA%\DayDreams\logs\` on Windows, `$XDG_DATA_HOME/daydreams/logs/` on Linux. One
+file per session, named `daydreams-YYYYMMDD-HHMMSS-PID.log` (UTC in the name, local time
+inside), the newest five kept. The level is `--log-level`, else `DAYDREAMS_LOG`, else `info`;
+both sinks run at the same level. `--no-log-file` leaves the file out, for CI and for parallel
+screenshot jobs. The file is written unbuffered, one record per write, so the last lines before
+a crash are on disk when the dialog opens.
+
+Levels, by what they mean here: **error** for an asset or GL failure and a panic; **warn** for
+a subsystem running degraded (no audio device, vsync refused, no log directory, an incomplete
+offscreen framebuffer); **info** for the startup banner, the asset root, the `[shot]` / `[load]`
+/ `[grass]` measurements and gamepad connects; **debug** for gameplay chatter (`[grab]`,
+`[cube]`, mute toggles). The mp3 decoder's own narration is filtered out of both sinks.
+
+### Crash dialog
+
+The game starts fullscreen with the cursor locked, so before this a panic was a screen that
+went black and a desktop that came back, with the message on a stdout nobody launched from
+Finder could see. `src/app/crash.rs` installs a panic hook at the top of `main` that logs the
+message, location and a force-captured backtrace to the log file, shows a native error dialog
+(`rfd`) with the message and the log file's path, and then hands over to the default hook so
+the process still unwinds the way winit expects (`panic = "unwind"`). The same dialog is what
+`app::crash::fatal` shows for an asset that cannot be loaded, followed by exit code 1.
+
+The dialog is shown from the main thread only: off it, rfd would block the panicking thread
+while dispatching to main, and if main is at that moment joining that very thread (the glTF
+decoder's scoped threads are), neither side could proceed -- the scope's re-raise reaches the
+hook on main a moment later and shows the dialog then. `DAYDREAMS_NO_DIALOG=1` suppresses it
+for headless runs that have nobody to press OK; the log line is identical either way.
+
+A hidden `--panic-test` flag panics after the first frame, from inside a winit callback with
+the window up, which is where a real one would come from; it was used to confirm that the
+dialog appears over the game on macOS without deadlocking and that the log carries the
+backtrace.
+
+### Typed asset errors and the fatal sink
+
+`src/app/error.rs` is `AssetError` (`thiserror`): `Io { path, source }`, `ShaderCompile { path,
+log }`, `ShaderLink { name, log }`, `BadBmp { path, reason }`, `Gltf { path, reason }`,
+`Gl(String)` and `NoAssetRoot { tried }`. `Shader::new`, `Texture::new`, `Mesh::new`,
+`FrameBuffer::new` and `GltfModel::load` return it where they used to `panic!`, `expect` or --
+for a missing mesh -- silently draw nothing. `Resources::acquire_*` and `GltfModel::acquire`
+keep their infallible signatures, because the hundred-odd scene call sites have no `Result`
+to carry an error through, and hand any `Err` to `app::crash::fatal`.
+
+Two pieces of the ported loaders became pure functions on the way, the same liberty `parse_obj`
+took in `mesh.rs`: `shader::scrape_attribs` (the `"\nin "` scan that assigns attribute slots,
+including its malformed-declaration error) and `texture::decode_bmp` (the header and pixel walk
+for 24-bit atlases and 32-bit BGRA, with a truncated file as an error instead of an
+out-of-bounds slice). Both are unit-tested against tiny in-memory inputs and the shipped files.
+
+### Asset root
+
+`src/app/assets.rs` resolves the directory holding `Shaders/`, `Meshes/`, `Textures/` and
+`assets/` once, before the window exists, and every loader joins onto it (`assets::path`). The
+order, first directory containing `Shaders/` wins:
+
+1. `--assets DIR` or `DAYDREAMS_ASSETS` -- and an explicit choice that does not qualify is an
+   error, not a fall-through;
+2. `../Resources` relative to the executable when it lives in `*.app/Contents/MacOS/`;
+3. the executable's own directory;
+4. the current directory;
+5. the crate root baked in at build time (`CARGO_MANIFEST_DIR`), so `cargo run` works from
+   anywhere on the machine that built it.
+
+Nothing qualifying is `AssetError::NoAssetRoot` listing every directory tried, through the
+fatal sink: `DAYDREAMS_ASSETS=/nonexistent daydreams` shows the dialog, logs the list and exits
+1. `--shot` output paths and `settings.cfg` are not assets and are not resolved here.
+
+### Scene registry
+
+`src/ext/scenes.rs` is the one table a scene is declared in: `SceneEntry { key, name, make }`,
+in key order -- CodeParade's seven first, in the registration order of `Engine.cpp:41-47`, then
+`8` `9` `0` `-` `=` `[` `]` `\` `;` `'`. `Engine` builds its scene vector from it, the
+level-select menu reads the names from it and the key loop walks it; `scenes::INTRO` is the
+index NEW GAME and the title backdrop use. To add a scene, append an entry and make sure
+`input::key_index` maps its key -- the registry's tests check that there are seventeen entries,
+that keys and names are unique, that `SCENES[INTRO]` is the intro, that every constructor
+builds, and that every key byte is reachable from a physical `KeyCode`.
