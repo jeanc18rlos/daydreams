@@ -29,15 +29,19 @@
 //! | `door`     | A freestanding door with a swinging leaf (the intro level)       |
 //! | `grassfield` | Real grass blades, in a patch that follows the player          |
 //! | `frametime` | Frame-time statistics for the `--shot` dev path                  |
+//! | `cull`     | View-frustum culling, computed once per render pass              |
+//! | `grassgen` | The blade patch itself, generated in-process and bucketed for culling |
 
 pub mod audio;
 pub mod bounds;
+pub mod cull;
 pub mod door;
 pub mod frametime;
 pub mod gamepad;
 pub mod gltf_model;
 pub mod grab;
 pub mod grassfield;
+pub mod grassgen;
 pub mod hud;
 pub mod menu;
 pub mod outline;
@@ -74,6 +78,12 @@ pub struct ExtState {
     pub ghost_shader: std::rc::Rc<crate::shader::Shader>,
     /// Baked cloud panorama the sky shader samples (see skybake.rs).
     pub sky: skybake::SkyBake,
+    /// The grass blade patch, pinned for the life of the engine so that leaving the intro and
+    /// coming back (title -> NEW GAME, MAIN MENU) never regenerates or re-uploads it. The
+    /// scenes reach it through `GrassMesh::acquire`'s weak cache; this is what keeps that
+    /// cache warm. Dropped with the engine, while the GL context is still current.
+    #[allow(dead_code)] // held, never read: its whole job is to keep the Rc count above zero
+    pub grass: std::rc::Rc<grassfield::GrassMesh>,
 }
 
 impl ExtState {
@@ -87,6 +97,7 @@ impl ExtState {
             menu: Menu::new(),
             ghost_shader: res.acquire_shader("ghost"),
             sky: skybake::SkyBake::new(gl, res),
+            grass: grassfield::GrassMesh::acquire(gl),
         }
     }
 

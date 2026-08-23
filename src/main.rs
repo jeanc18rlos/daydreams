@@ -333,9 +333,14 @@ impl ApplicationHandler for App {
 
         //Attempt to enalbe vsync (if failure then oh well)
         // PORT: wglSwapIntervalEXT(1) (Engine.cpp:431); the original's typo is kept above.
-        // EXT: `--no-vsync` leaves the swap interval at the driver default so the dev
-        // screenshot path can measure what a frame costs rather than what the display allows.
+        // EXT: `--no-vsync` asks for an interval of 0 so the dev screenshot path can measure
+        // what a frame costs rather than what the display allows. It has to be an explicit
+        // request: CGL's default interval is 1, so merely skipping the call below leaves the
+        // swap throttled to the panel's refresh.
         if self.dev.no_vsync {
+            if let Err(err) = gl_surface.set_swap_interval(&gl_context, SwapInterval::DontWait) {
+                eprintln!("Error disabling vsync: {err:?}");
+            }
             println!("[dev] vsync off");
         } else if let Err(err) = gl_surface.set_swap_interval(
             &gl_context,

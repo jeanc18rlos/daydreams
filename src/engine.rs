@@ -99,6 +99,12 @@ pub struct Engine {
     pad_events: Cell<crate::ext::gamepad::PadEvents>,
     // EXT: dev tooling -- wall time per rendered frame, reported on the `[shot]` line.
     frame_clock: RefCell<crate::ext::frametime::FrameClock>,
+    // EXT: occlusion query objects, created on first use and kept for the life of the engine
+    // (the C++ generates and deletes a set per pass, Engine.cpp:221/250). One set serves every
+    // recursion level: a pass begins, ends and reads all of its queries before it draws a single
+    // portal, and the nested passes happen inside those draws, so no two levels ever hold a
+    // query at the same time. Freed in `destroy_gl_objects`.
+    queries: RefCell<Vec<glow::Query>>,
 }
 
 impl Engine {
@@ -197,6 +203,7 @@ impl Engine {
             shot_after_frames: Cell::new(0),
             pad_events: Cell::new(crate::ext::gamepad::PadEvents::default()),
             frame_clock: RefCell::new(crate::ext::frametime::FrameClock::new()),
+            queries: RefCell::new(Vec::new()),
         };
 
         // EXT: the title screen draws the intro level behind it (`render_menu_frame`), so the
@@ -813,7 +820,13 @@ impl Engine {
         crate::ext::view::set_detail(if self.rec_level.get() >= GH_MAX_RECURSION { 1.0 } else { 0.0 });
 
         let gl: &glow::Context = &self.gl;
-        let ctx = RenderCtx { gl, engine: self };
+        // EXT: one frustum and one eye per pass, shared by every draw below.
+        let ctx = RenderCtx {
+            gl,
+            engine: self,
+            frustum: crate::ext::cull::Frustum::from_view_proj(&cam.matrix()),
+            eye: cam.world_view.inverse().translation(),
+        };
 
         //Clear buffers
         if GH_USE_SKY {
@@ -852,21 +865,35 @@ impl Engine {
         if self.rec_level.get() > 0 {
             //Draw portals
             self.rec_level.set(self.rec_level.get() - 1);
-            if self.occlusion_supported && self.rec_level.get() > 0 {
-                // PORT: see above -- generated here instead of at Engine.cpp:221.
-                let mut queries: Vec<glow::Query> = Vec::with_capacity(v_portals.len());
-                for _ in 0..v_portals.len() {
-                    unsafe {
-                        queries.push(gl.create_query().expect("glGenQueries failed"));
-                    }
+            // EXT: settle portals whose quad lies wholly outside this pass's frustum here,
+            // without a query. A quad that rasterises no fragment passes no sample, so this is
+            // the answer the query would have given -- but the query's readback is a full
+            // CPU-GPU round trip (the driver must finish everything queued so far before it can
+            // answer), and it was being paid in every pass, including nested ones whose only
+            // portal was a thousand units behind the far plane. When nothing is left to ask,
+            // the whole query block is skipped.
+            let mut in_view = [false; GH_MAX_PORTALS];
+            let mut any_in_view = false;
+            for i in 0..v_portals.len() {
+                let portal = v_portals[i].borrow();
+                if Some(portal.id) != skip_portal {
+                    in_view[i] = crate::ext::cull::object_sphere(&portal.base)
+                        .is_none_or(|(c, r)| ctx.frustum.sphere(c, r));
+                    any_in_view |= in_view[i];
                 }
+            }
+            if self.occlusion_supported && self.rec_level.get() > 0 && any_in_view {
+                // PORT: see above -- generated here instead of at Engine.cpp:221.
+                // EXT: from a pool rather than glGenQueries/glDeleteQueries per pass; see
+                // `queries`.
+                let queries = self.query_pool(v_portals.len());
                 unsafe {
                     gl.color_mask(false, false, false, false);
                     gl.depth_mask(false);
                 }
                 for i in 0..v_portals.len() {
                     let portal = v_portals[i].borrow();
-                    if Some(portal.id) != skip_portal {
+                    if Some(portal.id) != skip_portal && in_view[i] {
                         // PORT: the *ARB query entry points and GL_SAMPLES_PASSED_ARB become
                         // their core equivalents (was: glBeginQueryARB(GL_SAMPLES_PASSED_ARB,
                         // queries[i]), Engine.cpp:238).
@@ -880,7 +907,7 @@ impl Engine {
                     }
                 }
                 for i in 0..v_portals.len() {
-                    if Some(v_portals[i].borrow().id) != skip_portal {
+                    if Some(v_portals[i].borrow().id) != skip_portal && in_view[i] {
                         // PORT: glGetQueryObjectuivARB -> get_query_parameter_u32, which returns
                         // the value instead of writing through a pointer
                         // (was: Engine.cpp:245).
@@ -893,16 +920,16 @@ impl Engine {
                 unsafe {
                     gl.color_mask(true, true, true, true);
                     gl.depth_mask(true);
-                    // PORT: glDeleteQueriesARB(n, queries) -> one delete_query per handle
-                    // (was: Engine.cpp:250).
-                    for q in queries {
-                        gl.delete_query(q);
-                    }
                 }
+                // PORT: glDeleteQueriesARB(n, queries) (Engine.cpp:250) -- the pool keeps them.
             }
             for i in 0..v_portals.len() {
                 let portal = v_portals[i].borrow();
                 if Some(portal.id) != skip_portal {
+                    // EXT: out of view -- nothing to draw, at any recursion level.
+                    if !in_view[i] {
+                        continue;
+                    }
                     if self.occlusion_supported && (self.rec_level.get() > 0) && (draw_test[i] == 0)
                     {
                         continue;
@@ -928,6 +955,12 @@ impl Engine {
         }
         self.v_objects.borrow_mut().clear();
         self.v_portals.borrow_mut().clear();
+        // EXT: the query pool goes with them, while the context is still current.
+        unsafe {
+            for q in self.queries.borrow_mut().drain(..) {
+                self.gl.delete_query(q);
+            }
+        }
     }
 
     // float Engine::NearestPortalDist() const   (Engine.cpp:477-483)
@@ -1029,6 +1062,18 @@ impl Engine {
         let ext = &mut *ext;
         crate::ext::grab::update(&objects, &cam_to_world, grab_pressed, &mut ext.grab);
         ext.fire_grab_sfx();
+    }
+
+    /// EXT: at least `n` occlusion queries from the pool (see the `queries` field). Returns a
+    /// copy of the handles so the borrow does not outlive the call; `glow::Query` is `Copy`.
+    fn query_pool(&self, n: usize) -> Vec<glow::Query> {
+        let mut pool = self.queries.borrow_mut();
+        while pool.len() < n {
+            unsafe {
+                pool.push(self.gl.create_query().expect("glGenQueries failed"));
+            }
+        }
+        pool[..n].to_vec()
     }
 
     /// EXT: reach the ported `Input` so the platform layer can write gamepad axes into it.

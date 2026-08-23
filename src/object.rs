@@ -13,6 +13,11 @@ use crate::vector::{Matrix4, Vector3};
 pub struct RenderCtx<'a> {
     pub gl: &'a glow::Context,
     pub engine: &'a crate::engine::Engine,
+    // EXT: this pass's view frustum and eye position, computed once in Engine::render. Every
+    // draw used to invert the camera's world_view for the eye on its own (one 4x4 inverse per
+    // object per pass), and nothing culled; see src/ext/cull.rs.
+    pub frustum: crate::ext::cull::Frustum,
+    pub eye: Vector3,
 }
 
 pub struct UpdateCtx<'a> {
@@ -76,10 +81,17 @@ impl Object {
     // separate name so that ObjectT::draw (the virtual) can call it as its default.
     // The `curFBO` parameter is dropped here -- the base implementation never used it;
     // only Portal::Draw does.
-    pub fn draw_impl(&self, _ctx: &RenderCtx, cam: &Camera) {
-        // PORT: `_ctx` is unused -- Mesh/Shader/Texture each own an Rc<glow::Context>,
+    pub fn draw_impl(&self, ctx: &RenderCtx, cam: &Camera) {
+        // PORT: `ctx.gl` is unused -- Mesh/Shader/Texture each own an Rc<glow::Context>,
         // so the GL handle does not have to be passed down like the C++ global did.
         if let (Some(shader), Some(mesh)) = (&self.shader, &self.mesh) {
+            // EXT: bounding-sphere cull against this pass's frustum, before any GL work. An
+            // empty or collider-only mesh has no sphere and is left alone -- it draws nothing.
+            if let Some((c, r)) = crate::ext::cull::object_sphere(self) {
+                if !ctx.frustum.sphere(c, r) {
+                    return;
+                }
+            }
             let mv = self.world_to_local().transposed();
             let mvp = cam.matrix() * self.local_to_world();
             shader.use_program();
@@ -91,7 +103,7 @@ impl Object {
             // declare `time` (every original shader).
             shader.set_f32("time", crate::ext::view::time());
             // EXT: eye position for view-dependent materials (grass sheen, distance haze).
-            let eye = cam.world_view.inverse().translation();
+            let eye = ctx.eye;
             shader.set_vec4("cam_pos", [eye.x, eye.y, eye.z, 1.0]);
             // EXT: weather grade for this render pass and the door's light pool (intro level).
             shader.set_f32("mood", crate::ext::view::mood_for(eye));

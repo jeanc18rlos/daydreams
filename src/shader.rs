@@ -213,10 +213,17 @@ impl Shader {
     }
 
     /// EXT: set a `float` uniform on the currently bound program.
-    #[allow(dead_code)] // kept alongside set_vec4 as the obvious companion; no caller yet
     pub fn set_f32(&self, name: &str, v: f32) {
         if let Some(loc) = self.uniform(name) {
             unsafe { self.gl.uniform_1_f32(Some(&loc), v) }
+        }
+    }
+
+    /// EXT: set a `mat4` uniform on the currently bound program. Transposed on upload, like
+    /// `set_mvp`, because `Matrix4` is row-major.
+    pub fn set_mat4(&self, name: &str, m: &Matrix4) {
+        if let Some(loc) = self.uniform(name) {
+            unsafe { self.gl.uniform_matrix_4_f32_slice(Some(&loc), true, &m.m) }
         }
     }
 }

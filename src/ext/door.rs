@@ -284,12 +284,18 @@ impl ObjectT for Door {
         }
     }
 
-    fn draw(&self, _ctx: &RenderCtx, cam: &Camera, _fbo: Option<glow::Framebuffer>) {
+    fn draw(&self, ctx: &RenderCtx, cam: &Camera, _fbo: Option<glow::Framebuffer>) {
+        // Frustum cull the whole door at once. The frame stands on its origin, HALF_H * 2 tall
+        // and a little over HALF_W either side; the open leaf reaches a further 2 * HALF_W out
+        // from the hinge. A sphere of this radius about the foot covers every pose.
+        if !ctx.frustum.sphere(self.base.pos, HALF_H * 2.0 + HALF_W * 2.0) {
+            return;
+        }
         // Not Object::draw_impl: a glTF material needs two samplers and this Object's mesh is a
         // collider proxy with no faces. draw_part sets the same matrices and the same EXT
         // uniforms draw_impl does, so the door still grades with the weather like everything else.
-        self.model.draw_part("frame", &self.base, &self.shader, cam);
-        self.model.draw_part("leaf", &self.leaf, &self.shader, cam);
+        self.model.draw_part("frame", &self.base, &self.shader, cam, ctx.eye);
+        self.model.draw_part("leaf", &self.leaf, &self.shader, cam, ctx.eye);
     }
 }
 

@@ -26,6 +26,7 @@
 use crate::camera::Camera;
 use crate::object::Object;
 use crate::shader::Shader;
+use crate::vector::Vector3;
 use glow::HasContext;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -289,13 +290,14 @@ impl GltfModel {
         *self.bounds.get(part).unwrap_or_else(|| panic!("no part {part:?}"))
     }
 
-    /// Draw one part positioned by `obj`. This mirrors `Object::draw_impl` (object.rs:79-101)
-    /// exactly -- same matrices, same EXT uniform set -- so a glTF part lights and grades like
-    /// every other surface in the scene, then adds the two material samplers on top.
+    /// Draw one part positioned by `obj`, seen from `eye` (the pass's camera position, carried
+    /// on `RenderCtx`). This mirrors `Object::draw_impl` (object.rs:79-101) exactly -- same
+    /// matrices, same EXT uniform set -- so a glTF part lights and grades like every other
+    /// surface in the scene, then adds the two material samplers on top.
     ///
     /// Takes `&self`: `ObjectT::draw` is re-entrant through portal recursion (Portal::Draw
     /// re-enters Engine::Render), so a draw path must never mutate.
-    pub fn draw_part(&self, part: &str, obj: &Object, shader: &Shader, cam: &Camera) {
+    pub fn draw_part(&self, part: &str, obj: &Object, shader: &Shader, cam: &Camera, eye: Vector3) {
         let Some(prims) = self.parts.get(part) else { return };
         let mv = obj.world_to_local().transposed();
         let mvp = cam.matrix() * obj.local_to_world();
@@ -303,7 +305,6 @@ impl GltfModel {
         shader.use_program();
         shader.set_mvp(Some(&mvp), Some(&mv));
         shader.set_f32("time", crate::ext::view::time());
-        let eye = cam.world_view.inverse().translation();
         shader.set_vec4("cam_pos", [eye.x, eye.y, eye.z, 1.0]);
         shader.set_f32("mood", crate::ext::view::mood_for(eye));
         shader.set_vec4("glow", crate::ext::view::glow());

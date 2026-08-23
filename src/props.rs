@@ -346,7 +346,8 @@ impl Sky {
             self.shader.set_f32("blend", sky.blend);
         }
         self.shader.set_f32("time", crate::ext::view::time());
-        let eye = cam.world_view.inverse().translation();
+        // EXT: the eye is the translation of the inverse already computed for `mv` above.
+        let eye = mv.translation();
         self.shader.set_f32("mood", crate::ext::view::mood_for(eye));
         self.mesh.draw();
         unsafe {

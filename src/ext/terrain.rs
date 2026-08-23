@@ -172,6 +172,20 @@ fn shell_height(x: f32, z: f32) -> f32 {
 
 pub const TILE_MESH: &str = "meadow_tile.obj";
 
+/// World-space bounding box of the lattice tile at `(i, j)`: the tile's square, and the full
+/// range the height field can take -- the hills' `AMP` either way plus the door's knoll, with a
+/// unit of slack. The ported renderer draws every object in every pass, and a portal pass from
+/// the sea world a thousand units away was pushing all nine tiles through the vertex stage to
+/// be discarded at the far plane; this is what lets `Terrain::draw` skip them.
+pub fn tile_aabb(i: i32, j: i32) -> (Vector3, Vector3) {
+    let h = PERIOD * 0.5;
+    let (cx, cz) = (i as f32 * PERIOD, j as f32 * PERIOD);
+    (
+        Vector3::new(cx - h, -AMP - 1.0, cz - h),
+        Vector3::new(cx + h, AMP + CREST_H + 1.0, cz + h),
+    )
+}
+
 /// The visible ground: one tile mesh, drawn nine times on the lattice.
 ///
 /// Deliberately ONE scene object drawing nine times, rather than nine objects. The collision pass
@@ -214,6 +228,10 @@ impl ObjectT for Terrain {
         tile.texture = self.base.texture.clone();
         for i in -rings..=rings {
             for j in -rings..=rings {
+                let (lo, hi) = tile_aabb(i, j);
+                if !ctx.frustum.aabb(lo, hi) {
+                    continue;
+                }
                 tile.pos = Vector3::new(i as f32 * PERIOD, 0.0, j as f32 * PERIOD);
                 tile.draw_impl(ctx, cam);
             }
@@ -502,6 +520,28 @@ mod tests {
             }
         }
         assert!(worst < 0.45, "walk shell is {worst:.2} off the ground at {at:?}");
+    }
+
+    /// The tile box must contain the whole height field over the tile, or a hilltop could be
+    /// culled while its slopes are on screen.
+    #[test]
+    fn tile_aabb_contains_the_height_field() {
+        let (lo, hi) = tile_aabb(0, 0);
+        let n = 128;
+        for i in 0..=n {
+            for j in 0..=n {
+                let x = -PERIOD * 0.5 + PERIOD * i as f32 / n as f32;
+                let z = -PERIOD * 0.5 + PERIOD * j as f32 / n as f32;
+                let y = height(x, z);
+                assert!(x >= lo.x && x <= hi.x && z >= lo.z && z <= hi.z);
+                assert!(y > lo.y && y < hi.y, "height {y} at ({x},{z}) outside [{}, {}]", lo.y, hi.y);
+            }
+        }
+        // Neighbouring tiles tile the plane: shared edges, no gap.
+        let (lo1, _) = tile_aabb(1, 0);
+        assert!((lo1.x - hi.x).abs() < 1e-4);
+        let (_, hi_m) = tile_aabb(0, -1);
+        assert!((hi_m.z - lo.z).abs() < 1e-4);
     }
 
     /// The shortest way round is the one that counts, in both directions and across the seam.
