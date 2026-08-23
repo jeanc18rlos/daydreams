@@ -29,7 +29,7 @@ Every place where the port had to deviate carries a comment in a fixed form:
 // PORT: <what changed> (was: <original C++>, <File.cpp:line>)
 ```
 
-There are **218** such comments. Every one of them is summarised under
+There are **226** such comments. Every one of them is summarised under
 [Deviations from the original](#deviations-from-the-original) below. To read them in place:
 
 ```sh
@@ -70,7 +70,7 @@ dev profile to keep it real-time, and builds dependencies at `opt-level = 3` so 
 once and cached. Release is still recommended.
 
 ```sh
-cargo test --release   # 165 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, and the extensions' pure logic
+cargo test --release   # 229 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, the portal warps and the teleport, the collision push, the camera, the platform layer and the extensions' pure logic
 ```
 
 The mesh tests read `Meshes/`, so a checkout without the assets fails them.
@@ -113,13 +113,16 @@ from a read-only `.app` and from a Finder launch whose working directory is `/`.
 
 ### Lints and formatting
 
-`Cargo.toml`'s `[lints.clippy]` allows, with a reason on each, the lints that would ask for
-idiomatic rewrites of transcribed C++ — `approx_constant` for the original's `GH_PI` literal,
-`manual_strip` for `Mesh.cpp`'s line parser, `needless_range_loop`, `assign_op_pattern` over the
-`Vector.h` types, and so on — plus `assertions_on_constants` for the level tests that deliberately
-check tuned layout constants against each other. Everything else is on. `rustfmt.toml` sets the
-100-column, small-heuristics-off style the source was written in; `clippy.toml` lifts
-`too_many_arguments` to nine for `ui.rs`'s `draw_quad`.
+Clippy's defaults are the rule and nothing is allowed crate-wide: `Cargo.toml`'s
+`[lints.clippy]` table is empty, and no item in the source carries a `#[allow(clippy::..)]`
+for a default lint. Where a lint asked for an idiomatic rewrite of a transcribed line the
+rewrite was mechanical and is noted in place — `GH_PI` is `f32::consts::PI` (the same bits as
+`GameHeader.h`'s literal, which a test pins), `Mesh.cpp`'s line parser tests its prefixes with
+`strip_prefix`, `Player.cpp:87`'s two-branch pitch limit is one `clamp`, and the level tests'
+relations between tuned constants are `const { assert!() }` blocks, checked at compile time.
+`rustfmt.toml` sets the 100-column, small-heuristics-off style the source was written in, and
+the source is `cargo fmt` clean (two hand-grouped tables and the `Vector.h` matrix literals are
+`#[rustfmt::skip]`); `clippy.toml` lifts `too_many_arguments` to nine for `ui.rs`'s `draw_quad`.
 
 ## Shipping
 
@@ -205,9 +208,8 @@ git lfs ls-files      # should list every one of them
 - **dist**, on tags `v*` only, after the other two: `cargo build --profile dist` on each OS and
   an artifact per platform in the layout above.
 
-**check** is red until the formatting and clippy passes land -- `fmt --check` still reports
-hunks across most of the source, and clippy is clean under `-D warnings` only once the quality
-pass that follows this one lands; the other jobs are green.
+All three are green: `fmt --check` reports nothing, clippy is clean under `-D warnings` with
+no crate-wide allows, and the tests pass (see [Status](#status)).
 
 ## Controls
 
@@ -492,7 +494,14 @@ immediate-mode code it called (`engine.rs:499`).
 - `delete[] img` → implicit, `img` is a `Vec` (`texture.rs:145`).
 - `*reinterpret_cast<int32_t*>(&input[18])` → `from_le_bytes`; BMP headers are always little-endian,
   matching the original's x86 target (`texture.rs:34`).
-- `std::shared_ptr<T>` → `Option<Rc<T>>`, a null `shared_ptr` being `None` (`object.rs:33`).
+- `std::shared_ptr<T>` → `Option<Rc<T>>`, a null `shared_ptr` being `None` (`object.rs:33`;
+  `Portal::errShader` takes the same mapping, `portal.rs:67`).
+- `GH_PI`: the literal `3.141592653589793f` → `f32::consts::PI`, the same 32 bits; a test in
+  `game_header.rs` pins them.
+- `Player.cpp:87`'s two-branch pitch limit → one `clamp`, identical for every value, NaN included
+  (`player.rs:164`).
+- `WM_SIZE`'s zero-dimension guard is the `Resized` arm's match guard rather than an inner `if`; a
+  zero-size resize falls through to the empty arm as before (`main.rs:425`).
 - Fixed-size C array → `Vec`, length expression unchanged (`portal.rs:69`).
 - `for (int i = 0; cond; ++i)` → a manual counter; Rust has no C-style `for` (`engine.rs:213`).
 - `int64_t GetTicks()` is non-`const` in C++ only because it stores into a scratch field; it takes
@@ -747,8 +756,11 @@ binary already has stdout) and the entire Win32 half of `Engine.cpp`: `CreateGLW
 
 ## Status
 
-`cargo build --release` — 0 errors, 0 warnings.
-`cargo test` — 9 passed, 0 failed.
+`cargo build --release` — 0 errors, 0 warnings; `cargo build --profile dist` — clean.
+`cargo test --release` — 229 passed, 0 failed.
+`cargo clippy --release --all-targets -- -D warnings` — clean, with an empty `[lints.clippy]` table.
+`cargo fmt --check` — clean.
+`cargo deny check` — advisories, bans, licences, sources ok.
 
 ---
 
@@ -757,7 +769,7 @@ binary already has stdout) and the entire Win32 half of `Engine.cpp`: `CreateGLW
 Everything above documents the faithful port. Everything below is **new work** — it has no C++
 counterpart and is not part of HackerPoet/NonEuclidean.
 
-The split is enforced by convention and visible in the source: the port carries **220
+The split is enforced by convention and visible in the source: the port carries **226
 `// PORT:` comments** citing the original line each deviation came from, while additions carry
 **`// EXT:`** comments. New code lives in `src/ext/` and `src/level7..16.rs`; the ported files
 were touched only where a hook was unavoidable, and each of those is a handful of lines.
