@@ -643,10 +643,10 @@ fn upload(gl: &Rc<glow::Context>, r: &Raw) -> Result<Prim, AssetError> {
     }
 }
 
-/// Reinterpret a slice of POD arrays as bytes for `buffer_data_u8_slice`, the same way
-/// `mesh.rs:554` does for the ported meshes.
-fn as_bytes<T>(v: &[T]) -> &[u8] {
-    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v)) }
+/// A slice of `[f32; N]` or `u32` as the bytes `buffer_data_u8_slice` takes, the same way
+/// `mesh.rs` does for the ported meshes.
+fn as_bytes<T: bytemuck::Pod>(v: &[T]) -> &[u8] {
+    bytemuck::cast_slice(v)
 }
 
 /// Decode and downscale every image the model's materials reference, **in parallel**, keyed by

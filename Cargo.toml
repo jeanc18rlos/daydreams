@@ -56,6 +56,11 @@ rfd = "0.17.2"
 thiserror = "2.0.20"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.4"
+# `cast_slice` for the vertex uploads: a `&[[f32; 3]]` or `&[u32]` viewed as the `&[u8]` glow's
+# buffer_data_u8_slice takes, with the alignment and size checks the hand-rolled
+# `slice::from_raw_parts` casts had to promise by hand. Already in the tree through `image` and
+# `kira`, so a direct dependency adds nothing to the build.
+bytemuck = "1.25.2"
 
 [dev-dependencies]
 # Temp directories for the settings round-trip and migration tests.

@@ -140,9 +140,9 @@ impl Drop for GrassMesh {
     }
 }
 
-/// Reinterpret a slice of POD arrays as bytes for `buffer_data_u8_slice`, as `mesh.rs` does.
-fn as_bytes<T>(v: &[T]) -> &[u8] {
-    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v)) }
+/// A slice of `[f32; N]` or `u32` as the bytes `buffer_data_u8_slice` takes, as `mesh.rs` does.
+fn as_bytes<T: bytemuck::Pod>(v: &[T]) -> &[u8] {
+    bytemuck::cast_slice(v)
 }
 
 /// Ground height range under one cull cell at a given patch offset: the min and max of

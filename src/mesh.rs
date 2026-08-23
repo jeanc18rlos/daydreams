@@ -593,7 +593,7 @@ impl Drop for Mesh {
 // PORT: glBufferData takes a void* + byte count; glow's buffer_data_u8_slice takes &[u8].
 #[inline]
 fn as_bytes(v: &[f32]) -> &[u8] {
-    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v)) }
+    bytemuck::cast_slice(v)
 }
 
 #[cfg(test)]
