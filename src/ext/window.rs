@@ -447,6 +447,11 @@ impl ObjectT for Window {
     fn engine_collision(&self) -> bool {
         false
     }
+    /// The pane is carried about and comes and goes with the lock: not in the rigid-body
+    /// world's load-time snapshot (src/ext/physics.rs).
+    fn static_collision(&self) -> bool {
+        false
+    }
     fn place_flat(&self) -> bool {
         true
     }

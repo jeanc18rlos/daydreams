@@ -21,8 +21,10 @@
 //! which is a generated terrain shell (the meadow tiles carry 4,356 each), nine of which a
 //! load would turn into forty thousand boxes for ground no prop ever reaches. The scenes that
 //! have props are scanned interiors, and those are triangle meshes. It is a snapshot of what
-//! the objects answer at load: the elevator's shut leaves, which `ElevatorDoors::trimesh`
-//! offers only while the doors are closing, are not in it.
+//! the objects answer at load, so an object whose collision comes and goes or moves -- the
+//! elevator's leaves, which block only while the doors are shut and would otherwise be baked
+//! in for good by a load that arrives with them shut; the window, which is carried about --
+//! keeps out of it by answering `ObjectT::static_collision` false.
 //!
 //! # Step rate
 //!
@@ -92,8 +94,13 @@ pub const DROP_TILT: f32 = 1.0;
 /// `Ball`, `Cuboid` and `RoundCuboid` are centred on the origin. `Cylinder` and `Capsule`
 /// STAND on it: the origin is the centre of the base, as a lathe is built, so a scene places
 /// a chess piece by the point it rests on and the collider is raised by half its height.
+/// A `RoundCuboid`'s `half` is the INNER box, and its rounded extent is `half + radius`
+/// (rapier's border is a Minkowski sum): a 6 cm die with 4 mm corners is `half` 0.026.
 #[derive(Clone, Copy, Debug)]
-#[allow(dead_code)] // EXT: the full set a prop can take; the three shipped props use three.
+// EXT: the full set a prop can take, as the brief asked for, so a level author has the
+// shapes in one place; the three shipped props use three of them. Kept over dropping the
+// two unused variants: they are two lines each and their tests are the documentation.
+#[allow(dead_code)]
 pub enum Shape {
     Ball { radius: f32 },
     Cuboid { half: Vector3 },
@@ -296,6 +303,9 @@ impl PhysicsWorld {
         let (mut triangles, mut boxes) = (0usize, 0usize);
         for handle in objects {
             let Ok(obj) = handle.try_borrow() else { continue };
+            if !obj.static_collision() {
+                continue;
+            }
             if let Some(mesh) = obj.trimesh() {
                 triangles += mesh.num_triangles();
                 self.add_static_trimesh(&mesh);
@@ -493,16 +503,22 @@ thread_local! {
     static WORLD: RefCell<PhysicsWorld> = RefCell::new(PhysicsWorld::new());
 }
 
-/// Run `f` on the world. Panics if called while another call is in progress -- nothing here
-/// re-enters, and a prop's `Drop` goes through [`try_with`] for the one case that can.
+/// Run `f` on the world. Panics if called while another call is in progress: nothing here
+/// re-enters, and a prop's `Drop` goes through [`try_with`], which does not.
 pub fn with<R>(f: impl FnOnce(&mut PhysicsWorld) -> R) -> R {
     WORLD.with(|w| f(&mut w.borrow_mut()))
 }
 
-/// [`with`] for a prop's `Drop`: a thread-local is gone while the thread's own thread-locals
-/// are being destroyed, and a prop dropped then has nothing to unregister from.
+/// [`with`] for a prop's `Drop`, which must never panic: a thread-local is gone while the
+/// thread's own thread-locals are being destroyed, and the world is borrowed if the drop
+/// happens inside a [`with`] -- in either case there is nothing to unregister from, and the
+/// body goes with the world.
 pub fn try_with(f: impl FnOnce(&mut PhysicsWorld)) {
-    let _ = WORLD.try_with(|w| f(&mut w.borrow_mut()));
+    let _ = WORLD.try_with(|w| {
+        if let Ok(mut w) = w.try_borrow_mut() {
+            f(&mut w);
+        }
+    });
 }
 
 /// `Engine::load_scene`: the new scene's static world.
@@ -606,6 +622,26 @@ mod tests {
         let (p, rot) = w.pose(id).unwrap();
         assert!(p.y.abs() < 2e-3, "base at y = {}", p.y);
         assert!(rot.y_axis().y > 0.999, "tilted: {:?}", rot.y_axis());
+        assert!(w.asleep(id));
+    }
+
+    /// rapier adds a round cuboid's border to its half-extents: a die built as the inner box
+    /// plus the border rests with its drawn faces on the floor, not 4 mm above it.
+    #[test]
+    fn a_round_cuboid_rests_on_its_border_not_its_inner_box() {
+        let mut w = PhysicsWorld::new();
+        w.add_static_trimesh(&floor());
+        let (half, radius) = (0.026, 0.004);
+        let id = w.add_body(
+            "dice",
+            &Shape::RoundCuboid { half: Vector3::splat(half), radius },
+            rubber(),
+            Vector3::new(0.0, 0.5, 0.0),
+            &Matrix4::identity(),
+        );
+        run(&mut w, 2.0);
+        let (p, _) = w.pose(id).unwrap();
+        assert!((p.y - (half + radius)).abs() < 2e-3, "rests at y = {}", p.y);
         assert!(w.asleep(id));
     }
 

@@ -224,6 +224,14 @@ pub trait ObjectT {
         None
     }
 
+    // EXT: whether this object's colliders -- `trimesh()` and the rectangles on `base().mesh`
+    // -- belong in the rigid-body world's static snapshot (src/ext/physics.rs), which is
+    // taken once per scene load. False for collision that comes and goes or moves: the
+    // elevator's door leaves, the window.
+    fn static_collision(&self) -> bool {
+        true
+    }
+
     // EXT: whether the engine moves this object. When false, `Engine::update`'s collision
     // pass skips it as the SUBJECT (its hit spheres are never pushed; it still blocks others
     // through its mesh and trimesh) and the portal pass never warps it -- something else,

@@ -668,6 +668,11 @@ impl ObjectT for ElevatorDoors {
     fn trimesh(&self) -> Option<Rc<TriMeshCollider>> {
         (self.openness.get() < DOORS_BLOCK_BELOW).then(|| self.collider.clone())
     }
+    /// Not in the rigid-body world's load-time snapshot: a ride arrives with the doors shut,
+    /// and the leaves would stay in that world after they opened (src/ext/physics.rs).
+    fn static_collision(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

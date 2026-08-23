@@ -229,7 +229,8 @@ impl Scene for Level16 {
                     "dice",
                     "dice.obj",
                     "dice.bmp",
-                    Shape::RoundCuboid { half: Vector3::splat(0.03), radius: 0.004 },
+                    // The inner box plus the border is the 6 cm die (`Shape::RoundCuboid`).
+                    Shape::RoundCuboid { half: Vector3::splat(0.026), radius: 0.004 },
                     Material { friction: 0.5, restitution: 0.35, density: 1200.0 },
                     Vector3::new(996.7, 0.04, -0.5),
                 ),
