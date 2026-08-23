@@ -758,7 +758,7 @@ binary already has stdout) and the entire Win32 half of `Engine.cpp`: `CreateGLW
 ## Status
 
 `cargo build --release` — 0 errors, 0 warnings; `cargo build --profile dist` — clean.
-`cargo test --release` — 246 passed, 0 failed.
+`cargo test --release` — 254 passed, 0 failed.
 `cargo clippy --release --all-targets -- -D warnings` — clean, with an empty `[lints.clippy]` table.
 `cargo fmt --check` — clean.
 `cargo deny check` — advisories, bans, licences, sources ok.
@@ -859,6 +859,43 @@ the bob phase (two per cycle) and fire `Sfx::Footstep`, at most once per rendere
 
 A key held across an alt-tab never sees its release, so every key level is dropped when the
 window loses focus — a stuck `Shift` would otherwise run the player until it was pressed again.
+
+### Paintings that watch you — `ext/painting.rs`
+
+The Backrooms' entry hall hangs eight portraits whose eyes follow you, built on two things the
+engine already did. Every draw receives the eye of the **pass** camera (`RenderCtx.eye`), so the
+gaze is computed per render pass: the painting turns that eye into its own canvas metres and the
+shader displaces each iris toward it, and a portrait seen through the door looks at the portal
+camera -- at the person in the doorway -- rather than at some point on the meadow a thousand units
+off. And the visibility test that keeps Level10's statues still while watched
+(`ext/visibility.rs`) keeps the sitter's *face* still: only after 0.4 s of nobody looking do the
+brows lower, the mouth flatten and the gaze stop following and stare straight out. Look away and
+back and it is different; you never catch it moving. The next unobserved stretch puts it back.
+The eyes remember, too: while nobody looks they stay aimed at where you were last seen from, and
+when you look again they slide from there to you over 0.6 s.
+
+The test had to learn to see through a door. From the meadow the hall is a thousand units away
+and the plain cone test says "not looking" for every painting in it, which would let them change
+while you watched them through the opening. So a painting also counts as observed when its image
+in the viewer's world (`Warp::delta`, the transform the portal pass renders with) is in the view
+cone, the line to that image crosses the portal's quad, the near half of that line is clear, and
+the far half -- from where the line comes out of the far door to the painting -- is clear of the
+building. The far half starts at the far door rather than at the warped eye on purpose: a player a
+stride outside the meadow door is a stride behind the far door, inside the hall's end wall. A
+portal is consulted only for paintings on its far side, by which end of it they are nearer. The
+line-of-sight raycast sees the Backrooms' triangle mesh like any other blocker, so a wall is cover.
+
+The portrait itself is procedural (`Shaders/painting.frag`; there is no portrait image in the
+asset set): signed-distance shapes for the ground, shoulders, collar, neck, hair, head, eyes,
+brows, nose and mouth, a seed picking ground, skin, hair, iris and collar colours and the head's
+width, and a brush mottle, canvas weave and faint craquelure over it all, the last two fading
+out where their period falls under a couple of pixels. It is lit flat, with the walls' own
+squared-distance fog, so it sits in the hall. The frame is four `cube.obj` bars in `gold.bmp`
+through the ported `texture` shader, each rolled 45 degrees about its length so what faces the
+room is a ridge between two bevels: a moulding that the shader's fixed light models on either
+wall, where a flat slat facing away from that light was near black. Paintings collide with
+nothing. The expression state machine, the gaze memory and the through-the-door test are unit
+tested with a fake clock and detached portals.
 
 ### Per-frame room logic — `ext/room.rs`
 
@@ -1202,6 +1239,13 @@ window pane or a gap in the scan's single-sided walls -- is told the far world i
 sunset-pink, the sky is the near-black of an unlit building going on past its walls, and a dark
 ground cap under the whole footprint (`backrooms::GroundCap`, colliding with nothing) makes the
 void below the horizon the same darkness.
+
+Along the hall's walls hang eight portraits (`ext/painting.rs`, [above](#paintings-that-watch-you--extpaintingrs)):
+five on the north wall, three on the south, each 0.8 x 1.0 m with its centre at 1.6 m and its
+back two centimetres off the scan's wall face so the two never z-fight. Their eyes follow
+whichever camera is drawing them, door included, and their faces change only while nobody is
+looking. Eight of them add nothing measurable to the frame: with vsync off the hall views stay
+at 1.0 ms and the meadow spawn (the door drawing the hall) within noise of its 2.2 ms.
 
 Frame cost, measured with `glFinish` after each frame on a shared M3 Max at 2560x1440 (so
 absolute numbers are pessimistic; the comparison is what matters): meadow spawn in the intro
