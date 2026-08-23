@@ -27,6 +27,8 @@
 //! [`FORWARD_MIN`] of its length -- diagonals count, strafing and backpedalling walk. The toggle
 //! itself is not cancelled by a sidestep (the stick has not returned to centre), so a pad
 //! player who strafes round a corner mid-run is running again the moment they push forward.
+//! The field-of-view kick follows the run rather than the key, so a Shift held at a standstill
+//! does nothing until the player moves forward.
 //!
 //! # The eased speed cap
 //!

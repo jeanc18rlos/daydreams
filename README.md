@@ -666,7 +666,9 @@ both caps.
 
 Only a forward run sprints: the multipliers apply while the movement vector's forward component
 is at least 0.3 of its length (a diagonal is 0.71), so strafing and backpedalling are at walk
-speed however the key or button is held. And the speed cap eases rather than steps. `Move`
+speed however the key or button is held. The field-of-view kick follows the run, not the key:
+`Shift` held at a standstill does nothing until the player moves forward. And the speed cap
+eases rather than steps. `Move`
 clips the horizontal velocity to the cap every 2 ms, so a cap that fell from 1.8× to 1.0× in
 one step would brake the player at some 1,160 u/s² while the view was still easing back — a
 jolt. The cap relaxes with a 100 ms time constant instead, snapping to exactly 1.0 once within a
