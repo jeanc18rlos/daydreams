@@ -164,6 +164,11 @@ impl ObjectT for Backrooms {
     }
 
     fn draw(&self, ctx: &RenderCtx, cam: &Camera, _fbo: Option<glow::Framebuffer>) {
+        // The shader's fog tone is the caller's (see Shaders/gltfunlit.frag); the model's is
+        // set here, before `draw_part` sets everything else, because `GltfModel` has no idea
+        // what colour a building's far end should be.
+        self.shader.use_program();
+        self.shader.set_vec4("fog_color", WALL_FOG);
         self.model.draw_part(PART, &self.base, &self.shader, cam, ctx);
     }
 
@@ -172,6 +177,10 @@ impl ObjectT for Backrooms {
     }
 }
 
+/// What the building's walls fade to with distance: a dark yellow-brown, the maps' own colour
+/// gone dim, so the far end of the maze softens rather than popping at the far plane.
+const WALL_FOG: [f32; 4] = [0.40, 0.33, 0.16, 1.0];
+
 /// How far past the building's footprint the ground cap reaches. Its edge must lie beyond the
 /// far plane (`GH_FAR` = 100) from anywhere the player can stand, or the sky would show as a
 /// bright line along it; the fence keeps them within `FENCE_MARGIN` of the footprint.
@@ -179,8 +188,12 @@ const CAP_MARGIN: f32 = 120.0;
 /// How far below the carpet the cap sits, so it never z-fights the floor quads yet reads as
 /// the floor continuing through any gap in an outer wall.
 const CAP_DROP: f32 = 0.05;
-/// The cap's colour: near-black, a touch warm, like the walls' own fog tone gone dark.
-const CAP_COLOR: [f32; 4] = [0.030, 0.024, 0.018, 1.0];
+/// The cap's colour, and what it fogs to: the interior sky's horizon tone, byte for byte
+/// (`sky.frag`, the `mood > 1.5` branch, at n.y = 0). The cap's far edge lies beyond the far
+/// plane, so what the eye sees along the horizon is the cap at full fog meeting the sky at
+/// the horizon -- and if those two differ at all, the seam is a bright line. With the walls'
+/// brown as the fog target there was a 1-3 px band of it along the whole horizon.
+const CAP_COLOR: [f32; 4] = [0.030, 0.024, 0.016, 1.0];
 
 /// A dark, unlit plane under the whole building and far past it.
 ///
@@ -194,8 +207,8 @@ const CAP_COLOR: [f32; 4] = [0.030, 0.024, 0.018, 1.0];
 ///
 /// Drawn with the unlit glTF shader rather than `Object::draw_impl` because that shader wants
 /// `model`, `base_color` and `emissive` set, which `draw_impl` does not do; the white texture
-/// turns its base map term into the flat colour, and its squared-distance fog then fades the
-/// cap toward the same brown the walls fade to.
+/// turns its base map term into the flat colour, and its squared-distance fog is pointed at
+/// that same colour, so the cap is one flat dark from underfoot to the horizon.
 pub struct GroundCap {
     base: Object,
     shader: Rc<Shader>,
@@ -248,6 +261,7 @@ impl ObjectT for GroundCap {
         self.shader.set_mat4("model", &local_to_world);
         self.shader.set_vec4("cam_pos", [eye.x, eye.y, eye.z, 1.0]);
         self.shader.set_vec4("base_color", CAP_COLOR);
+        self.shader.set_vec4("fog_color", CAP_COLOR);
         self.shader.set_vec4("emissive", [0.0; 4]);
         self.shader.set_i32("tex", 0);
         self.white.use_texture();

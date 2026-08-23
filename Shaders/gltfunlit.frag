@@ -8,14 +8,19 @@ precision highp float;
 // shader adds nothing the ported light direction, the weather grade or the door's light pool
 // would otherwise contribute -- `mood` is deliberately ignored, the place is its own weather.
 //
-// What it does add is a mild depth fog toward a dark yellow-brown, for two reasons: the bake
-// has no atmosphere of its own, so a corridor's far end reads as flat as its near end; and the
+// What it does add is a mild depth fog toward `fog_color`, for two reasons: the bake has no
+// atmosphere of its own, so a corridor's far end reads as flat as its near end; and the
 // engine's far plane is 100 units (GH_FAR) while the maze is 80 long, so without it the
-// furthest walls would pop at the clip rather than fade.
+// furthest walls would pop at the clip rather than fade. The colour is the caller's because
+// two things draw with this shader and they must fade to different places: the building's
+// walls to a dark yellow-brown of their own, and the ground cap under it (GroundCap in
+// src/ext/backrooms.rs) to the interior sky's horizon tone, exactly -- anything else leaves a
+// bright line where the cap's far edge meets the sky. An unset uniform is GL zero, black.
 
 uniform sampler2D tex;    // base colour map as shipped (1x1 white when the material has none)
 uniform vec4 base_color;  // glTF baseColorFactor
 uniform vec4 emissive;    // emissiveFactor x KHR_materials_emissive_strength, unclamped
+uniform vec4 fog_color;   // what the far end fades to; rgb used
 uniform vec4 cam_pos;
 
 in vec2 ex_uv;
@@ -33,7 +38,7 @@ void main(void) {
 	// is mostly gone (92% at 80) before the far plane would have cut it.
 	float d = length(ex_world - cam_pos.xyz) * 0.0195;
 	float fog = 1.0 - exp(-d * d);
-	col = mix(col, vec3(0.40, 0.33, 0.16), fog);
+	col = mix(col, fog_color.rgb, fog);
 
 	fragColor = vec4(col, 1.0);
 }
