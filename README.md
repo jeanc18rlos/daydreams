@@ -80,8 +80,8 @@ The mesh tests read `Meshes/`, so a checkout without the assets fails them.
 | Profile | What it is for | Output |
 |---|---|---|
 | `dev` | Editing. The crate at `opt-level = 2`, dependencies at 3. | `target/debug/daydreams` |
-| `release` | Playing and profiling. `opt-level = 3`, fat LTO, one codegen unit, `panic = "unwind"` (the crash dialog needs the stack to unwind past it), `debug = 1` so a crash log carries line numbers. | `target/release/daydreams` (3.4 MB on macOS arm64) |
-| `dist` | Shipping. `release` with the symbol table stripped (`strip = "symbols"`, `debug = false`). | `target/dist/daydreams` (2.8 MB) |
+| `release` | Playing and profiling. `opt-level = 3`, fat LTO, one codegen unit, `panic = "unwind"` (the crash dialog needs the stack to unwind past it), `debug = 1` so a crash log carries line numbers. | `target/release/daydreams` (4.0 MB on macOS arm64, with the platform layer) |
+| `dist` | Shipping. `release` with the symbol table stripped (`strip = "symbols"`, `debug = false`). | `target/dist/daydreams` (3.3 MB) |
 
 ```sh
 cargo build --profile dist
