@@ -75,7 +75,7 @@ impl Scene for Level16 {
         view::set_far_mood(view::MOOD_INTERIOR);
 
         // ── The backrooms: the model, placed so its door spot is FAR with the carpet at y = 0.
-        let rooms = Backrooms::new(gl, res, FAR);
+        let rooms = Backrooms::new(gl, res, FAR, &[]);
         let (lo, hi) = rooms.world_bounds();
         // Darkness under and around the building, for wherever its walls let the outside show.
         objs.push(Rc::new(RefCell::new(GroundCap::new(res, &rooms))) as Rc<RefCell<dyn ObjectT>>);
