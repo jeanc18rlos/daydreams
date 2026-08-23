@@ -60,6 +60,7 @@ pub mod gltf_prop;
 pub mod grab;
 pub mod grassfield;
 pub mod grassgen;
+pub mod hint;
 pub mod hud;
 pub mod interior;
 pub mod meadow;

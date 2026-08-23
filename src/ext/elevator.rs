@@ -50,10 +50,11 @@
 //! An object in the scene vector cannot reach the engine's input, its HUD or its audio, and
 //! nothing survives a scene load but the engine. So, as with `ext::view` and `ext::room`, the
 //! handful of values that cross those lines are ambient: the fade level the overlay draws
-//! ([`fade`]), the hint line the HUD shows ([`hint`]), the E press the engine hands over
-//! ([`wants_interact`], [`press`]), the ride-start edge for the sound ([`take_ride_started`]),
-//! the arrival the next level picks up ([`take_arrival`]) and the registry index of the scene
-//! being played, which is how an elevator knows which floor it is on ([`on_scene_loaded`]).
+//! ([`fade`]), the E press the engine hands over ([`wants_interact`], [`press`]), the
+//! ride-start edge for the sound ([`take_ride_started`]), the arrival the next level picks up
+//! ([`take_arrival`]) and the registry index of the scene being played, which is how an
+//! elevator knows which floor it is on ([`on_scene_loaded`]). The hint line the HUD shows goes
+//! through the shared channel every prompt uses (`ext::hint`), set each step the offer stands.
 //!
 //! The channels are written by the one elevator's `update`, last writer wins, which is to say
 //! **one elevator per scene**: a second would erase the first's hint and fade every step it
@@ -66,6 +67,7 @@ use std::rc::Rc;
 use crate::camera::Camera;
 use crate::ext::bounds::transformed_box;
 use crate::ext::gltf_model::{Anchor, Fit, Frame, GltfModel, Load, PartSpec};
+use crate::ext::hint;
 use crate::ext::room::{request_scene_load, Respawn};
 use crate::ext::scenes;
 use crate::ext::trimesh::TriMeshCollider;
@@ -196,16 +198,11 @@ fn load_spec() -> Load<'static> {
 // The ambient channels (see the module docs).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// What the HUD should say while the player stands in an idle cabin.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Hint {
-    RideTo(usize),
-    NoOtherFloors,
-}
-
 thread_local! {
     static FADE: Cell<f32> = const { Cell::new(0.0) };
-    static HINT: Cell<Option<Hint>> = const { Cell::new(None) };
+    /// Whether the player stands in an idle cabin, as of the last `update`: the elevator is
+    /// offering the E press, and the hint line says what it would do.
+    static OFFERING: Cell<bool> = const { Cell::new(false) };
     static PRESSED: Cell<bool> = const { Cell::new(false) };
     static RIDE_STARTED: Cell<bool> = const { Cell::new(false) };
     static ARRIVAL: Cell<Option<Arrival>> = const { Cell::new(None) };
@@ -223,19 +220,11 @@ pub fn fade() -> f32 {
     FADE.with(Cell::get)
 }
 
-/// The HUD line to show, if any: only while the player stands in an idle cabin.
-pub fn hint() -> Option<String> {
-    HINT.with(Cell::get).map(|h| match h {
-        Hint::RideTo(f) => format!("E  RIDE TO {}", FLOORS[f].label),
-        Hint::NoOtherFloors => "NO OTHER FLOORS".to_string(),
-    })
-}
-
 /// Whether an E press this frame belongs to the elevator rather than the grab: true while
 /// the player stands in an idle cabin, whether or not there is anywhere to go -- a press in a
 /// cabin with no other floor does nothing, and should not pick anything up either.
 pub fn wants_interact() -> bool {
-    HINT.with(Cell::get).is_some()
+    OFFERING.with(Cell::get)
 }
 
 /// Hand the elevator this frame's E press. Consumed by its next `update`.
@@ -273,7 +262,7 @@ pub fn take_arrival() -> Option<Arrival> {
 /// black overlay nobody will lift.
 pub fn on_scene_loaded(scene: usize) {
     CURRENT_SCENE.with(|c| c.set(Some(scene)));
-    HINT.with(|h| h.set(None));
+    OFFERING.with(|o| o.set(false));
     PRESSED.with(|p| p.set(false));
     if ARRIVAL.with(Cell::take).is_some() {
         log::warn!("[elevator] scene {scene} did not take its arrival: no elevator there");
@@ -635,11 +624,16 @@ impl ObjectT for Elevator {
         }
         self.openness.set(self.ride.openness());
         FADE.with(|f| f.set(self.ride.fade()));
-        let offer = match next {
-            Some(f) => Hint::RideTo(f),
-            None => Hint::NoOtherFloors,
-        };
-        HINT.with(|h| h.set((inside && self.ride.is_idle()).then_some(offer)));
+        // The offer, restated every step it stands: the hint channel is emptied each frame
+        // (ext::hint), and the press is only taken while the cabin is idle with the player in.
+        let offering = inside && self.ride.is_idle();
+        OFFERING.with(|o| o.set(offering));
+        if offering {
+            hint::set(match next {
+                Some(f) => format!("E  RIDE TO {}", FLOORS[f].label),
+                None => "NO OTHER FLOORS".to_string(),
+            });
+        }
     }
 
     fn draw(&self, ctx: &RenderCtx, cam: &Camera, _fbo: Option<glow::Framebuffer>) {

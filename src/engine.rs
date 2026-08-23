@@ -474,9 +474,10 @@ impl Engine {
             };
             ext.ui.begin(i_width, i_height);
             crate::ext::hud::draw(&ext.ui, cursor);
-            // The elevator's prompt, and its black-out between floors (src/ext/elevator.rs);
-            // the black goes over the cursor too.
-            if let Some(hint) = crate::ext::elevator::hint() {
+            // This frame's prompt, whoever offered it (src/ext/hint.rs), and the elevator's
+            // black-out between floors (src/ext/elevator.rs); the black goes over the cursor
+            // too.
+            if let Some(hint) = crate::ext::hint::take() {
                 crate::ext::hud::draw_hint(&ext.ui, &hint);
             }
             let fade = crate::ext::elevator::fade();
@@ -934,6 +935,17 @@ impl Engine {
         // changed, so they are forgotten.
         if crate::ext::room::apply_remove_portals(&mut self.v_portals.borrow_mut()) {
             self.occlusion.borrow_mut().reset();
+        }
+        // EXT: and its requests to add objects and to take objects away (src/ext/room.rs).
+        // Here too, after every pass that walks the vector by index; a removal shifts the
+        // indices behind it, and the grab keeps one across frames.
+        {
+            let mut v_objects = self.v_objects.borrow_mut();
+            crate::ext::room::apply_spawns(&mut v_objects);
+            let gone = crate::ext::room::apply_removes(&mut v_objects);
+            if !gone.is_empty() {
+                self.ext.borrow_mut().grab.on_removed(&gone);
+            }
         }
     }
 
