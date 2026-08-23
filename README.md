@@ -55,7 +55,7 @@ collision pass is `O(objects² × hitSpheres × colliders)`, so `Cargo.toml` set
 dev profile to keep it real-time. Release is still recommended.
 
 ```sh
-cargo test        # 9 tests: Matrix4/Vector3 algebra, and the .obj parser against all 14 shipped meshes
+cargo test        # 116 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, and the extensions' pure logic
 ```
 
 ## Controls
@@ -749,52 +749,79 @@ to the extension state.
 ## Load time and frame cost
 
 Measured on an M3 Max at 3456×2168, scene 15 (the intro meadow, which is the heaviest thing the
-game loads and what the title screen sits in front of).
+game loads and what the title screen sits in front of). Frame times are with `--no-vsync`, the
+average over 590 frames after the scene settled; "reload" is the title → NEW GAME transition,
+which loads the very scene already on screen.
 
-| Stage | Before | After |
+| | Before | After |
 |-------|--------|-------|
-| Door GLB (`Classic_Interior_Door.glb`) | 1.50 s | 0.22 s |
-| `grass_patch.obj` (124 MB, 2.08 M triangles) | 0.47 s | 0.37 s |
-| Terrain, sky, UI | 0.12 s | 0.11 s |
-| **Scene load** | **2.10 s** | **0.70 s** |
-| Peak resident | 1114 MB | 1058 MB |
+| Title screen frame | 4.94 ms (p95 7.3) | **2.28 ms** (p95 3.6) |
+| Spawn, facing the door (portal in view) | 4.22 ms | **1.77 ms** |
+| Spawn, facing away (no portal in view) | 3.60 ms | **1.13 ms** |
+| Scene load (`Engine::load_scene`) | 0.86 s warm, 1.45 s cold | **34 ms** |
+| Reload (title → NEW GAME, MAIN MENU, RESTART) | 0.72–0.83 s | **< 1 ms** |
+| Process start to first frame | 1.46 s | **0.62 s** |
+| Peak resident | 1107 MB | **269 MB** |
+| Assets on disk | 124 MB OBJ + 79 MB GLB | 1.3 MB GLB |
 
-Where it went:
+Where it went, in order of effect:
 
-* **Lanczos3 → Triangle for the 4096→512 map downscale.** `image` scales a filter's kernel by the
-  resampling ratio, so Lanczos3's support of 3 becomes a 24-pixel radius at 8:1 — about 2,300
-  taps per output pixel, and 870 ms of the door's 1.5 s. At a pure downscale Triangle is very
-  nearly a box average over the source footprint, which is the right answer anyway.
-* **The maps are decoded in parallel**, three at a time, biggest first, from a shared queue. This
-  is the only threaded code in the engine and stays contained by construction: `thread::scope`
-  joins before returning, the workers read immutable slices of the BIN chunk, and nothing touches
-  GL. Lane count is a memory/time trade — see the constant's comment for the measurements.
-* **`MAP` 1024 → 512.** The door is 1.7 units tall and seen at conversational distance; 512 is
-  already more texel than it can show.
-* **The OBJ parser stopped copying every face line.** It allocated twice per `f` line — an owned
-  byte copy to rewrite `/` as space, then a `String` round trip — which on `grass_patch.obj` is
-  two million allocations for a rewrite that only ever fed the tokenizer. The tokenizer now
-  splits on `/` directly. Every shipped mesh parses to a byte-identical result.
-* **Meshes past `grab::FIT_TRI_CAP` no longer keep a CPU triangle list.** `grab::fits` skips them
-  already, so the grass patch was building and holding 75 MB of triangles nothing could read.
+* **The occlusion query readback was the frame.** The ported renderer draws every portal's
+  quad inside a `GL_SAMPLES_PASSED` query and reads the result back *in the same pass* to
+  decide whether to recurse (Engine.cpp:236-247). That read is a full CPU–GPU round trip: the
+  driver has to finish everything queued so far before it can answer, about 2 ms here — and it
+  was paid again inside the nested portal pass, for a portal a thousand units behind the far
+  plane. Now a portal whose quad lies wholly outside the pass's frustum is settled on the CPU
+  (it would pass no samples either way, so the answer is identical), and a pass with no
+  portal in view skips the query block altogether. Facing away from the door, no pass stalls.
+* **The blade patch is generated, indexed and culled** (`src/ext/grassgen.rs`,
+  `src/ext/grassfield.rs`). The 124 MB `grass_patch.obj` is gone; the same scatter runs in
+  20 ms at startup and is pinned for the life of the engine. Ten shared vertices per blade
+  instead of the OBJ's de-indexed 48 (every quad twice, once per winding, because the engine
+  culls back faces globally — the field's own draw now turns culling off for its duration),
+  so 1.3 M vertices and 1.04 M triangles in place of 6.2 M and 2.08 M. Blades are bucketed into
+  a 13×13 grid of 2-unit cells with contiguous index ranges, and each pass draws only the cells
+  whose box meets its frustum, merged into one `glDrawElements` per run — looking across the
+  patch that is about half the blades, for 169 box tests.
+* **Frustum culling everywhere else** (`src/ext/cull.rs`): six planes pulled from the
+  view-projection once per pass and carried on `RenderCtx` with the eye position. The terrain's
+  nine tiles cull by box, every `Object` by bounding sphere, the door by a sphere around its
+  foot. The oblique-clipped portal cameras work unchanged: the planes extracted from their
+  matrix are exactly the ones the GPU clips against.
+* **The door GLB is pre-shrunk** (`tools/shrink_glb.py`): its PNGs were 4096², and the loader
+  was decoding ~400 MB of RGBA on three threads to resize them to its 512² `MAP` on every
+  load. They are stored at 512² now, resized once with the same filter, and the file went
+  from 79 MB to 1.3 MB. Geometry and everything else in it are byte-identical.
+* **The old scene outlives the load.** `Engine::load_scene` used to clear the object and
+  portal vectors before `Scene::load`, which expired every `Weak` in the resource caches; the
+  title → NEW GAME transition therefore re-parsed the terrain, re-built the grass and re-decoded
+  the door. The vectors are moved into locals, the new scene loads against warm caches, and
+  the old objects drop afterwards.
+* Smaller things: `Shader` memoises by-name uniform locations (six lookups per object per pass
+  were each a `CString` and a driver call); the eye position is computed once per pass rather
+  than inverted per object; the blade vertex shader takes `vp` and `l2w` instead of recovering
+  them with two `inverse()` calls per vertex; occlusion queries come from a pool; the collision
+  pass reuses one scratch vector for hit spheres.
 
-Frame cost is **2.6 ms** (≈380 fps) with vsync off, of which the grass blades are 0.85 ms. With
-vsync on — the default — the game is display-limited long before it is GPU-limited, so a frame
-measures ~7.8 ms on a 120 Hz panel no matter what is in it. That is worth knowing before
-optimising anything else here: the earlier 127 fps was the display, not the renderer.
+Under vsync — the default — the game is display-limited long before it is GPU-limited, so a
+frame measures the refresh period no matter what is in it. Note that on macOS "no vsync" has to
+be asked for: CGL's default swap interval is 1, so merely omitting the request leaves the swap
+throttled (which is how an early version of the flag measured 11 ms for the title).
 
 ## Hooks into ported files
 
-Nine small additions, each tagged `// EXT:`:
+Small additions, each tagged `// EXT:`:
 
 | File | Hook |
 |------|------|
 | `collider.rs` | read-only `mat()` accessor, so rays can transform the rectangle to world space |
 | `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`8`–`=` key mappings |
 | `player.rs` | stick axes added to the keyboard move and look vectors |
-| `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look |
-| `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, and scene-load notification |
-| `main.rs` | gamepad polling in `about_to_wait` |
+| `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum and eye, and `draw_impl` culls by bounding sphere |
+| `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, scene-load notification; the portal frustum pre-test and query pool; the old scene kept alive across `load_scene` |
+| `shader.rs` | memoised by-name uniform lookup, `set_mat4` |
+| `props.rs` | `Sky::draw` takes the eye from the inverse it already computes |
+| `main.rs` | gamepad polling in `about_to_wait`; `--no-vsync` |
 
 ### One bug this surfaced
 
@@ -830,6 +857,14 @@ the original demo's portal-recursive first level. Every expensive thing happens 
 | Rolling hills | One heightfield mesh with smooth normals smuggled through the engine's 3-component `vt` channel (the parser discards `vn`), plus a gradient-tilted collider shell -- same scheme as the Relativity walk shell. |
 | "Realism" | Three illusions in `Shaders/grass.frag`: drifting **cloud shadows** (a scrolled low-frequency tap), **valley occlusion** (world height as free AO), and **atmospheric perspective** toward the sky's horizon colour. Plus a backlit sun sheen and a wind ripple that moves no vertices. |
 
+The intro level adds real **grass blades** on top of the textured ground: a 26×26 unit patch of
+130,000 blades generated in-process (`src/ext/grassgen.rs`, a port of the Houdini scatter that
+used to be shipped as a 124 MB OBJ) and kept centred on the player by snapping its position to a
+2-unit grid, so blades never slide underfoot. The patch is indexed, one winding, and bucketed into
+cull cells so a pass only draws what it can see; `Shaders/grassblade.vert` does all the bending
+and stands each blade on the terrain's height field. See [Load time and frame
+cost](#load-time-and-frame-cost) for what that costs.
+
 The new sky applies to every scene; the ported gradient-only sky is kept as
 `Shaders/sky_plain.frag.txt`.
 
@@ -846,3 +881,10 @@ the throughput numbers above were measured (600 frames, wall-clock).
 `--shot` **without** `--scene` leaves the menu alone and photographs whatever the game boots into,
 which is the title screen and the intro level running behind it — loading a scene would close the
 menu that is the thing being looked at.
+
+`--pos x,y,z` places the player; `--windowed` opens a 1280×720 window instead of taking the
+display; `--no-vsync` requests a swap interval of 0 so the `[shot]` line's second half — `avg
+frame X ms, p95 Y ms over N frames`, measured over the frames after the first ten — reports what
+the renderer costs rather than what the panel allows. `[load] scene N in M ms` is printed on every
+scene load. The numbers in [Load time and frame cost](#load-time-and-frame-cost) are
+`--shot --frames 600 --no-vsync` at fullscreen.

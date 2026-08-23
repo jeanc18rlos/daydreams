@@ -51,10 +51,16 @@ use crate::vector::Vector3;
 /// whole multiple of the cull cell, so the cull grid lands on the same world phase every snap.
 const SNAP: f32 = 2.0;
 
-/// Slack added around each cull cell's rest-pose box, in world units. The vertex shader sways
-/// a tip by up to about a unit in the strongest gust and shortens it a little as it bends; the
-/// box has to hold the blade wherever the wind puts it, or a cell at the edge of the frame would
-/// pop in and out as its blades waved across the boundary.
+/// Slack added around each cull cell's rest-pose box, in world units. The box has to hold a
+/// blade wherever the wind puts it, or a cell at the edge of the frame would pop in and out as
+/// its blades waved across the boundary.
+///
+/// The bound comes from Shaders/grassblade.vert. The gust is `(g1 - 0.5) * 1.5 + (g2 - 0.5) *
+/// 0.7` with both noises in [0, 1], so |gust| <= 1.1; the flutter is a sine times 0.12; the bend
+/// at the tip is `gust * 0.55 + flutter` <= 0.725, applied along the wind and again at 0.35
+/// along the lean, so a tip moves at most 0.725 * 1.35 = 0.98 units sideways -- under this pad.
+/// Vertically a bent blade only drops, by `|sway| * 0.35` <= 0.34, under the half-pad used for
+/// y. `sway_bound_matches_the_shader` fails if those factors change.
 const SWAY_PAD: f32 = 1.2;
 
 /// The uploaded patch: one VAO, one index buffer, and the cull cells. Shared by every
@@ -355,6 +361,26 @@ mod tests {
         cam.set_position_orientation(Vector3::new(-60.0, 1.5, -60.0), 0.0, 0.0);
         let f = Frustum::from_view_proj(&cam.matrix());
         assert!(visible_runs(&patch.cells, &ground, offset, &f).is_empty());
+    }
+
+    /// `SWAY_PAD` is derived from the wind amplitudes in the vertex shader. If those change
+    /// the pad may no longer contain a swayed tip, and the symptom -- a cell at the edge of
+    /// the frame popping as its blades wave -- is the kind a screenshot does not show.
+    #[test]
+    fn sway_bound_matches_the_shader() {
+        let src = std::fs::read_to_string("Shaders/grassblade.vert").expect("blade shader");
+        for term in [
+            "(g1 - 0.5) * 1.5 + (g2 - 0.5) * 0.7",
+            "* 0.12;",
+            "(gust * 0.55 + flutter) * t * t",
+            "* bend * 0.35",
+            "length(sway) * 0.35 * t",
+        ] {
+            assert!(src.contains(term), "grassblade.vert lost {term:?}; re-derive SWAY_PAD");
+        }
+        let tip = (1.1 * 0.55 + 0.12) * 1.35;
+        assert!(tip < SWAY_PAD, "a tip can sway {tip} but the pad is {SWAY_PAD}");
+        assert!(tip * 0.35 < SWAY_PAD * 0.5);
     }
 
     /// Runs are exact concatenations of whole cells.

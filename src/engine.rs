@@ -643,8 +643,16 @@ impl Engine {
                 cur_scene.unload();
             }
         }
-        self.v_objects.borrow_mut().clear();
-        self.v_portals.borrow_mut().clear();
+        // EXT: the old scene's objects and portals are moved out here and dropped only AFTER
+        // the new scene has loaded (was: vObjects.clear(); vPortals.clear(), Engine.cpp:138-139).
+        // The resource caches hold `Weak` references that expire with the last object using
+        // them, so clearing first meant title -> NEW GAME -- which reloads the very scene on
+        // screen -- re-parsed every mesh, re-decoded the door and re-uploaded the lot. Kept
+        // alive across the load, every `acquire_*` upgrades instead. The RefCells are only
+        // borrowed for the length of the take, and nothing in the old vectors is touched
+        // again, so the later drop cannot collide with the load's own borrows.
+        let old_objects = std::mem::take(&mut *self.v_objects.borrow_mut());
+        let old_portals = std::mem::take(&mut *self.v_portals.borrow_mut());
         self.player.borrow_mut().reset();
 
         // EXT: per-scene shader state starts clean; a scene that wants it sets it in load().
@@ -675,10 +683,14 @@ impl Engine {
             .borrow_mut()
             .push(Rc::clone(&self.player) as Rc<RefCell<dyn ObjectT>>);
 
-        // EXT: drop anything being carried (the object vector was just cleared, so a held index
-        // would dangle) and cross-fade to this scene's music.
+        // EXT: drop anything being carried (the object vector was just replaced, so a held
+        // index would dangle) and cross-fade to this scene's music.
         self.cur_scene_ix.set(ix);
         self.ext.borrow_mut().on_scene_loaded(ix);
+        // EXT: now the old scene can go. Anything the new one did not re-acquire is freed here,
+        // GL objects included, while the context is current.
+        drop(old_objects);
+        drop(old_portals);
         println!("[load] scene {ix} in {:.0} ms", t0.elapsed().as_secs_f32() * 1e3);
     }
 
@@ -709,6 +721,10 @@ impl Engine {
         //Collisions
         {
             let v_objects = self.v_objects.borrow();
+            // EXT: scratch copy of the current object's hit spheres, reused across objects and
+            // steps. The copy itself is forced by the borrow rules below; allocating a fresh Vec
+            // for it 500 times a second was not.
+            let mut hit_spheres: Vec<crate::sphere::Sphere> = Vec::new();
             //For each physics object
             for i in 0..v_objects.len() {
                 // PORT: `Physical* physical = vObjects[i]->AsPhysical()` cannot be held across
@@ -719,10 +735,13 @@ impl Engine {
                 // (was: Engine.cpp:156-158).
                 let physical_state = {
                     let obj = v_objects[i].borrow();
-                    obj.as_physical()
-                        .map(|p| (p.hit_spheres.clone(), p.world_to_local()))
+                    obj.as_physical().map(|p| {
+                        hit_spheres.clear();
+                        hit_spheres.extend_from_slice(&p.hit_spheres);
+                        p.world_to_local()
+                    })
                 };
-                let Some((hit_spheres, mut world_to_local)) = physical_state else {
+                let Some(mut world_to_local) = physical_state else {
                     continue;
                 };
 
