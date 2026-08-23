@@ -103,7 +103,7 @@ impl SkyBake {
                 0,
             );
             if gl.check_framebuffer_status(glow::FRAMEBUFFER) != glow::FRAMEBUFFER_COMPLETE {
-                eprintln!("[sky] panorama framebuffer incomplete");
+                log::warn!("[sky] panorama framebuffer incomplete");
             }
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
             fbo

@@ -117,7 +117,7 @@ impl GrassMesh {
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(bufs[2]));
             gl.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, as_bytes(&patch.idx), glow::STATIC_DRAW);
             gl.bind_vertex_array(None);
-            println!(
+            log::info!(
                 "[grass] {} blades, {} vertices, {} indices in {:.0} ms",
                 patch.pos.len() / grassgen::VERTS_PER_BLADE,
                 patch.pos.len(),

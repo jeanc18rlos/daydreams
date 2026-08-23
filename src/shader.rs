@@ -2,10 +2,14 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::Path;
 use std::rc::Rc;
 
 use glow::HasContext;
 
+// EXT: typed loader failures and the asset root (see src/app/).
+use crate::app::assets;
+use crate::app::error::AssetError;
 use crate::vector::Matrix4;
 
 pub struct Shader {
@@ -32,24 +36,57 @@ fn find_from(s: &str, pat: &str, from: usize) -> Option<usize> {
     s[from..].find(pat).map(|i| i + from)
 }
 
+// PORT: the attribute scan of Shader::LoadShader (Shader.cpp:93-105): every `in` declaration
+// at the start of a line names the next attribute slot, in order. EXT: a free function over
+// the source text rather than a block inside the GL path, so the scan is testable.
+pub fn scrape_attribs(str: &str) -> Result<Vec<String>, String> {
+    let mut attribs = Vec::new();
+    let bytes = str.as_bytes();
+    let mut ix: usize = 0;
+    loop {
+        ix = match find_from(str, "\nin ", ix) {
+            Some(i) => i,
+            None => break,
+        };
+        // PORT: if there is no ';' after "\nin " the C++ walks backwards from npos
+        // (undefined behaviour); it is an error here (was: ix = str.find(";", ix);,
+        // Shader.cpp:99).
+        ix = find_from(str, ";", ix)
+            .ok_or_else(|| format!("malformed 'in' declaration at byte {ix}: no ';' after it"))?;
+        let mut start_ix = ix;
+        //while (str[--start_ix] != ' ');
+        loop {
+            start_ix -= 1;
+            if bytes[start_ix] == b' ' {
+                break;
+            }
+        }
+        attribs.push(str[start_ix + 1..ix].to_string());
+    }
+    Ok(attribs)
+}
+
 impl Shader {
-    pub fn new(gl: &Rc<glow::Context>, name: &str) -> Shader {
+    // EXT: returns the failure instead of panicking on it; `Resources::acquire_shader` is
+    // where it becomes fatal (was: Shader::Shader(const char* name), Shader.cpp:8).
+    pub fn new(gl: &Rc<glow::Context>, name: &str) -> Result<Shader, AssetError> {
         //Get the file paths
-        let vert = format!("Shaders/{}.vert", name);
-        let frag = format!("Shaders/{}.frag", name);
+        // EXT: under the resolved asset root rather than the working directory.
+        let vert = assets::path(&format!("Shaders/{}.vert", name));
+        let frag = assets::path(&format!("Shaders/{}.frag", name));
 
         // PORT: the attribs member (Shader.h:17) is a local here, see the note on the struct.
         let mut attribs: Vec<String> = Vec::new();
 
         //Load the shaders from disk
-        let vert_id = Self::load_shader(gl, &vert, glow::VERTEX_SHADER, &mut attribs);
-        let frag_id = Self::load_shader(gl, &frag, glow::FRAGMENT_SHADER, &mut attribs);
+        let vert_id = Self::load_shader(gl, &vert, glow::VERTEX_SHADER, &mut attribs)?;
+        let frag_id = Self::load_shader(gl, &frag, glow::FRAGMENT_SHADER, &mut attribs)?;
 
         unsafe {
             //Create the program
             let prog_id = gl
                 .create_program()
-                .unwrap_or_else(|e| panic!("glCreateProgram failed for '{}': {}", name, e));
+                .map_err(|e| AssetError::Gl(format!("glCreateProgram failed for '{}': {}", name, e)))?;
             gl.attach_shader(prog_id, vert_id);
             gl.attach_shader(prog_id, frag_id);
 
@@ -65,19 +102,18 @@ impl Shader {
             let is_linked = gl.get_program_link_status(prog_id);
             if !is_linked {
                 // PORT: the C++ writes the info log to "<vert>.link.log", sets progId = 0 and
-                // returns, silently rendering nothing. We print the log to stderr and panic,
-                // which is far easier to debug (was: std::ofstream fout(std::string(vert) +
+                // returns, silently rendering nothing. The log is returned with the error
+                // instead, which is far easier to debug (was: std::ofstream fout(std::string(vert) +
                 // ".link.log"); ... progId = 0; return;, Shader.cpp:31-43).
                 let log = gl.get_program_info_log(prog_id);
-                eprintln!("{}.link.log:\n{}", vert, log);
-                panic!("Failed to link shader program '{}'", name);
+                return Err(AssetError::ShaderLink { name: name.to_string(), log });
             }
 
             //Get global variable locations
             let mvp_id = gl.get_uniform_location(prog_id, "mvp");
             let mv_id = gl.get_uniform_location(prog_id, "mv");
 
-            Shader {
+            Ok(Shader {
                 prog: prog_id,
                 vert: vert_id,
                 frag: frag_id,
@@ -85,7 +121,7 @@ impl Shader {
                 mv_id,
                 gl: Rc::clone(gl),
                 uniforms: RefCell::new(HashMap::new()),
-            }
+            })
         }
     }
 
@@ -102,23 +138,23 @@ impl Shader {
     // Shader.cpp:62).
     fn load_shader(
         gl: &Rc<glow::Context>,
-        fname: &str,
+        fname: &Path,
         ty: u32,
         attribs: &mut Vec<String>,
-    ) -> glow::Shader {
+    ) -> Result<glow::Shader, AssetError> {
         //Read shader source from disk
         // PORT: a failed std::ifstream silently yields an empty source string (which then fails
-        // to compile and writes a .log); we panic with the io error instead
+        // to compile and writes a .log); the io error is returned instead
         // (was: std::ifstream fin(fname); std::stringstream buff; buff << fin.rdbuf();,
         // Shader.cpp:64-68).
         let str = std::fs::read_to_string(fname)
-            .unwrap_or_else(|e| panic!("Failed to open shader '{}': {}", fname, e));
+            .map_err(|source| AssetError::Io { path: fname.to_path_buf(), source })?;
 
         unsafe {
             //Create and compile shader
-            let id = gl
-                .create_shader(ty)
-                .unwrap_or_else(|e| panic!("glCreateShader failed for '{}': {}", fname, e));
+            let id = gl.create_shader(ty).map_err(|e| {
+                AssetError::Gl(format!("glCreateShader failed for '{}': {}", fname.display(), e))
+            })?;
             gl.shader_source(id, &str);
             gl.compile_shader(id);
 
@@ -126,42 +162,25 @@ impl Shader {
             let is_compiled = gl.get_shader_compile_status(id);
             if !is_compiled {
                 // PORT: the C++ writes the info log to "<fname>.log" and returns 0, leaving the
-                // program to link against a null shader. We print the log to stderr and panic
+                // program to link against a null shader. The log is returned with the error
                 // (was: std::ofstream fout(std::string(fname) + ".log"); ... return 0;,
                 // Shader.cpp:79-89).
                 let log = gl.get_shader_info_log(id);
-                eprintln!("{}.log:\n{}", fname, log);
-                panic!("Failed to compile shader '{}'", fname);
+                return Err(AssetError::ShaderCompile { path: fname.to_path_buf(), log });
             }
 
             //Save variable bindings
             if ty == glow::VERTEX_SHADER {
-                let bytes = str.as_bytes();
-                let mut ix: usize = 0;
-                loop {
-                    ix = match find_from(&str, "\nin ", ix) {
-                        Some(i) => i,
-                        None => break,
-                    };
-                    // PORT: if there is no ';' after "\nin " the C++ walks backwards from npos
-                    // (undefined behaviour); we panic (was: ix = str.find(";", ix);,
-                    // Shader.cpp:99).
-                    ix = find_from(&str, ";", ix)
-                        .unwrap_or_else(|| panic!("Malformed 'in' declaration in '{}'", fname));
-                    let mut start_ix = ix;
-                    //while (str[--start_ix] != ' ');
-                    loop {
-                        start_ix -= 1;
-                        if bytes[start_ix] == b' ' {
-                            break;
-                        }
-                    }
-                    attribs.push(str[start_ix + 1..ix].to_string());
-                }
+                // EXT: the scan is `scrape_attribs`, split out so it can be tested without a
+                // context; its one failure is reported like a compile error, which is what it is.
+                attribs.extend(scrape_attribs(&str).map_err(|log| AssetError::ShaderCompile {
+                    path: fname.to_path_buf(),
+                    log,
+                })?);
             }
 
             //Return the shader id
-            id
+            Ok(id)
         }
     }
 
@@ -241,5 +260,40 @@ impl Shader {
         if let Some(loc) = self.uniform(name) {
             unsafe { self.gl.uniform_matrix_4_f32_slice(Some(&loc), true, &m.m) }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scrape_attribs;
+
+    #[test]
+    fn attribs_in_declaration_order() {
+        let src = "#version 330\nin vec3 in_pos;\nuniform mat4 mvp;\nin vec2 in_uv;\nin vec3 in_normal;\nvoid main() {}\n";
+        assert_eq!(scrape_attribs(src).unwrap(), ["in_pos", "in_uv", "in_normal"]);
+    }
+
+    #[test]
+    fn only_line_initial_in_counts() {
+        // "\nin " is the pattern: an `in` mid-line (a parameter qualifier) is not an attribute.
+        let src = "#version 330\nvoid f(in vec3 p);\nin vec4 in_col;\n";
+        assert_eq!(scrape_attribs(src).unwrap(), ["in_col"]);
+    }
+
+    #[test]
+    fn no_declarations_is_empty() {
+        assert!(scrape_attribs("#version 330\nvoid main() {}\n").unwrap().is_empty());
+    }
+
+    #[test]
+    fn shipped_texture_shader_declares_three() {
+        let src = std::fs::read_to_string(crate::app::assets::path("Shaders/texture.vert")).unwrap();
+        assert_eq!(scrape_attribs(&src).unwrap(), ["in_pos", "in_uv", "in_normal"]);
+    }
+
+    #[test]
+    fn missing_semicolon_is_an_error() {
+        let err = scrape_attribs("#version 330\nin vec3 in_pos\nvoid main() {}\n").unwrap_err();
+        assert!(err.contains("no ';'"), "{err}");
     }
 }

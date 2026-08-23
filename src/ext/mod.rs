@@ -34,6 +34,7 @@
 //! | `trimesh`  | Triangle-mesh collision (parry3d) beside the ported rectangles   |
 //! | `backrooms` | The scanned, light-baked Backrooms as solid scenery             |
 //! | `sprint`   | Running: Shift to hold, L3 to toggle, with an FOV kick and footsteps |
+//! | `scenes`   | The scene registry: key, name and constructor, one table in key order |
 //! | `scissor`  | Portal passes scissored to the quad's screen footprint           |
 //! | `occlusion` | Portal occlusion queries read one frame late, never stalling   |
 //! | `meadow`   | The intro's meadow, door and title vantage, shared by the scenes that open on it |
@@ -57,6 +58,7 @@ pub mod outline;
 pub mod raycast;
 pub mod room;
 pub mod rotate;
+pub mod scenes;
 pub mod scissor;
 pub mod settings;
 pub mod skybake;

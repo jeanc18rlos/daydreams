@@ -10,6 +10,8 @@ use std::rc::Rc;
 
 use glow::HasContext;
 
+// EXT: typed GL failures (see src/app/error.rs).
+use crate::app::error::AssetError;
 use crate::camera::Camera;
 use crate::object::RenderCtx;
 
@@ -31,11 +33,14 @@ impl FrameBuffer {
     // PORT: the default constructor takes the GL context as a parameter
     // (was: FrameBuffer::FrameBuffer(), FrameBuffer.cpp:6).
     // EXT: and the size of the attachments, which the C++ fixes at GH_FBO_SIZE square.
-    pub fn new(gl: &Rc<glow::Context>, width: i32, height: i32) -> FrameBuffer {
+    // EXT: the three allocations' failures are returned rather than unwrapped; `Engine` makes
+    // them fatal, since a portal pass has nowhere to draw without them.
+    pub fn new(gl: &Rc<glow::Context>, width: i32, height: i32) -> Result<FrameBuffer, AssetError> {
+        let gl_error = |what: &'static str| move |e: String| AssetError::Gl(format!("{what} failed: {e}"));
         unsafe {
             // PORT: glGenTextures(1, &texId) -> create_texture(), which returns a Result
             // (was: glGenTextures(1, &texId), FrameBuffer.cpp:7).
-            let tex_id = gl.create_texture().expect("glGenTextures failed");
+            let tex_id = gl.create_texture().map_err(gl_error("glGenTextures"))?;
             gl.bind_texture(glow::TEXTURE_2D, Some(tex_id));
             // PORT: GL_CLAMP does not exist in core profile -> GL_CLAMP_TO_EDGE
             // (was: glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP), FrameBuffer.cpp:9).
@@ -81,7 +86,7 @@ impl FrameBuffer {
             // PORT: the *EXT framebuffer entry points and GL_FRAMEBUFFER_EXT /
             // GL_COLOR_ATTACHMENT0_EXT enums become their core equivalents
             // (was: glGenFramebuffersEXT(1, &fbo), FrameBuffer.cpp:15).
-            let fbo = gl.create_framebuffer().expect("glGenFramebuffers failed");
+            let fbo = gl.create_framebuffer().map_err(gl_error("glGenFramebuffers"))?;
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
             gl.framebuffer_texture_2d(
                 glow::FRAMEBUFFER,
@@ -95,7 +100,7 @@ impl FrameBuffer {
             // (was: glGenRenderbuffersEXT(1, &renderBuf), FrameBuffer.cpp:19).
             let render_buf = gl
                 .create_renderbuffer()
-                .expect("glGenRenderbuffers failed");
+                .map_err(gl_error("glGenRenderbuffers"))?;
             gl.bind_renderbuffer(glow::RENDERBUFFER, Some(render_buf));
             gl.renderbuffer_storage(
                 glow::RENDERBUFFER,
@@ -121,17 +126,17 @@ impl FrameBuffer {
             let status = gl.check_framebuffer_status(glow::FRAMEBUFFER);
             if status != glow::FRAMEBUFFER_COMPLETE {
                 // PORT: the C++ returns silently here, leaving the incomplete FBO bound and
-                // the object half-constructed; we keep that control flow but print a warning
+                // the object half-constructed; we keep that control flow but log a warning
                 // (was: if (status != GL_FRAMEBUFFER_COMPLETE_EXT) { return; }, FrameBuffer.cpp:28-30).
-                eprintln!("Framebuffer is not complete: 0x{:X}", status);
-                return FrameBuffer {
+                log::warn!("Framebuffer is not complete: 0x{:X}", status);
+                return Ok(FrameBuffer {
                     tex_id,
                     fbo,
                     render_buf,
                     gl: Rc::clone(gl),
                     width,
                     height,
-                };
+                });
             }
 
             //Unbind so future rendering can proceed normally
@@ -139,14 +144,14 @@ impl FrameBuffer {
             // (was: glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0), FrameBuffer.cpp:33).
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
 
-            FrameBuffer {
+            Ok(FrameBuffer {
                 tex_id,
                 fbo,
                 render_buf,
                 gl: Rc::clone(gl),
                 width,
                 height,
-            }
+            })
         }
     }
 
