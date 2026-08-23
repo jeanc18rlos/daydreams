@@ -918,6 +918,21 @@ same channel: `request_remove_portals` (the Backrooms' one-way door), applied at
 point, and `request_scene_load` (the elevator's ride), applied by `run_frame` once the
 fixed-step loop is over -- a load replaces the object vector a step is iterating.
 
+### Shared channels — `ext/hint.rs`, `ext/room.rs`
+
+Three more ambient channels, for things in the scene that cannot see each other or the engine.
+**The hint** (`hint::set`, `hint::take`) is the one HUD prompt line: whoever offers an action
+sets it every frame the offer stands, the overlay block takes it once per rendered frame and
+draws it through `hud::draw_hint`, and the last writer before the take wins -- so a prompt
+that stops being set vanishes on its own, and nothing is cleared on a scene load. The
+elevator's "E  RIDE TO ..." and a grabbable's `pick_hint` go through it. **Spawn and remove**
+(`room::request_spawn`, `room::request_remove`) add an object to the scene or take one out of
+it -- a key that has been used, a prop a puzzle conjures -- applied by `Engine::update` after
+the portal pass, never while a pass is walking the vector; removal is by `Rc::ptr_eq`, and the
+indices it frees go to `grab::GrabState::on_removed`, since the grab holds one across frames.
+**The unlock** (`room::request_unlock_window`, `room::take_unlock_window`) is a one-shot flag
+the key raises and the window consumes, in either order within a step.
+
 ## Gamepad — `ext/gamepad.rs`
 
 CodeParade *registered* joystick and gamepad raw-input devices in `Engine::SetupInputs`
@@ -1153,16 +1168,17 @@ Small additions, each tagged `// EXT:`:
 
 | File | Hook |
 |------|------|
-| `collider.rs` | read-only `mat()` accessor, so rays can transform the rectangle to world space |
+| `collider.rs` | read-only `mat()` accessor, so rays can transform the rectangle to world space; `Collider::rect(centre, half_u, half_v)`, the three-corner constructor with the sorting already done |
 | `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`R` and the scene keys `8`–`.` (`8` `9` `0` `-` `=` `[` `]` `\` `;` `'` `,` `.`); `Shift` into the `VK_SHIFT` slot and the resolved sprint multipliers |
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
-| `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery |
+| `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery; `Object::rot`, a rotation matrix that stands in for `euler` in `local_to_world`/`world_to_local`/`forward` when set (a rigid body's orientation does not round-trip through Euler angles); the prop hooks on `ObjectT`, all defaulted: `engine_collision()` (false: the collision pass never pushes it and the portal pass never warps it -- something else owns its motion), `on_grab()`, `on_release(velocity)`, `on_rescale(p_scale)` (called by `ext/grab.rs`), `place_flat()` (the grab lays it on the surface it hits instead of standing it off by its sphere) and `pick_hint()` (a HUD line while the crosshair is on it) |
 | `frame_buffer.rs` | sized attachments instead of `GH_FBO_SIZE` square |
-| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn and portal-removal requests applied after the portal pass, its scene-load request applied after the fixed-step loop; E offered to the elevator before the grab, and its hint and black-out in the overlay block (the black-out under the pause menu too); the `--forward`/`--strafe`/`--sprint` held keys, `--arrive` and `--ride-at`, handed over as one `cli::DirectRun`; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`) |
-| `portal.rs` | the nested pass scissored to the quad's screen footprint |
+| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn, portal-removal, spawn and remove requests applied after the portal pass (a removal's freed indices handed to the grab), its scene-load request applied after the fixed-step loop; the collision pass skipping an `engine_collision() == false` object as its subject and the portal pass skipping it outright; E offered to the elevator before the grab, the frame's hint (`ext/hint.rs`) and the elevator's black-out in the overlay block (the black-out under the pause menu too); the `--forward`/`--strafe`/`--sprint` held keys, `--arrive` and `--ride-at`, handed over as one `cli::DirectRun`; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`) |
+| `portal.rs` | the nested pass scissored to the quad's screen footprint; `passable` (default true) and `tint` (default clear), the second uploaded to `portal.frag` as `uniform vec4 tint` and mixed over the far side by its alpha |
+| `physical.rs` | `try_portal` returns false without warping through a portal that is not `passable` |
 | `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4`; `new` returns `Result<_, AssetError>` and the attribute scan is a pure, tested `scrape_attribs` |
 | `texture.rs` | `new` returns `Result<_, AssetError>`; the BMP byte walk is a pure, tested `decode_bmp` |
-| `mesh.rs` | `new` returns `Result<_, AssetError>`: a missing `.obj` is an error, not an empty mesh |
+| `mesh.rs` | `new` returns `Result<_, AssetError>`: a missing `.obj` is an error, not an empty mesh; `Mesh::colliders_only(gl, colliders)`, a mesh with no faces and only rectangles -- the in-memory `intro_door_collide.obj` |
 | `resources.rs` | every `acquire_*` turns a loader's `Err` into `app::crash::fatal` |
 | `props.rs` | `Sky::draw` takes the eye from the inverse it already computes, and draws at the far plane under `GL_LEQUAL` so it can go last |
 | `main.rs` | gamepad polling in `about_to_wait`; the platform layer's startup order (panic hook, command line, logging, asset root -- all in `src/app/`); the hidden `--panic-test`; key levels dropped on focus loss |
@@ -1301,9 +1317,10 @@ for a clip time of `openness x T_OPEN`, where `T_OPEN` is the clip's widest mome
 at load by sampling it, so closing is the opening curve played backwards. Collision is two
 triangle meshes: the cabin (floor, sill, walls, ceiling, slab) always; the shut leaves on a
 helper object (`ElevatorDoors`) offered only while the doors are less than half open. The
-fade, the hint, the E press, the ride-start cue for `Sfx::Elevator` and the arrival are
-ambient channels (thread-locals, as `ext::view`'s uniforms are), because nothing in the object
-vector survives the load and nothing in it can reach the engine's HUD or input.
+fade, the E press, the ride-start cue for `Sfx::Elevator` and the arrival are ambient
+channels (thread-locals, as `ext::view`'s uniforms are), because nothing in the object vector
+survives the load and nothing in it can reach the engine's HUD or input; the hint goes through
+the shared line every prompt uses (`ext/hint.rs`), set each step the offer stands.
 
 **Floors.** `elevator::FLOORS` lists the levels an elevator stops at, in riding order, by their
 registry name (`scenes::index_of`); a floor whose scene is not registered is skipped with one
