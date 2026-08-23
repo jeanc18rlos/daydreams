@@ -59,10 +59,7 @@ pub fn has_line_of_sight(
     }
     let dir = delta / dist;
     // Stop just short of the target so its own surface does not count as a blocker.
-    match raycast(objects, eye, dir, dist - 0.05, skip) {
-        Some(_) => false,
-        None => true,
-    }
+    raycast(objects, eye, dir, dist - 0.05, skip).is_none()
 }
 
 /// Full "is it being watched" test: inside the cone *and* not hidden behind something.

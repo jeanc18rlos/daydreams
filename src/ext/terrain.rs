@@ -308,7 +308,7 @@ pub fn generate() -> std::io::Result<()> {
             let mut v = Vector3::new(0.0, gz, 1.0);
             // Gram-Schmidt, so the rectangle's legs are exactly perpendicular.
             let k = u.dot(v) / u.dot(u);
-            v = v - u * k;
+            v -= u * k;
             // Overlap generously. Plates are flat and the ground is not, so neighbours meet at
             // slightly different heights; the overlap is what bridges the step between them.
             let h = cstep * 0.5 * OVERLAP;
@@ -366,7 +366,7 @@ pub fn wrap_player(p: &mut crate::player::Player) {
     // crossing (physical.rs, portal.rs), so leaving prev_pos behind would hand it a segment
     // stretching a whole period across the meadow -- which sweeps the doorway and teleports the
     // player into the sea. Shifting both leaves the segment identical, just relocated.
-    p.base.prev_pos = p.base.prev_pos + shift;
+    p.base.prev_pos += shift;
     // Deliberately NOT Physical::set_position: that collapses prev_pos onto pos, which zeroes the
     // player's step distance for one frame and makes the head-bob stutter at every wrap.
     // Velocity, euler and the camera angles are untouched -- this is a change of chart, not of
