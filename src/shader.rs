@@ -207,10 +207,10 @@ impl Shader {
     /// silent no-ops. Misses are cached too, so a by-name miss is one hash probe.
     pub fn uniform(&self, name: &str) -> Option<glow::UniformLocation> {
         if let Some(loc) = self.uniforms.borrow().get(name) {
-            return loc.clone();
+            return *loc;
         }
         let loc = unsafe { self.gl.get_uniform_location(self.prog, name) };
-        self.uniforms.borrow_mut().insert(name.to_string(), loc.clone());
+        self.uniforms.borrow_mut().insert(name.to_string(), loc);
         loc
     }
 

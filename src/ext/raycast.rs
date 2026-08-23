@@ -109,7 +109,7 @@ pub fn raycast(
         // Triangle-mesh scenery (ext/trimesh.rs) first: it is already in world space.
         if let Some(tm) = o.trimesh() {
             if let Some((t, normal)) = tm.cast_ray(origin, dir, max_dist) {
-                if best.map_or(true, |b| t < b.dist) {
+                if best.is_none_or(|b| t < b.dist) {
                     best = Some(RayHit { dist: t, point: origin + dir * t, normal, object: i });
                 }
             }
@@ -130,7 +130,7 @@ pub fn raycast(
             if t > max_dist {
                 continue;
             }
-            if best.map_or(true, |b| t < b.dist) {
+            if best.is_none_or(|b| t < b.dist) {
                 best = Some(RayHit {
                     dist: t,
                     point: origin + dir * t,

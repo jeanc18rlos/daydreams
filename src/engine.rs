@@ -790,8 +790,7 @@ impl Engine {
                         let mut unit_to_world = world_to_unit.inverse();
 
                         //For each collider
-                        for c in 0..colliders.len() {
-                            let collider = &colliders[c];
+                        for collider in colliders {
                             // PORT: `bool Collide(const Matrix4&, Vector3& push)` -> the push is
                             // returned in an Option (was: Engine.cpp:176-178).
                             if let Some(push) = collider.collide(&local_to_unit) {

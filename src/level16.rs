@@ -60,6 +60,7 @@ const DOOR_POS: Vector3 = Vector3 {
 const FENCE_MARGIN: f32 = 1.0;
 
 /// A door plus the portal that fills it.
+#[allow(clippy::too_many_arguments)] // a scene-construction helper; every argument is a placement
 fn door_with_portal(
     gl: &Rc<glow::Context>,
     res: &Resources,

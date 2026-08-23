@@ -88,6 +88,7 @@ pub fn title_view() -> (Vector3, f32, f32) {
 }
 
 /// A door plus the portal that fills it.
+#[allow(clippy::too_many_arguments)] // a scene-construction helper; every argument is a placement
 fn door_with_portal(
     gl: &Rc<glow::Context>,
     res: &Resources,
