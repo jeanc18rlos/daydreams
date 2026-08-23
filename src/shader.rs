@@ -1,5 +1,7 @@
 //! Port of Shader.h / Shader.cpp.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use glow::HasContext;
@@ -16,6 +18,11 @@ pub struct Shader {
     mvp_id: Option<glow::UniformLocation>,
     mv_id: Option<glow::UniformLocation>,
     gl: Rc<glow::Context>,
+    // EXT: by-name uniform locations, resolved once per program. `Object::draw_impl` sets six
+    // named uniforms per object per pass, and each lookup was a CString allocation plus a
+    // driver call; the locations never change after linking. `None` is cached too, so a
+    // uniform a shader does not declare costs one miss and then nothing.
+    uniforms: RefCell<HashMap<String, Option<glow::UniformLocation>>>,
 }
 
 // PORT: `str.find(pat, from)` has no direct std equivalent (was: str.find("\nin ", ix), Shader.cpp:95).
@@ -75,6 +82,7 @@ impl Shader {
                 mvp_id,
                 mv_id,
                 gl: Rc::clone(gl),
+                uniforms: RefCell::new(HashMap::new()),
             }
         }
     }
@@ -192,10 +200,16 @@ impl Drop for Shader {
 // ─────────────────────────────────────────────────────────────────────────────
 
 impl Shader {
-    /// EXT: look up a uniform by name. `None` if the shader does not declare it (or the
-    /// compiler optimised it away), in which case the setters below are silent no-ops.
+    /// EXT: look up a uniform by name, memoised per program. `None` if the shader does not
+    /// declare it (or the compiler optimised it away), in which case the setters below are
+    /// silent no-ops.
     pub fn uniform(&self, name: &str) -> Option<glow::UniformLocation> {
-        unsafe { self.gl.get_uniform_location(self.prog, name) }
+        if let Some(loc) = self.uniforms.borrow().get(name) {
+            return loc.clone();
+        }
+        let loc = unsafe { self.gl.get_uniform_location(self.prog, name) };
+        self.uniforms.borrow_mut().insert(name.to_string(), loc.clone());
+        loc
     }
 
     /// EXT: set a `vec4` uniform on the currently bound program.
