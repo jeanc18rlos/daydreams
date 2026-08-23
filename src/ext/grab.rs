@@ -83,13 +83,25 @@
 //! is skipped, since its sphere penetrates the wall by construction. Its `p_scale` still
 //! follows the ray, so it is resized by perspective like anything else.
 //!
+//! Such an object is also PICKED by its face, not by its sphere: the ray is tested against
+//! the rectangle on the object's own plane ([`face_rect`], the face of its bounding sphere
+//! at the object's scale), and the pin `k` is taken at the plane's distance -- which is the
+//! distance the first carry will place it at, so nothing changes size on pickup. A sphere
+//! would not do: a door-sized window's sphere is its half-diagonal, reaching nearly two
+//! metres into the hall off a frame thirty centimetres deep, and a ray from inside a sphere
+//! has only its far root to offer (`ray_sphere`), behind the wall, so picking the window from
+//! within its sphere pinned `k` at twice the real distance and halved it on pickup -- which
+//! is exactly where a player stands to adjust it. The hover hand and the hint follow the
+//! same test, so they no longer fire anywhere within the sphere.
+//!
 //! The held object hears about its life through the `ObjectT` hooks: `on_grab` at pickup,
 //! `on_rescale` whenever the carry changes its `p_scale`, `on_release` at the drop with the
 //! hand's velocity over the last rendered frame -- the carried position's displacement over
 //! the frame's length -- so a thrown thing can keep going. And whatever grabbable sits under
 //! the crosshair, other than the held one, may offer a line for the HUD (`pick_hint`).
 
-use crate::ext::raycast::{ray_sphere, raycast};
+use crate::collider::Collider;
+use crate::ext::raycast::{ray_collider, ray_sphere, raycast};
 use crate::object::{Object, ObjectT, RenderCtx, UpdateCtx};
 use crate::physical::Physical;
 use crate::sphere::Sphere;
@@ -613,9 +625,19 @@ pub fn flat_euler(n: Vector3, view: Vector3) -> Vector3 {
     Vector3::new(pitch, yaw, 0.0)
 }
 
+/// The face a flat-placed object is picked by (module docs): the square inscribed in the
+/// great circle of its mesh's bounding sphere, on the object's own XY plane, in the mesh's
+/// units -- the object's `local_to_world` scales it to the face's size. A quad mesh's sphere
+/// is its half-diagonal, so the square is the quad itself; the window's collider-only mesh
+/// carries the frame's half-diagonal for the same reason.
+pub fn face_rect(base: &Object) -> Collider {
+    let half = base.mesh.as_ref().map_or(0.5, |m| m.bound_radius) / std::f32::consts::SQRT_2;
+    Collider::rect(Vector3::zero(), Vector3::unit_x() * half, Vector3::unit_y() * half)
+}
+
 /// Nearest grabbable under the crosshair, as (index, hit distance, bounding radius).
 /// Shared by the hover test and the actual pick so the crosshair can never disagree with what
-/// pressing E will do.
+/// pressing E will do. A flat-placed object is hit on its face, anything else on its sphere.
 fn pick(
     objects: &[Rc<RefCell<dyn ObjectT>>],
     origin: Vector3,
@@ -630,10 +652,13 @@ fn pick(
         let Ok(obj) = handle.try_borrow() else { continue };
         let Some(g) = as_grabbable(&*obj) else { continue };
         let base = obj.base();
-        let world_radius = g * base.p_scale;
-        let Some(t) = ray_sphere(origin, dir, base.pos, world_radius.max(0.05)) else {
-            continue;
+        let hit = if obj.place_flat() {
+            ray_collider(origin, dir, &base.local_to_world(), &face_rect(base)).map(|(t, _)| t)
+        } else {
+            let world_radius = g * base.p_scale;
+            ray_sphere(origin, dir, base.pos, world_radius.max(0.05))
         };
+        let Some(t) = hit else { continue };
         if t > GRAB_REACH {
             continue;
         }
@@ -675,7 +700,7 @@ fn try_grab(
     state.radius = radius;
     state.just_grabbed = true;
     log::debug!(
-        "[grab] picked up object #{idx} at {dist:.2} units (aim and press E again to place it)"
+        "[grab] picked up object #{idx} at {dist:.2} units, p_scale {p_scale:.2} (aim and press E again to place it)"
     );
 }
 
@@ -840,6 +865,66 @@ mod tests {
             (d + radius * p_scale - hit_dist).abs() < 1e-4,
             "object should touch the surface, not overlap it"
         );
+    }
+
+    // ── Picking ──────────────────────────────────────────────────────────────────────────────
+
+    /// A flat-placed grabbable with no mesh: its bounding radius is `bound_radius`'s default
+    /// half unit, so its face is a 0.707-unit square at unit scale.
+    struct Frame {
+        base: Physical,
+    }
+    impl ObjectT for Frame {
+        fn base(&self) -> &Object {
+            &self.base.base
+        }
+        fn base_mut(&mut self) -> &mut Object {
+            &mut self.base.base
+        }
+        fn as_physical(&self) -> Option<&Physical> {
+            Some(&self.base)
+        }
+        fn as_physical_mut(&mut self) -> Option<&mut Physical> {
+            Some(&mut self.base)
+        }
+        fn place_flat(&self) -> bool {
+            true
+        }
+    }
+
+    /// A door-sized frame on a wall, picked from inside its sphere: the pick is the plane's
+    /// distance, not the sphere's far root, and the pin leaves its scale alone; off the
+    /// face the pick misses even though the sphere would not.
+    #[test]
+    fn a_flat_object_is_picked_on_its_face_at_the_planes_distance() {
+        let mut base = Physical::new();
+        base.hit_spheres.push(Sphere::new_at(Vector3::zero(), 0.5));
+        // On a wall at z = 2.06 facing -z (the window's pose), seven times its size.
+        base.base.pos = Vector3::new(0.0, 1.35, 2.06);
+        base.base.euler.y = crate::ext::door::yaw_facing(Vector3::new(0.0, 0.0, 1.0));
+        base.base.p_scale = 7.0;
+        let frame: Rc<RefCell<dyn ObjectT>> = Rc::new(RefCell::new(Frame { base }));
+        let objects = vec![frame];
+        // The eye 1.76 m off the wall, well inside the 3.5 m sphere, looking at the frame.
+        let origin = Vector3::new(0.0, 1.5, 0.3);
+        let dir = Vector3::new(0.0, 0.0, 1.0);
+        let (idx, t, r) = pick(&objects, origin, dir, None).expect("on the face");
+        assert_eq!(idx, 0);
+        assert!((t - 1.76).abs() < 1e-4, "the plane's distance, not the sphere's: {t}");
+        assert_eq!(r, 0.5);
+        let sphere_t = ray_sphere(origin, dir, Vector3::new(0.0, 1.35, 2.06), 3.5).unwrap();
+        assert!(sphere_t > 5.0, "the sphere test would have given the far root: {sphere_t}");
+        // The pin: k = p_scale / distance, so the first carry at that distance keeps 7.
+        let mut state = GrabState::default();
+        try_grab(&objects, origin, dir, &mut state);
+        assert_eq!(state.held, Some(0));
+        assert!((state.ratio * 1.76 - 7.0).abs() < 1e-3, "k {}", state.ratio);
+        assert!((scale_at(state.ratio, 1.76) - 7.0).abs() < 1e-3);
+        // Past the face's edge (0.707 * 7 / 2 = 2.47 m half-side) the pick misses, although the
+        // point is still inside the sphere.
+        let aside = Vector3::new(2.6, 1.5, 0.3);
+        assert!(pick(&objects, aside, dir, None).is_none());
+        assert!(ray_sphere(aside, dir, Vector3::new(0.0, 1.35, 2.06), 3.5).is_some());
     }
 
     // ── Fit maths ────────────────────────────────────────────────────────────────────────────

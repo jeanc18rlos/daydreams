@@ -1637,7 +1637,15 @@ and third portraits, and through it is the Overgrown room -- green and dim, behi
 is locked. It is also a prop: pick it up (E), and it rides the crosshair like the cube or the
 teapot, laid flat against whatever the crosshair hits and resized by perspective; walk back
 from a wall with it and it grows. Unlocked by its key, stood on a wall and grown to a door,
-it is one.
+it is one. A flat-placed prop is picked by its face, not by its bounding sphere
+(`grab::face_rect`): a door-sized window's sphere is its half-diagonal, reaching nearly two
+metres into the hall off a frame thirty centimetres deep, and a ray from inside a sphere has
+only its far root to offer -- behind the wall -- so picking the window from where a player
+stands to adjust it pinned its apparent size at twice the real distance and halved it on
+pickup. The pin is taken at the frame's plane, which is where the first carry places it, so
+`[grab] picked up object #27 at 1.06 units, p_scale 7.00` from a metre off the wall and the
+window is the same door after the press as before it; the hover hand and the hint follow
+the same test.
 
 **How it works.** The far side has to exist for the ported renderer to draw it: the level
 loads the Overgrown room a second time, two kilometres east of the hall (`window::FAR2`,
