@@ -90,6 +90,18 @@ pub struct Args {
     #[arg(long, hide = true, requires = "scene", value_name = "FRAME")]
     pub ride_at: Option<u32>,
 
+    /// With `--scene`: start with the painting's key already in hand (src/ext/key.rs), so
+    /// using it on the window can be driven without the walk to the sweet spot. Hidden: dev
+    /// tooling; the README's "The key in the painting" section has the commands.
+    #[arg(long, hide = true, requires = "scene")]
+    pub hold_key: bool,
+
+    /// With `--scene`: on rendered frame N, press E once as the keyboard would -- the press is
+    /// seen by that frame's first fixed step (a held key's use test) and latched for the grab.
+    /// `--ride-at` is the elevator's own, narrower version. Hidden: dev tooling.
+    #[arg(long, hide = true, requires = "scene", value_name = "FRAME")]
+    pub e_at: Option<u32>,
+
     /// Panic after the first frame, to exercise the crash dialog. Hidden: it is a test of the
     /// platform layer, not a feature.
     #[arg(long, hide = true)]
@@ -135,6 +147,10 @@ pub struct DirectRun {
     pub arrive: bool,
     /// The rendered frame on which E is pressed once (`--ride-at`).
     pub ride_at: Option<i32>,
+    /// `--hold-key`: the key in hand at scene start.
+    pub hold_key: bool,
+    /// The rendered frame on which E is pressed once, as a key press (`--e-at`).
+    pub e_at: Option<i32>,
 }
 
 /// What the game starts on instead of the title, when a dev flag says so.
@@ -240,6 +256,8 @@ impl Args {
             hold: self.held_keys(),
             arrive: self.arrive,
             ride_at: self.ride_at.map(count),
+            hold_key: self.hold_key,
+            e_at: self.e_at.map(count),
         })
     }
 
@@ -291,6 +309,7 @@ mod tests {
         assert_eq!(run.scene, Some(DirectScene::Index(14)));
         assert_eq!((run.frames, run.yaw, run.pitch), (120, Some(30.0), Some(-5.0)));
         assert!(run.hold.is_empty() && !run.arrive && run.ride_at.is_none());
+        assert!(!run.hold_key && run.e_at.is_none());
         // `--shot` alone is a run too: the title screen's photograph.
         let a = Args::try_from_tokens(&["--shot", "title.bmp"]).unwrap();
         let run = a.direct_run().expect("a dev run");
@@ -374,6 +393,17 @@ mod tests {
         assert_eq!(a.ride_at, Some(30));
         assert_eq!(a.direct_run().unwrap().ride_at, Some(30));
         assert!(Args::try_from_tokens(&["--scene", "16", "--ride-at", "-1"]).is_err());
+    }
+
+    #[test]
+    fn hold_key_and_e_at_need_a_scene() {
+        assert!(Args::try_from_tokens(&["--hold-key"]).is_err());
+        assert!(Args::try_from_tokens(&["--e-at", "30"]).is_err());
+        let a = Args::try_from_tokens(&["--scene", "16", "--hold-key", "--e-at", "30"]).unwrap();
+        assert!(a.hold_key && a.e_at == Some(30));
+        let run = a.direct_run().unwrap();
+        assert!(run.hold_key && run.e_at == Some(30));
+        assert!(Args::try_from_tokens(&["--scene", "16", "--e-at", "-1"]).is_err());
     }
 
     #[test]

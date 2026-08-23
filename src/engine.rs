@@ -97,6 +97,9 @@ pub struct Engine {
     dev_hold: RefCell<Vec<usize>>,
     // EXT: dev tooling -- `--ride-at N`: rendered frames left until E is pressed once.
     dev_ride_at: Cell<Option<i32>>,
+    // EXT: dev tooling -- `--e-at N`: rendered frames left until E is pressed once as the
+    // keyboard would press it (the `key_press` slot, which the first fixed step sees).
+    dev_e_at: Cell<Option<i32>>,
     // EXT: this frame's gamepad edges, handed in by main.rs before run_frame.
     pad_events: Cell<crate::ext::gamepad::PadEvents>,
     // EXT: dev tooling -- wall time per rendered frame, reported on the `[shot]` line.
@@ -200,6 +203,7 @@ impl Engine {
             shot_after_frames: Cell::new(0),
             dev_hold: RefCell::new(Vec::new()),
             dev_ride_at: Cell::new(None),
+            dev_e_at: Cell::new(None),
             pad_events: Cell::new(crate::ext::gamepad::PadEvents::default()),
             frame_clock: RefCell::new(crate::ext::frametime::FrameClock::new()),
             occlusion: RefCell::new(crate::ext::occlusion::Occlusion::new(gl)),
@@ -265,6 +269,16 @@ impl Engine {
                 self.dev_ride_at.set(None);
             } else {
                 self.dev_ride_at.set(Some(left - 1));
+            }
+        }
+        // EXT: `--e-at` is the keyboard's E itself: the press slot, which the latch below
+        // picks up for the grab and the first fixed step reads (src/ext/key.rs).
+        if let Some(left) = self.dev_e_at.get() {
+            if left <= 1 {
+                self.input.borrow_mut().key_press[b'E' as usize] = true;
+                self.dev_e_at.set(None);
+            } else {
+                self.dev_e_at.set(Some(left - 1));
             }
         }
         // EXT: and the dev frame-time record. Ticked here, at the top, so one interval spans a
@@ -505,12 +519,27 @@ impl Engine {
     /// so the shot can photograph the player walking or running and the `[shot]` position
     /// print how far they travelled. `arrive` loads the scene as an elevator ride would, and
     /// then the look is the cabin's unless a yaw or pitch was asked for; `ride_at` presses E
-    /// on that rendered frame (`--arrive`, `--ride-at`, src/ext/elevator.rs).
+    /// on that rendered frame (`--arrive`, `--ride-at`, src/ext/elevator.rs). `hold_key`
+    /// starts with the painting's key in hand and `e_at` presses E as a key on that frame
+    /// (`--hold-key`, `--e-at`, src/ext/key.rs).
     pub fn start_direct(&self, run: crate::app::cli::DirectRun) {
         use crate::app::cli::{DirectRun, DirectScene};
-        let DirectRun { scene, shot, frames, yaw, pitch, pos, hold, arrive, ride_at } = run;
+        let DirectRun {
+            scene,
+            shot,
+            frames,
+            yaw,
+            pitch,
+            pos,
+            hold,
+            arrive,
+            ride_at,
+            hold_key,
+            e_at,
+        } = run;
         *self.dev_hold.borrow_mut() = hold;
         self.dev_ride_at.set(ride_at);
+        self.dev_e_at.set(e_at);
         if let Some(scene) = scene {
             self.ext.borrow_mut().menu.close();
             if arrive {
@@ -536,6 +565,15 @@ impl Engine {
                     .borrow_mut()
                     .base
                     .set_position(crate::vector::Vector3::new(p[0], p[1], p[2]));
+            }
+            // After the look and the position, so the key is put in front of the eye.
+            if hold_key {
+                crate::ext::key::dev_hold(
+                    &self.res,
+                    &mut self.v_objects.borrow_mut(),
+                    &mut self.ext.borrow_mut().grab,
+                    &self.player.borrow().cam_to_world(),
+                );
             }
         }
         *self.shot_path.borrow_mut() = shot;
