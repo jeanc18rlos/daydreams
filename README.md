@@ -965,6 +965,32 @@ the ported `texture` shader's one fixed light had left it near black from most d
 The lamps are overhead, so the key is pitched a quarter of a right angle about its length
 toward them; facing the spot squarely, edge-on to the light, it came out dull.
 
+**Testing the puzzle.** The dev flags press E once a run (`--e-at`, or `--ride-at`, the
+elevator's), so the puzzle is driven in steps, each headless, windowed and muted, with
+`DAYDREAMS_NO_DIALOG=1`; every number below is what the runs print.
+
+```sh
+# 1. From the sweet spot, aimed at the painted key (the collar, not the canvas centre):
+#    by frame 60 the key floats in front of the canvas; E at 60 takes it. Expect
+#    `[grab] picked up object #30 at 2.27 units, p_scale 1.00` (--log-level debug) and
+#    the key in hand at (996.76, 1.35, 1.98), in front of the picture at scale 1.06.
+daydreams --windowed --mute --scene 16 --pos 994.4,1.5,1.55 --yaw -100.4 --pitch -3.7 --e-at 60 --frames 90 --shot take.bmp
+# 2. Key in hand at the window, E at 30: `[key] used on the window: unlock requested`; by
+#    frame 60 the glass is clear, the key gone, and the hover says TOO SMALL - GRAB IT AND
+#    STEP BACK.
+daydreams --windowed --mute --scene 16 --hold-key --pos 987,1.5,1.2 --yaw 180 --e-at 30 --frames 60 --shot use.bmp
+# 3. Unlocked and grown to a door, walk through: `[load] scene 18 in 3 ms` and the `[shot]`
+#    at (-3.82, 1.50, -9.13), the Overgrown level's own coordinates, walked on from the
+#    partner at (-8.86, 1.35, -9.3).
+daydreams --windowed --mute --scene 16 --unlock-window --window-scale 7 --pos 987,1.5,1.0 --yaw 180 --forward --frames 240 --shot through.bmp
+# 4. The props, after the merge (Real physics has the rest and drop runs): walked into,
+#    the apple stays a third of a metre ahead at its resting height, frame 30 to 120.
+daydreams --windowed --mute --scene 16 --pos 998.5,1.5,0.6 --yaw 90 --forward --frames 120 --shot push.bmp
+# 5. The elevator still leaves the Backrooms: `[load] scene 17`, the shot in the Pool
+#    Rooms, no `[prop]` line (their bodies went with the scene).
+daydreams --windowed --mute --scene 16 --pos 995.23,1.5,-8.25 --yaw 180 --ride-at 30 --frames 600 --shot ride.bmp
+```
+
 ### Per-frame room logic — `ext/room.rs`
 
 The ported `Scene` trait has exactly one method, `Load` (`Scene.h:7-9`) — scenes build objects
@@ -1880,6 +1906,8 @@ The key's runs, from the Backrooms (scene 16):
 # first frame, TAKE THE KEY shows, and by frame 60 the real key floats in front of the canvas
 cargo run --release -- --windowed --mute --scene 16 --pos 994.4,1.5,1.55 --yaw -100.9 --pitch 2.2 --shot out.bmp --frames 1
 cargo run --release -- --windowed --mute --scene 16 --pos 994.4,1.5,1.55 --yaw -100.9 --pitch 2.2 --shot out.bmp --frames 60
+# Taking it: aimed at the key itself (yaw -100.4, pitch -3.7), E on frame 60 -- see "Testing
+# the puzzle" under "The key in the painting" for the whole chain
 # Square on to the portrait: the smear
 cargo run --release -- --windowed --mute --scene 16 --pos 997,1.5,0.3 --yaw 180 --pitch 3 --shot out.bmp --frames 60
 # A metre off the spot: nothing emerges
