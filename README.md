@@ -898,9 +898,12 @@ out where their period falls under a couple of pixels. It is lit flat, with the 
 squared-distance fog, so it sits in the hall. The frame is four `cube.obj` bars in `gold.bmp`
 through the ported `texture` shader, each rolled 45 degrees about its length so what faces the
 room is a ridge between two bevels: a moulding that the shader's fixed light models on either
-wall, where a flat slat facing away from that light was near black. Paintings collide with
-nothing. The expression state machine, the gaze memory and the through-the-door test are unit
-tested with a fake clock and detached portals.
+wall, where a flat slat facing away from that light was near black. The canvas is also a
+rectangle collider (`Mesh::colliders_only`, `Collider::rect`, nothing drawn from it -- the
+quad is drawn through the portrait shader): a ray down the crosshair stops at the picture,
+not at the wall behind it, which is what puts a held thing in front of the portrait rather
+than behind it. The expression state machine, the gaze memory and the through-the-door test
+are unit tested with a fake clock and detached portals.
 
 ### The key in the painting — `ext/key.rs`, `ext/painting.rs`, `Shaders/painting.frag`
 
@@ -925,8 +928,14 @@ Stand in the spot -- within 0.45 m of it, looking within 25 degrees of the canva
 key (`ext::key::Key`, built at load by the painting and kept) is spawned on the canvas at the
 painted key's spot (`room::request_spawn`) and comes out of it over half a second, growing
 from nothing as the painted one fades (`Emergence`; the `key_state` uniform is the same
-blend). It lies in the picture plane facing the spot, so from there it is the painted key
-stepped off the canvas, ten centimetres out along the wall. Step out of the spot before
+blend). It lies in the picture plane facing the spot and comes out toward the spot, along
+the line of sight, as far as it takes to clear the wall by seven centimetres -- not straight
+out along the wall's normal: from that grazing view a key ten centimetres off the wall is
+seen against the wall seventy centimetres further along, past the frame, and the grab's
+placement ray cast through it would put the taken key there, behind the frame's upright.
+Along the line of sight it stays over the spot where it was painted, the ray through it
+hits the canvas (a collider), and the taken key is held just off the picture, at the size it
+was. Step out of the spot before
 taking it and it sinks back and is painted again (`room::request_remove`); take it -- it is a
 grabbable, one hit sphere, the engine's own gravity and collision once it is loose; its mesh
 is `Meshes/key.obj`, extruded by `tools/gen_key.py` from the same numbers as the shader's

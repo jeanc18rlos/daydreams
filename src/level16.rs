@@ -195,7 +195,7 @@ impl Scene for Level16 {
                 let centre = Vector3::new(x, HEIGHT, wall_z + facing_z * WALL_GAP);
                 let facing = Vector3::new(0.0, 0.0, facing_z);
                 let key = (seed == KEY_SEED).then_some(KEY_SPEC);
-                Painting::new(res, centre, facing, SIZE, seed, watch.clone(), key)
+                Painting::new(gl, res, centre, facing, SIZE, seed, watch.clone(), key)
             };
             let north =
                 [981.0, 985.0, 989.0, 993.0, 997.0].into_iter().map(|x| (x, HALL_NORTH_Z, -1.0));

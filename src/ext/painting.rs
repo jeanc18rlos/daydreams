@@ -3,8 +3,8 @@
 //!
 //! A `Painting` is a canvas -- the ported `quad.obj` drawn with `Shaders/painting.*`, which
 //! paints the sitter procedurally -- inside a gilt frame of four thin `cube.obj` bars drawn the
-//! way any ported prop is. It hangs flush on a wall, collides with nothing, and has two
-//! behaviours built on two things the engine already does:
+//! way any ported prop is. It hangs flush on a wall and has two behaviours built on two
+//! things the engine already does:
 //!
 //! * **The eyes follow the camera of the pass.** Every draw receives the pass camera's eye
 //!   (`RenderCtx.eye`); the painting turns that into a point in its own canvas metres and the
@@ -31,7 +31,7 @@
 //! in the sweet spot and look at the canvas ([`KeySpec`], [`armed`]) and the paint catches
 //! the light, the HUD says so, and a real key -- `ext::key::Key`, built at load and kept --
 //! is spawned on the canvas at the painted key's spot and comes out of it over [`EMERGE`]
-//! seconds, growing as the painted one fades ([`Emergence`]). Step out of the spot before
+//! seconds toward the viewer, growing as the painted one fades ([`Emergence`]). Step out of the spot before
 //! taking it and it sinks back and is unpainted again; take it (the key's `on_grab` sets a
 //! flag both share) and the painting's key is gone for good.
 //!
@@ -51,6 +51,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::camera::Camera;
+use crate::collider::Collider;
 use crate::ext::backrooms::WALL_FOG;
 use crate::ext::cull::object_sphere;
 use crate::ext::door::{yaw_facing, DoorLink};
@@ -58,6 +59,7 @@ use crate::ext::key::Key;
 use crate::ext::visibility::{has_line_of_sight, in_view_cone, WATCH_HALF_ANGLE};
 use crate::ext::{hint, room};
 use crate::game_header::GH_DT;
+use crate::mesh::Mesh;
 use crate::object::{Object, ObjectT, RenderCtx, UpdateCtx};
 use crate::portal::{Portal, Warp};
 use crate::resources::Resources;
@@ -185,8 +187,9 @@ pub struct Watch {
 }
 
 impl Watch {
-    /// Snapshot the objects and portals built so far. Paintings themselves carry no colliders,
-    /// so whether they are in the list makes no difference to the ray.
+    /// Snapshot the objects and portals built so far. The paintings are built after it, so
+    /// they are not in the list; their canvas rectangles would not matter to the ray anyway,
+    /// which stops short of a probe point that already stands off the canvas (`PROBE_OUT`).
     pub fn new(objs: &PObjectVec, portals: &PPortalVec) -> Watch {
         Watch {
             blockers: Rc::from(objs.as_slice()),
@@ -264,8 +267,16 @@ fn beyond(here: Vector3, warp: &Warp, point: Vector3) -> bool {
 
 /// Seconds the key takes to come out of the canvas, and to sink back.
 pub const EMERGE: f32 = 0.5;
-/// How far in front of the canvas the key floats once it is out, along the wall's normal.
-pub const KEY_OUT: f32 = 0.10;
+/// How far off the canvas the key floats once it is out, measured along the wall's normal:
+/// its half-length and a margin, so that nothing of it is left in the wall. It does not
+/// travel along the normal, though, but toward the sweet spot (`KeyRig::out`): the view from
+/// the spot is so grazing that a key ten centimetres straight out of the wall is seen against
+/// the wall seventy centimetres further along, past the frame -- and that is where the grab's
+/// placement ray, cast through the key, would hit and put it once taken: behind the frame's
+/// upright, gone as far as the player can tell. Coming out along the line of sight the key
+/// stays in front of the spot where it was painted, the ray through it hits the canvas (a
+/// collider, `Painting::canvas`), and the taken key is held just off the picture.
+pub const KEY_OUT: f32 = 0.07;
 /// Where the key sits on the picture plane, in its (u, v) metres from the canvas centre:
 /// over the sitter's collar, and a little toward the far end of the canvas. The sweet spot's
 /// view is grazing enough that the frame's near upright hides the canvas past x = 0.18 of
@@ -290,6 +301,20 @@ pub struct KeySpec {
     pub radius: f32,
     /// How far off the canvas centre the look may be, in radians (a half-angle).
     pub cone: f32,
+}
+
+/// Where the key goes as it emerges, relative to its painted spot `rest`: along the line to
+/// the sweet spot `view`, as far as it takes to stand [`KEY_OUT`] off the wall whose normal
+/// is `facing` (see [`KEY_OUT`] for why not along the normal). A spot in the wall's own plane
+/// -- no such painting; a guard -- sends it straight out instead.
+pub fn emergence_path(rest: Vector3, view: Vector3, facing: Vector3) -> Vector3 {
+    let facing = facing.normalized_safe();
+    let to_view = (view - rest).normalized_safe();
+    let along = to_view.dot(facing);
+    if along < 0.05 {
+        return facing * KEY_OUT;
+    }
+    to_view * (KEY_OUT / along)
 }
 
 /// Whether the player is in the sweet spot: eye within `radius` of the view point and the
@@ -431,8 +456,9 @@ struct KeyRig {
     spec: KeySpec,
     /// The sweet spot in canvas-plane metres: the shader's `key_view`.
     view_local: Vector3,
-    /// Where the painted key is, on the canvas, in the world; and how far the real one comes
-    /// out from there when fully emerged (along the wall's normal).
+    /// Where the painted key is, on the canvas, in the world; and where the real one is
+    /// relative to that when fully emerged: toward the sweet spot, far enough to clear the
+    /// wall by [`KEY_OUT`].
     rest: Vector3,
     out: Vector3,
     key: Rc<RefCell<Key>>,
@@ -444,7 +470,14 @@ struct KeyRig {
 }
 
 pub struct Painting {
+    /// The canvas's placement, and as its mesh the canvas as a rectangle collider only: what
+    /// a ray (`ext/raycast.rs`) and the grab's fit stop at. The portrait itself is drawn from
+    /// `quad` through the painting shader. Without the collider the grab's placement ray goes
+    /// through the picture to the scanned wall behind it, and the key taken from the sweet
+    /// spot is put there -- behind the canvas, gone as far as the player can see.
     canvas: Object,
+    /// The ported `quad.obj`, drawn with `canvas`'s transform.
+    quad: Rc<Mesh>,
     bars: [Object; 4],
     /// World to canvas metres, without the canvas's scale: what the shader's gaze wants.
     rigid_w2l: Matrix4,
@@ -468,6 +501,7 @@ impl Painting {
     /// normal (toward the room) is `facing`; `seed` picks the sitter and `watch` is what it
     /// decides "being looked at" through. With a `key`, the sitter wears one (module docs).
     pub fn new(
+        gl: &Rc<glow::Context>,
         res: &Resources,
         centre: Vector3,
         facing: Vector3,
@@ -491,7 +525,7 @@ impl Painting {
             // canvas, which is where the smear is centred.
             let (px, py) = to_canvas(view_local, KEY_ON_PLANE);
             let rest = rigid.mul_point(Vector3::new(px, py, CANVAS_DEPTH));
-            let out = facing.normalized_safe() * KEY_OUT;
+            let out = emergence_path(rest, spec.view, facing);
             // The key lies in the picture plane -- its length along u, its breadth along v,
             // facing the sweet spot -- so from there it is the painted key, stepped off the
             // canvas; less the pitch about u that turns its face to the light (`KEY_PITCH`).
@@ -515,8 +549,17 @@ impl Painting {
             }
         });
 
+        let quad = res.acquire_mesh("quad.obj");
         let mut canvas = Object::new();
-        canvas.mesh = Some(res.acquire_mesh("quad.obj"));
+        // The quad's rectangle, in the canvas's own space where the quad spans +-1 and the
+        // scale below makes it the picture's size; the quad's radius so the cull still sees
+        // something to draw (`object_sphere`).
+        let mut collider = Mesh::colliders_only(
+            gl,
+            vec![Collider::rect(Vector3::zero(), Vector3::unit_x(), Vector3::unit_y())],
+        );
+        collider.bound_radius = quad.bound_radius;
+        canvas.mesh = Some(Rc::new(collider));
         canvas.shader = Some(res.acquire_shader("painting"));
         canvas.pos = rigid.mul_point(Vector3::new(0.0, 0.0, CANVAS_DEPTH));
         canvas.euler.y = yaw;
@@ -550,6 +593,7 @@ impl Painting {
 
         Painting {
             canvas,
+            quad,
             bars,
             rigid_w2l,
             size,
@@ -623,7 +667,7 @@ impl ObjectT for Painting {
             return;
         }
         let shader = self.canvas.shader.as_ref().expect("set in new");
-        let mesh = self.canvas.mesh.as_ref().expect("set in new");
+        let mesh = &self.quad;
         let local_to_world = self.canvas.local_to_world();
         let mvp = cam.matrix() * local_to_world;
         let eye = ctx.eye;
@@ -1004,6 +1048,44 @@ mod tests {
         ]);
         assert_eq!(ev, [KeyEvent::Spawn, KeyEvent::Remove, KeyEvent::Spawn]);
         assert_eq!(e.phase(), KeyPhase::Emerging);
+    }
+
+    /// The emerged key, seen from the spot, is where it was painted; a ray from the spot
+    /// through it lands on the canvas at the painted spot, inside the picture, not on the
+    /// wall past the frame -- which is where the grab would put the taken key.
+    #[test]
+    fn the_key_emerges_toward_the_spot_and_stays_over_its_painted_spot() {
+        use crate::ext::raycast::ray_collider;
+        let centre = Vector3::new(997.0, 1.6, 2.05);
+        let facing = Vector3::new(0.0, 0.0, -1.0);
+        let view = Vector3::new(994.4, 1.5, 1.55);
+        // The painted key's spot on the canvas, in the world, as `Painting::new` finds it.
+        let rigid = Matrix4::trans(centre) * Matrix4::rot_y(yaw_facing(facing));
+        let rigid_w2l = Matrix4::rot_y(-yaw_facing(facing)) * Matrix4::trans(-centre);
+        let view_local = rigid_w2l.mul_point(view) - Vector3::new(0.0, 0.0, CANVAS_DEPTH);
+        let (px, py) = to_canvas(view_local, KEY_ON_PLANE);
+        let rest = rigid.mul_point(Vector3::new(px, py, CANVAS_DEPTH));
+        let out = emergence_path(rest, view, facing);
+        // Clear of the wall by KEY_OUT, and on the line to the eye.
+        assert!((out.dot(facing) - KEY_OUT).abs() < 1e-5, "{out:?}");
+        assert!(out.normalized().dot((view - rest).normalized()) > 0.9999);
+        // The grab's ray, eye through the floating key, meets the canvas rectangle within
+        // the picture (the canvas is the 0.8 x 1.0 quad, +-1 scaled); straight out along the
+        // normal it would miss the picture by a third of a metre.
+        let mut canvas = Object::new();
+        canvas.pos = rigid.mul_point(Vector3::new(0.0, 0.0, CANVAS_DEPTH));
+        canvas.euler.y = yaw_facing(facing);
+        canvas.scale = Vector3::new(0.4, 0.5, 1.0);
+        let rect = Collider::rect(Vector3::zero(), Vector3::unit_x(), Vector3::unit_y());
+        let hits = |key: Vector3| {
+            ray_collider(view, (key - view).normalized(), &canvas.local_to_world(), &rect)
+        };
+        let (t, _) = hits(rest + out).expect("the ray through the emerged key hits the canvas");
+        assert!((t - (rest - view).mag()).abs() < 0.02, "at the painted spot: {t}");
+        assert!(hits(rest + facing * 0.10).is_none(), "straight out it misses the picture");
+        // Nothing in the picture plane's own frame: a spot in the wall's plane goes straight out.
+        let flat = emergence_path(rest, rest + Vector3::new(-1.0, 0.0, 0.0), facing);
+        assert!((flat - facing * KEY_OUT).mag() < 1e-6);
     }
 
     #[test]
