@@ -103,6 +103,7 @@ impl Scene for GlbViewer {
             fit: Fit::Identity,
             max_map: MAP,
             translucent: &translucent,
+            metallic_override: &[],
         };
         let followers: Vec<(&str, &str)> =
             moving.iter().map(|n| (n.as_str(), n.as_str())).collect();
