@@ -393,6 +393,13 @@ impl Engine {
             self.cur_ticks.set(new_ticks);
         }
 
+        // EXT: a scene a room asked for (the elevator's ride, src/ext/room.rs), loaded HERE --
+        // after the loop, so no step ever sees the object vector it is iterating replaced
+        // under it -- and before the extension update, whose grab state a load clears.
+        if let Some(ix) = crate::ext::room::take_scene_load() {
+            self.load_scene(ix);
+        }
+
         // EXT: forced-perspective grab. Runs once per rendered frame rather than per 500 Hz
         // physics step -- it casts a ray, and the held object's transform only needs to be
         // right at draw time.
@@ -889,6 +896,13 @@ impl Engine {
         // cannot fight a push out of a hillside either.
         crate::ext::room::apply_respawn(&mut self.player.borrow_mut());
         crate::ext::terrain::wrap_player(&mut self.player.borrow_mut());
+        // EXT: and a room's request to be rid of portals (the Backrooms' one-way door). Also
+        // after the portal pass, which may have just warped the player through one of them;
+        // the one-frame-late occlusion results are keyed on portal indices, which have just
+        // changed, so they are forgotten.
+        if crate::ext::room::apply_remove_portals(&mut self.v_portals.borrow_mut()) {
+            self.occlusion.borrow_mut().reset();
+        }
     }
 
     // void Engine::Render(const Camera& cam, GLuint curFBO, const Portal* skipPortal)
