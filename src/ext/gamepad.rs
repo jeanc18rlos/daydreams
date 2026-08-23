@@ -18,6 +18,7 @@
 //! | `RightTrigger2` [R2]     | Grab / release (alternate)                     |
 //! | `RightTrigger` [R1]      | Hold: rotate the held object with the right stick |
 //! | `LeftTrigger` [L1]       | (reserved as a modifier; currently unbound)    |
+//! | `LeftThumb` [L3]         | Sprint: press to toggle, or hold (src/ext/sprint.rs) |
 //! | D-Pad left / right       | Previous / next scene                          |
 //! | D-Pad up / down          | Move the menu selection                        |
 //! | `East` [Circle]          | Menu: back                                     |
@@ -81,6 +82,10 @@ pub struct PadEvents {
     pub pause: bool,
     pub toggle_fullscreen: bool,
     pub toggle_mute: bool,
+    /// EXT: L3 went down this frame. Flips sprint's toggle mode (src/ext/sprint.rs); the
+    /// button's *level* goes out separately as `Input::pad_sprint`, the same split as R1's
+    /// `pad_rotate_mod`, because the stick click is both a tap-to-toggle and a hold.
+    pub sprint: bool,
 }
 
 #[allow(dead_code)] // EXT: convenience API.
@@ -110,6 +115,7 @@ struct ButtonState {
     pause: bool,
     fullscreen: bool,
     mute: bool,
+    sprint: bool,
 }
 
 pub struct Gamepads {
@@ -239,6 +245,7 @@ impl Gamepads {
             cur.pause |= pressed(gilrs::Button::Start);
             cur.mute |= pressed(gilrs::Button::Select);
             cur.fullscreen |= pressed(gilrs::Button::Mode);
+            cur.sprint |= pressed(gilrs::Button::LeftThumb);
         }
 
         // ── Analog axes into the ported input model ────────────────────────────────────────
@@ -261,6 +268,8 @@ impl Gamepads {
         // Rotate modifier: a level, published raw. It is deliberately NOT edge-detected and
         // raises no event; `Rotate::begin_frame` samples it alongside the keyboard modifiers.
         input.pad_rotate_mod = rotate_mod;
+        // EXT: sprint level, published raw for the same reason; the edge is raised below.
+        input.pad_sprint = cur.sprint;
 
         // ── Rising-edge detection for the digital actions ──────────────────────────────────
         events.grab = cur.grab && !self.prev.grab;
@@ -275,6 +284,7 @@ impl Gamepads {
         events.pause = cur.pause && !self.prev.pause;
         events.toggle_fullscreen = cur.fullscreen && !self.prev.fullscreen;
         events.toggle_mute = cur.mute && !self.prev.mute;
+        events.sprint = cur.sprint && !self.prev.sprint;
         self.prev = cur;
 
         events

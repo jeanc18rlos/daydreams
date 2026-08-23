@@ -26,6 +26,16 @@ pub struct Input {
     // poll by src/ext/gamepad.rs and read by src/ext/rotate.rs. Level, not edge: it mirrors
     // `mouse_button[2]` / `key[b'R']`, the keyboard-side modifiers.
     pub pad_rotate_mod: bool,
+    // EXT: raw state of the pad's sprint button (L3 / `Button::LeftThumb`), refreshed every
+    // poll by src/ext/gamepad.rs. A level like `pad_rotate_mod`; the press *edge* that flips
+    // toggle mode travels separately, as `PadEvents::sprint`.
+    pub pad_sprint: bool,
+    // EXT: this frame's resolved sprint level -- hold, toggle and auto-cancel already folded
+    // in by `ext::sprint::Sprint::resolve`, which the engine runs once per rendered frame
+    // before the fixed-step loop. `Player::update_player` reads only this, never the raw keys,
+    // so the ported movement code does not have to know which input produced it. The title
+    // backdrop swaps in a blank `Input`, where it is false.
+    pub sprint: bool,
 
     //Bindings
     //TODO:
@@ -53,6 +63,9 @@ impl Input {
             pad_look_y: 0.0,
             // EXT: rotate modifier.
             pad_rotate_mod: false,
+            // EXT: sprint -- raw pad level and the engine-resolved level.
+            pad_sprint: false,
+            sprint: false,
         }
     }
 
@@ -133,6 +146,9 @@ pub fn key_index(k: winit::keyboard::KeyCode) -> Option<usize> {
         KeyCode::KeyM => b'M',
         // EXT: rotate-modifier on keyboard (hold R + mouse).
         KeyCode::KeyR => b'R',
+        // EXT: sprint (hold). Both Shifts land in the Win32 VK_SHIFT slot (16), the slot the
+        // C++ WndProc's `wParam & 0xFF` indexing would have given them (Engine.cpp:295-313).
+        KeyCode::ShiftLeft | KeyCode::ShiftRight => 16,
         // EXT: menu navigation, in the Win32 virtual-key slots the C++ layout implies
         // (VK_UP/DOWN/LEFT/RIGHT = 38/40/37/39, VK_RETURN = 13, VK_BACK = 8, VK_ESCAPE = 27).
         KeyCode::ArrowUp => 38,

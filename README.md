@@ -55,7 +55,7 @@ collision pass is `O(objects² × hitSpheres × colliders)`, so `Cargo.toml` set
 dev profile to keep it real-time. Release is still recommended.
 
 ```sh
-cargo test        # 116 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, and the extensions' pure logic
+cargo test        # 144 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, and the extensions' pure logic
 ```
 
 ## Controls
@@ -64,6 +64,7 @@ cargo test        # 116 tests: Matrix4/Vector3 algebra, the .obj parser against 
 | --- | --- |
 | Mouse | Look |
 | `W` `A` `S` `D` | Walk |
+| `Shift` (hold) | Run — see [Running](#running--extsprintrs) |
 | `1` – `7` | Load scene 1–7 |
 | `Alt` + `Enter` | Toggle fullscreen |
 | `Esc` | Quit |
@@ -650,6 +651,30 @@ path, so visibility is computed analytically instead: a view-cone test plus a li
 raycast. That keeps the mechanic entirely inside `ext/`, and gives the answer during `update` —
 a frame earlier than the render pass could report it.
 
+### Running — `ext/sprint.rs`
+
+CodeParade's player has one speed. Holding `Shift` raises the `GH_WALK_SPEED` cap to 1.8× and
+`GH_WALK_ACCEL` to 1.5×, and quickens the head-bob by 1.35× so the cadence reads as a run. The
+multipliers are exactly `1.0` when not sprinting, so the walk is bit-identical to the port — a
+test pins both caps.
+
+The pad gets the console idiom instead of a hold: clicking L3 toggles the run and letting the
+stick return to centre ends it, so stopping never leaves a toggle armed for the next push (a
+click while standing still is ignored for the same reason). L3 held also works, and a `Shift`
+press drops a pad toggle, so a player who switches instruments mid-run is never carried by a
+toggle they cannot see. The decision is made once per rendered frame, before the fixed-step loop
+— `Input::end_frame` zeroes the Shift edge inside it — and written to `Input::sprint`, which is
+all the ported player reads.
+
+Running widens the vertical field of view by 8°, eased with a frame-rate-independent exponential
+(150 ms time constant) through the same `view::set_fov` the dolly zoom was built for. The pause
+menu leaves the kick wherever it was — the world is frozen — and it resumes its ease on the
+next played frame; a scene load resets it with the rest of the FOV. Footfalls are counted off
+the bob phase (two per cycle) and fire `Sfx::Footstep`, at most once per rendered frame.
+
+A key held across an alt-tab never sees its release, so every key level is dropped when the
+window loses focus — a stuck `Shift` would otherwise run the player until it was pressed again.
+
 ### Per-frame room logic — `ext/room.rs`
 
 The ported `Scene` trait has exactly one method, `Load` (`Scene.h:7-9`) — scenes build objects
@@ -675,6 +700,7 @@ The same table is in the game, under **Options → Controls**, alongside the key
 | Control | Action |
 |---------|--------|
 | Left stick | Move (analog) |
+| L3 (stick click) | Run: press to toggle, hold to hold; ends when the stick returns to centre |
 | Right stick | Look |
 | Cross / Square / R2 | Grab / release |
 | R1 (hold) | Rotate the held object with the right stick |
@@ -716,7 +742,8 @@ track costs about the same whether it runs one minute or twenty. The trade is th
 frame rather than letting the music stop with no explanation.
 
 **Sound effects** — drop files into `assets/sfx/` named `grab`, `release`, `portal`, `land` or
-`footstep`. The call sites are already wired; the files simply do not exist yet.
+`footstep`. `grab`, `release` and `footstep` have call sites; `portal` and `land` are loadable
+but nothing fires them yet. None of the files ship.
 
 Everything degrades to a no-op. No audio device, no `assets/` directory, or no files, and the
 engine still starts and runs silently — a demo should not refuse to launch over a missing sound
@@ -816,13 +843,13 @@ Small additions, each tagged `// EXT:`:
 | File | Hook |
 |------|------|
 | `collider.rs` | read-only `mat()` accessor, so rays can transform the rectangle to world space |
-| `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`8`–`=` key mappings |
-| `player.rs` | stick axes added to the keyboard move and look vectors |
+| `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`8`–`=`/`'` key mappings; `Shift` into the `VK_SHIFT` slot and the sprint levels |
+| `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
 | `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum and eye, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery |
-| `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, scene-load notification; the portal frustum pre-test and query pool; the old scene kept alive across `load_scene`; the triangle-mesh rounds in the collision pass |
+| `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and query pool; the old scene kept alive across `load_scene`; the triangle-mesh rounds in the collision pass |
 | `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4` |
 | `props.rs` | `Sky::draw` takes the eye from the inverse it already computes |
-| `main.rs` | gamepad polling in `about_to_wait`; `--no-vsync` |
+| `main.rs` | gamepad polling in `about_to_wait`; `--no-vsync`; key levels dropped on focus loss |
 
 ### One bug this surfaced
 

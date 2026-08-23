@@ -430,6 +430,16 @@ impl ApplicationHandler for App {
                         self.cursor_locked = locked;
                     }
                 }
+                // EXT: a key held across an alt-tab never sees its release -- the OS delivers
+                // it to whichever window has focus by then -- so its level would stay set
+                // until it was pressed again: a stuck Shift runs the player, a stuck W walks
+                // them. Dropping every level on focus loss is the only fix that needs no
+                // per-key bookkeeping; `key_press` is left alone, it is zeroed each step.
+                if !focused {
+                    if let Some(engine) = self.engine.as_ref() {
+                        engine.with_input(|inp| inp.key = [false; 256]);
+                    }
+                }
             }
 
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
