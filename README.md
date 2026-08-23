@@ -114,8 +114,9 @@ from a read-only `.app` and from a Finder launch whose working directory is `/`.
 ### Lints and formatting
 
 Clippy's defaults are the rule and nothing is allowed crate-wide: `Cargo.toml`'s
-`[lints.clippy]` table is empty, and no item in the source carries a `#[allow(clippy::..)]`
-for a default lint. Where a lint asked for an idiomatic rewrite of a transcribed line the
+`[lints.clippy]` table is empty, and the one `#[allow(clippy::..)]` in the source is
+`too_many_arguments` on `Mesh::add_face`, the transcription of `Mesh.cpp:171`'s ten-argument
+signature. Where a lint asked for an idiomatic rewrite of a transcribed line the
 rewrite was mechanical and is noted in place — `GH_PI` is `f32::consts::PI` (the same bits as
 `GameHeader.h`'s literal, which a test pins), `Mesh.cpp`'s line parser tests its prefixes with
 `strip_prefix`, `Player.cpp:87`'s two-branch pitch limit is one `clamp`, and the level tests'
