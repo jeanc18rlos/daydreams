@@ -20,6 +20,11 @@
 //!
 //! The whole room is reachable: one floor, no stairs.
 //!
+//! The room is also the far side of the Backrooms' window (`ext/window.rs`): `level16.rs`
+//! loads it a second time, by this file's `load_spec` and `placement` shifted east, and a
+//! player who walks through the window arrives here at the same spot (`window::take_arrival`
+//! below). There is no window back; the elevator is the way out.
+//!
 //! # Placement
 //!
 //! The elevator is reserved on the south wall (z = +10.01, facing -z): the one stretch of
@@ -35,6 +40,7 @@ use std::rc::Rc;
 use crate::ext::elevator::{self, Elevator, PROUD};
 use crate::ext::gltf_model::{Anchor, Fit, Frame, Load, PartSpec};
 use crate::ext::interior::{self, Openings, SPAWN_AHEAD};
+use crate::ext::window;
 use crate::game_header::GH_PI;
 use crate::object::{Object, ObjectT};
 use crate::player::Player;
@@ -46,7 +52,7 @@ pub struct Level18;
 
 const MODEL: &str = "Meshes/backrooms_room_with_plants_overgrown.glb";
 /// The whole file, from the scene root.
-const PART: &str = "all";
+pub(crate) const PART: &str = "all";
 /// Every map in the file is 1024 square or smaller: nothing is resampled.
 const MAP: u32 = 1024;
 /// The foliage, rendered as the dielectric it is (module docs): the bushes ship metalness 1
@@ -57,7 +63,9 @@ const DIELECTRIC: [(&str, f32); 3] = [("Bush_*", 0.0), ("Grass_*", 0.0), ("Thick
 const PARTS: [PartSpec<'static>; 1] =
     [PartSpec { name: PART, roots: &[], skip: &[], frame: Frame::Scene, anchor: Anchor::Hinge }];
 
-fn load_spec() -> Load<'static> {
+/// The file and its overrides. Shared with the Backrooms (`level16.rs`), which loads the room
+/// a second time as the far side of its window (`ext/window.rs`).
+pub(crate) fn load_spec() -> Load<'static> {
     Load {
         path: MODEL,
         parts: &PARTS,
@@ -91,8 +99,8 @@ pub const ELEVATOR_SPOT: Vector3 = Vector3 { x: 0.0, y: 0.0, z: SPAWN_AHEAD };
 pub const ELEVATOR_YAW: f32 = GH_PI;
 
 /// Where the model stands: unturned, shifted so the arrival spot -- [`SPAWN_AHEAD`] in
-/// front of the doorway -- lands on the origin.
-fn placement() -> Object {
+/// front of the doorway -- lands on the origin. Shared with the Backrooms, as `load_spec` is.
+pub(crate) fn placement() -> Object {
     let mut obj = Object::new();
     obj.pos = -(DOORWAY_MODEL + FACING_MODEL * SPAWN_AHEAD);
     obj
@@ -111,6 +119,10 @@ impl Scene for Level18 {
         // the model is carved round its doorway as it loads, and the fence takes in the
         // cabin, which stands outside the model behind the wall.
         let arrived = elevator::take_arrival();
+        // And the other way in: through the Backrooms' window. Taken whatever the elevator
+        // said, so a stale one cannot wait for a later load; a ride wins, there being no
+        // way to have done both.
+        let through = window::take_arrival();
         let lift = Elevator::new(gl, res, ELEVATOR_SPOT, ELEVATOR_YAW, arrived);
         let openings = Openings { cut: &[lift.wall_cut()], also_inside: &[lift.world_bounds()] };
         let arrival = interior::arrival(ELEVATOR_SPOT, ELEVATOR_YAW);
@@ -118,6 +130,11 @@ impl Scene for Level18 {
         if arrived.is_some() {
             // Delivered by a ride: in the cabin, facing its doors, which are about to open.
             lift.board(player);
+        } else if let Some(through) = through {
+            // Walked in through the window (`ext/window.rs`): the same spot and the same look
+            // as in the copy the step before, so nothing is seen to change.
+            player.base.set_position(through.pos);
+            player.set_look(through.yaw, through.pitch);
         }
         objs.push(Rc::new(RefCell::new(lift.doors())) as Rc<RefCell<dyn ObjectT>>);
         objs.push(Rc::new(RefCell::new(lift)) as Rc<RefCell<dyn ObjectT>>);
