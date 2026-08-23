@@ -38,7 +38,24 @@ use kira::{
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+/// EXT: a mute that nothing in the game can undo -- `--mute` / `DAYDREAMS_MUTE=1`.
+///
+/// Test runs and screenshot jobs start the soundtrack like any other launch, which is exactly
+/// wrong on a machine where someone is watching something else. Unlike the saved setting this
+/// is per process, is never written to the settings file, and the `M` key cannot lift it.
+static FORCE_MUTE: AtomicBool = AtomicBool::new(false);
+
+/// Mute this process for good. Call before `Audio::new` (main.rs does, from the CLI/env).
+pub fn force_mute() {
+    FORCE_MUTE.store(true, Ordering::Relaxed);
+}
+
+fn forced() -> bool {
+    FORCE_MUTE.load(Ordering::Relaxed)
+}
 
 const MUSIC_DIR: &str = "assets/music";
 const SFX_DIR: &str = "assets/sfx";
@@ -140,7 +157,8 @@ impl Audio {
             current_scene: None,
             music_volume: 0.7,
             sfx_volume: 0.9,
-            muted: false,
+            // A forced mute starts muted and stays so; `toggle_mute` honours it.
+            muted: forced(),
         }
     }
 
@@ -238,6 +256,10 @@ impl Audio {
 
     /// Toggle mute; returns the new state. Bound to `M` and to the DualSense mute button.
     pub fn toggle_mute(&mut self) -> bool {
+        if forced() {
+            log::debug!("[audio] muted for this run (--mute); the toggle is ignored");
+            return true;
+        }
         self.muted = !self.muted;
         if self.muted {
             self.stop_music(0.3);

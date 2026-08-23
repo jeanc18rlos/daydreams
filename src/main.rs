@@ -635,6 +635,10 @@ fn main() {
     // A screenshot or mesh-generation run is a script's, not a person's: no dialog for it.
     app::crash::set_headless(args.shot.is_some() || args.command.is_some());
     app::logging::init(args.log_level, !args.no_log_file);
+    // EXT: `--mute` / `DAYDREAMS_MUTE=1` -- before anything builds an `Audio`.
+    if args.mute || std::env::var_os("DAYDREAMS_MUTE").is_some_and(|v| v != "0") {
+        ext::audio::force_mute();
+    }
     log::info!(
         "DayDreams {} starting; log file: {}",
         env!("CARGO_PKG_VERSION"),

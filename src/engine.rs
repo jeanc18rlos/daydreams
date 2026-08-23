@@ -214,7 +214,8 @@ impl Engine {
         engine.load_scene(INTRO);
         // EXT: a mute saved from a previous session applies to the music the load above just
         // started. Done after the load rather than before, so the toggle has something to stop.
-        if crate::ext::settings::muted() {
+        // EXT: and never toggle a mixer `--mute` already silenced, which would unmute it.
+        if crate::ext::settings::muted() && !engine.ext.borrow().audio.is_muted() {
             engine.ext.borrow_mut().audio.toggle_mute();
         }
         engine

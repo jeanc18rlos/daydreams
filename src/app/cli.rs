@@ -23,6 +23,11 @@ pub struct Args {
     #[arg(long)]
     pub no_vsync: bool,
 
+    /// No sound for this run, whatever the saved setting says (also: DAYDREAMS_MUTE=1).
+    /// The `M` key cannot lift it and nothing is written to the settings file.
+    #[arg(long)]
+    pub mute: bool,
+
     /// Directory holding Shaders/, Meshes/, Textures/ and assets/ (also: DAYDREAMS_ASSETS).
     #[arg(long, value_name = "DIR")]
     pub assets: Option<PathBuf>,
