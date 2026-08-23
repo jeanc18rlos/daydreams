@@ -56,6 +56,15 @@ Benoit Gagnier (<https://sketchfab.com/BenoitGagnier>) licensed under CC-BY-4.0
 | Licence | SIL Open Font License 1.1 — [`assets/fonts/RobotoCondensed.LICENSE.txt`](assets/fonts/RobotoCondensed.LICENSE.txt), which ships beside the font. |
 | Notes | `tools/gen_ui.py` rasterises it into `Textures/ui_font.bmp`; that atlas is a derived work of the font and ships under the same licence. The OFL permits bundling with software and forbids selling the font on its own. |
 
+## The portraits — `assets/paintings/src/*.png` → `Textures/portrait_*.bmp`
+
+| | |
+|---|---|
+| What | The Backrooms' eight portraits: two variation sheets (base + eye and mouth cutouts) that `tools/gen_portraits.py` cuts into the shipped `Textures/portrait_mona*.bmp` and `Textures/portrait_vermeer*.bmp`. |
+| Underlying works | Leonardo da Vinci, *Mona Lisa* (c. 1503–1506) and Johannes Vermeer, *Girl with a Pearl Earring* (c. 1665) — both public-domain worldwide (the authors died in 1519 and 1675). |
+| The sheets | The project owner's own edits of those works, supplied 2026-08 and recorded as such in `assets/paintings/src/README.md`; the owner contributes them under the project licence. |
+| Notes | A third sheet (Frans Hals, *The Laughing Cavalier*, c. 1624 — also public domain, the author died 1666) is expected but not yet in the repository; `tools/gen_portraits.py`'s docstring holds the placeholder. Faithful reproductions of public-domain paintings carry no new copyright in most jurisdictions; the *edits* (the cutouts and blanked base) are the owner's. |
+
 ## Backrooms VR — `Meshes/backrooms_vr.glb`
 
 | | |
@@ -187,6 +196,7 @@ Made for this project by its tools; no third-party content, nothing to credit.
 | `Textures/grass_noise.bmp` | `tools/gen_meadow.py` |
 | `Textures/cube_sticker.bmp` | `tools/bake_cube.py` |
 | `Textures/ui_font.bmp`, `Textures/ui_cursors.bmp` | `tools/gen_ui.py` (derived from the font and cursor art above) |
+| `Textures/portrait_mona.bmp`, `portrait_mona_parts.bmp`, `portrait_vermeer.bmp`, `portrait_vermeer_parts.bmp` | `tools/gen_portraits.py` (derived from the portrait sheets — see "The portraits" above) |
 | `Shaders/*` other than the five listed under the engine | Written for this project |
 
 `Textures/cube_projection.bmp` is referenced by no code and no tool, and its origin is not

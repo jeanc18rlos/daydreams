@@ -301,6 +301,7 @@ with one exception noted below.
 | `assets/fonts/RobotoCondensed[wght].ttf` | The UI face, Roboto Condensed (SIL OFL — the licence sits beside it). Vendored rather than taken from the system, because `tools/gen_ui.py` bakes it into `Textures/ui_font.bmp` and that atlas has to be reproducible. |
 | `assets/music/` | Soundtrack. Streamed, not decoded up front — see Audio below. |
 | `assets/sfx/` | One-shot effects, by name. |
+| `assets/paintings/src/` | The portrait variation sheets — the user's edits of public-domain paintings; `tools/gen_portraits.py` cuts them into `Textures/portrait_*.bmp` (see the README beside them and THIRD_PARTY.md). |
 | `assets/ui/` | Source art for the cursor atlas. |
 
 ---
@@ -862,20 +863,23 @@ the bob phase (two per cycle) and fire `Sfx::Footstep`, at most once per rendere
 A key held across an alt-tab never sees its release, so every key level is dropped when the
 window loses focus — a stuck `Shift` would otherwise run the player until it was pressed again.
 
-### Paintings that watch you — `ext/painting.rs`
+### Paintings that watch you — `ext/painting.rs`, `tools/gen_portraits.py`
 
-The Backrooms' entry hall hangs eight portraits whose eyes follow you, built on two things the
-engine already did. Every draw receives the eye of the **pass** camera (`RenderCtx.eye`), so the
-gaze is computed per render pass: the painting turns that eye into its own canvas metres and the
-shader displaces each iris toward it, and a portrait seen through the door looks at the portal
-camera -- at the person in the doorway -- rather than at some point on the meadow a thousand units
-off. And the visibility test that keeps Level10's statues still while watched
-(`ext/visibility.rs`) keeps the sitter's *face* still: only after 0.4 s of nobody looking do the
-brows lower, the mouth flatten and the gaze stop following and stare straight out. Look away and
-back and it is different; you never catch it moving. The next unobserved stretch puts it back.
-The eyes remember, too: while nobody looks they stay aimed at where you were last seen from --
-the last sighting, however brief -- and when you look again they slide from there to you over
-0.6 s.
+The Backrooms' entry hall hangs eight portraits whose eyes follow you -- the Mona Lisa and
+the Girl with a Pearl Earring, turn and turn about -- built on two things the engine already
+did. Every draw receives the eye of the **pass** camera (`RenderCtx.eye`), so the gaze is
+computed per render pass: the painting turns that eye into its own canvas metres and the
+shader slides each iris toward it, and a portrait seen through the door looks at the portal
+camera -- at the person in the doorway -- rather than at some point on the meadow a thousand
+units off. And the visibility test that keeps Level10's statues still while watched
+(`ext/visibility.rs`) keeps the sitter's *face* still: only after 0.4 s of nobody looking
+does the expression take a step round its cycle -- the smile goes sad and the eyes turn away
+to the left, frozen on where you were last seen from; the next stretch makes the mouth angry
+and brings the eyes back to you; the one after that restores the smile. Look away and back
+and it is different; you never catch it moving (each change crossfades over 0.25 s, settled
+well inside the 0.4 s grace). The eyes remember, too: while nobody looks they stay aimed at
+where you were last seen from -- the last sighting, however brief -- and when you look again
+they slide from there to you over 0.6 s.
 
 The test had to learn to see through a door. From the meadow the hall is a thousand units away
 and the plain cone test says "not looking" for every painting in it, which would let them change
@@ -890,25 +894,60 @@ only while the doors stand (`Watch::while_doors_stand`): once the one-way door h
 have its portals, and nothing is seen through them. The line-of-sight raycast sees the
 Backrooms' triangle mesh like any other blocker, so a wall is cover.
 
-The portrait itself is procedural (`Shaders/painting.frag`; there is no portrait image in the
-asset set): signed-distance shapes for the ground, shoulders, collar, neck, hair, head, eyes,
-brows, nose and mouth, a seed picking ground, skin, hair, iris and collar colours and the head's
-width, and a brush mottle, canvas weave and faint craquelure over it all, the last two fading
-out where their period falls under a couple of pixels. It is lit flat, with the walls' own
-squared-distance fog, so it sits in the hall. The frame is four `cube.obj` bars in `gold.bmp`
+**The pictures are real paintings.** Each portrait is two textures cut by
+`tools/gen_portraits.py` (numpy + Pillow) from a variation sheet under `assets/paintings/src/`
+-- the user's own edits of two public-domain paintings, each sheet a BASE (the sitter with
+blank eye sockets and no mouth) beside cutouts of both eyes looking at the viewer, both eyes
+looking to the viewer's left, and a smiling, a sad and an angry mouth. The tool segments the
+sheet (alpha components on the Mona sheet; non-black tiles on the Vermeer's, which get soft
+superellipse feather masks cut from its rectangular crops), then **registers** each piece onto
+the base by normalised cross-correlation over a range of scales -- for the Mona pieces the
+NCC runs on the cutout's opaque border ring (the lids, brows and skin round the socket, which
+the base has; the socket interior, which it does not, is left out), against the base itself;
+the Vermeer crops match as whole rectangles against the sheet's ORIGINAL tile, whose framing
+the base shares. Each piece is colour-matched to the base under its rim (a per-channel gain)
+and its edge feathered, and everything lands in `Textures/portrait_<name>.bmp` (the base,
+32-bit BGRA), `Textures/portrait_<name>_parts.bmp` (the seven parts, packed with alpha) and
+`src/ext/portrait_atlas.rs`: every part's atlas rect, its placement rect on the base in
+base UV, and the two eye openings' ellipses. Run the tool with `--preview DIR` and look at
+the composites before trusting a number; its docstring says how to add the next sheet (a
+Frans Hals "Laughing Cavalier" is expected: one more manifest entry).
+
+`Shaders/painting.frag` composites at draw time: the base, then the parts, premultiplied --
+the two eye parts crossfaded between the centre-looking and left-looking variants, the three
+mouths weighted by the expression's crossfade -- and a light varnish vignette and the walls'
+own squared-distance fog over the lot (the sources are already paintings; the old procedural
+sitter's canvas weave and craquelure went with it). **The following eyes are a warp, not a
+sticker**: inside each eye's ellipse (the lid edge at normalised radius 1) the eye part is
+sampled at `uv - gaze * w(r)`, where `w` is 1 inside `IRIS_CORE` (0.35) of the radius and
+eases to 0 at the lid -- the iris and pupil slide by the whole offset, the sclera compresses
+toward the near corner, the lids never move and nothing tears (the offset is clamped to 12 %
+of the eye's width, half of what the ease could carry before folding; `the_warp_never_folds`
+pins the margin). The offset is the CPU's (`iris_offsets`): the tangent of the angle from
+each eye to the pass's viewer, so both eyes converge and the nearer one turns further. A look
+further to the viewer's left than the clamp carries crossfades to the sheet's left-looking
+eyes; **the sheets have no right-looking pair**, so to the right the warp saturates at its
+clamp and stays -- the one asymmetry, invisible in play because the warp already covers the
+angles a wanderer actually stands at.
+
+The frame is four `cube.obj` bars in `gold.bmp`
 through the ported `texture` shader, each rolled 45 degrees about its length so what faces the
 room is a ridge between two bevels: a moulding that the shader's fixed light models on either
-wall, where a flat slat facing away from that light was near black. The canvas is also a
+wall, where a flat slat facing away from that light was near black. Its width is 0.8 m and its
+height follows each base's aspect (`Painting::size_for`): the Mona hangs 0.94 m tall, the
+Vermeer 0.80. The canvas is also a
 rectangle collider (`Mesh::colliders_only`, `Collider::rect`, nothing drawn from it -- the
 quad is drawn through the portrait shader): a ray down the crosshair stops at the picture,
 not at the wall behind it, which is what puts a held thing in front of the portrait rather
-than behind it. The expression state machine, the gaze memory and the through-the-door test
-are unit tested with a fake clock and detached portals.
+than behind it. The expression state machine, the gaze memory, the iris offsets, the atlas's
+consistency and the through-the-door test are unit tested with a fake clock and detached
+portals.
 
 ### The key in the painting — `ext/key.rs`, `ext/painting.rs`, `Shaders/painting.frag`
 
-The last portrait on the hall's north wall, the one by the bare end wall, has a key painted
-across the sitter's collar -- in anamorphosis, the way Holbein painted the skull. The key
+The last portrait on the hall's north wall, the one by the bare end wall -- a Mona Lisa --
+has a key painted across the sitter's bodice, on the dark dress below the neckline where gold
+reads -- in anamorphosis, the way Holbein painted the skull. The key
 proper lives on a virtual picture plane through the canvas centre, perpendicular to the line
 from a **sweet spot** to that centre, and what is on the canvas is its central projection from
 the spot: for every canvas fragment the shader casts the ray from the spot through it, meets
@@ -1454,12 +1493,15 @@ sunset-pink, the sky is the near-black of an unlit building going on past its wa
 ground cap under the whole footprint (`backrooms::GroundCap`, colliding with nothing) makes the
 void below the horizon the same darkness.
 
-Along the hall's walls hang eight portraits (`ext/painting.rs`, [above](#paintings-that-watch-you--extpaintingrs)):
-five on the north wall, three on the south, each 0.8 x 1.0 m with its centre at 1.6 m and its
+Along the hall's walls hang eight portraits (`ext/painting.rs`, [above](#paintings-that-watch-you--extpaintingrs-toolsgen_portraitspy)):
+five on the north wall, three on the south, the Mona Lisa on the even seeds and the Girl with
+a Pearl Earring on the odd, each 0.8 m wide (the height follows the picture) with its centre
+at 1.6 m and its
 back two centimetres off the scan's wall face so the two never z-fight. Their eyes follow
 whichever camera is drawing them, door included, and their faces change only while nobody is
-looking. Eight of them add nothing measurable to the frame: with vsync off the hall views stay
-at 1.0 ms and the meadow spawn (the door drawing the hall) within noise of its 2.2 ms. Between
+looking. Eight of them add nothing measurable to the frame, image pipeline included: with
+vsync off the hall row is 1.22 ms against 1.19 with the old procedural shader in the same
+window -- noise -- and the meadow spawn (the door drawing the hall) does not move. Between
 the second and third of the north wall's portraits hangs [the window](#the-window). The last
 one on the north wall wears [the key](#the-key-in-the-painting--extkeyrs-extpaintingrs-shaderspaintingfrag).
 
@@ -1913,7 +1955,7 @@ The key's runs, from the Backrooms (scene 16):
 # first frame, TAKE THE KEY shows, and by frame 60 the real key floats in front of the canvas
 cargo run --release -- --windowed --mute --scene 16 --pos 994.4,1.5,1.55 --yaw -100.9 --pitch 2.2 --shot out.bmp --frames 1
 cargo run --release -- --windowed --mute --scene 16 --pos 994.4,1.5,1.55 --yaw -100.9 --pitch 2.2 --shot out.bmp --frames 60
-# Taking it: aimed at the key itself (yaw -100.4, pitch -3.7), E on frame 60 -- see "Testing
+# Taking it: aimed at the key itself (yaw -100.4, pitch -1.3), E on frame 60 -- see "Testing
 # the puzzle" under "The key in the painting" for the whole chain
 # Square on to the portrait: the smear
 cargo run --release -- --windowed --mute --scene 16 --pos 997,1.5,0.3 --yaw 180 --pitch 3 --shot out.bmp --frames 60
