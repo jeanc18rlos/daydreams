@@ -1,0 +1,848 @@
+# DayDreams
+
+**DayDreams** is the game. Underneath it is a faithful Rust port of
+**[HackerPoet/NonEuclidean](https://github.com/HackerPoet/NonEuclidean)**, CodeParade's
+non-Euclidean rendering engine (MIT, © 2018 CodeParade). All credit for the engine, the level design,
+the meshes, the textures and the shaders belongs to the original author — this repository
+translates the C++/Win32/OpenGL source into Rust on top of winit + glutin + glow, and builds a game
+on top of that.
+
+The original's `LICENSE` is preserved verbatim as [`LICENSE-ORIGINAL-MIT`](LICENSE-ORIGINAL-MIT).
+The video that introduced the project: [*Non-Euclidean Worlds Engine*](https://www.youtube.com/watch?v=kEB11PQ9Eo8).
+
+The engine renders seven small scenes in which space does not behave: rooms larger on the inside,
+tunnels that loop back on themselves, corridors that change your scale as you walk them, and an
+infinite floorplan. It works by drawing portals into framebuffers recursively and warping the player
+through the portal plane when they cross it — there is no ray marching and no distortion of the
+geometry itself.
+
+## What "port" means here
+
+This is a transcription, not a rewrite. The C++ structure, order of operations, naming (converted to
+`snake_case`) and quirks are preserved wherever Rust allows. `Matrix4` is row-major with translation
+at `m[3]`, `m[7]`, `m[11]`, exactly as in `Vector.h`; multiplication orders that look backwards are
+the original's and are left alone. No linear-algebra crate is used.
+
+Every place where the port had to deviate carries a comment in a fixed form:
+
+```rust
+// PORT: <what changed> (was: <original C++>, <File.cpp:line>)
+```
+
+There are **218** such comments. Every one of them is summarised under
+[Deviations from the original](#deviations-from-the-original) below. To read them in place:
+
+```sh
+grep -rn '// PORT:' src
+```
+
+## Building and running
+
+Requires a Rust toolchain (2021 edition) and a GPU/driver offering **OpenGL 3.3 Core** or better.
+macOS grants 4.1 Core, which is sufficient. Only core-profile entry points are used — no `EXT`/`ARB`
+suffixed calls, no immediate mode.
+
+```sh
+cargo run --release
+```
+
+> **Run it from the project root.** All assets are loaded through *relative* paths
+> (`Meshes/`, `Shaders/`, `Textures/`), matching the original's `Resources.cpp`. Launching the binary
+> from `target/release/` directly will panic on the first missing shader.
+
+A debug build is playable but not free: the fixed-step loop runs at 500 Hz (`GH_DT = 0.002`) and the
+collision pass is `O(objects² × hitSpheres × colliders)`, so `Cargo.toml` sets `opt-level = 2` on the
+dev profile to keep it real-time. Release is still recommended.
+
+```sh
+cargo test        # 9 tests: Matrix4/Vector3 algebra, and the .obj parser against all 14 shipped meshes
+```
+
+## Controls
+
+| Input | Action |
+| --- | --- |
+| Mouse | Look |
+| `W` `A` `S` `D` | Walk |
+| `1` – `7` | Load scene 1–7 |
+| `Alt` + `Enter` | Toggle fullscreen |
+| `Esc` | Quit |
+
+The seven scenes, in key order and in the registration order of `Engine.cpp:41-47`:
+
+| Key | Scene | Rust type |
+| --- | --- | --- |
+| `1` | Looping tunnels | `Level1` |
+| `2` | House, 3 rooms | `Level2::new(3)` |
+| `3` | House, 6 rooms | `Level2::new(6)` |
+| `4` | Pillar room and statue | `Level3` |
+| `5` | Sloped tunnels | `Level4` |
+| `6` | Scaling tunnels | `Level5` |
+| `7` | Infinite floorplan | `Level6` |
+
+Scenes 2 and 3 are the same `Level2` type constructed with a different room count, which is why
+seven scenes come from six level modules.
+
+### A note on mouse feel on macOS
+
+On Windows the original registers a raw-input device (`RegisterRawInputDevices`) and reads
+`WM_INPUT` deltas, which bypass the OS pointer-acceleration curve entirely. On macOS, winit's
+`DeviceEvent::MouseMotion` is **not** truly raw: the deltas have already been through the system's
+pointer acceleration. The result is that look sensitivity is non-linear with speed — flicks travel
+further than the same distance moved slowly — where the Windows original is perfectly linear.
+`GH_MOUSE_SENSITIVITY` is unchanged from the original, so the feel differs slightly by design rather
+than by tuning. There is no way to opt out short of an `IOHIDManager` device grab, which would mean
+a new dependency.
+
+## File mapping
+
+| C++ | Rust | Notes |
+| --- | --- | --- |
+| `Vector.h` | `src/vector.rs` | `Vector3`, `Vector4`, row-major `Matrix4` |
+| `GameHeader.h` | `src/game_header.rs` | the 25 `GH_*` constants, `gh_clamp`/`gh_min`/`gh_max` |
+| `Sphere.h` | `src/sphere.rs` | |
+| `Timer.h` | `src/timer.rs` | `QueryPerformanceCounter` → `std::time::Instant` |
+| `Input.h/.cpp` | `src/input.rs` | plus `key_index`, the winit `KeyCode` → ASCII-slot map |
+| `Camera.h/.cpp` | `src/camera.rs` | |
+| `Collider.h/.cpp` | `src/collider.rs` | |
+| `Mesh.h/.cpp` | `src/mesh.rs` | `.obj` parser factored into a testable `parse_obj` |
+| `Shader.h/.cpp` | `src/shader.rs` | |
+| `Texture.h/.cpp` | `src/texture.rs` | |
+| `FrameBuffer.h/.cpp` | `src/frame_buffer.rs` | |
+| `Resources.h/.cpp` | `src/resources.rs` | `weak_ptr` caches → `RefCell<HashMap<String, Weak<T>>>` |
+| `Object.h/.cpp` | `src/object.rs` | `Object` + the `ObjectT` trait (the C++ vtable), `RenderCtx`/`UpdateCtx` |
+| `Physical.h/.cpp` | `src/physical.rs` | |
+| `Player.h/.cpp` | `src/player.rs` | |
+| `Portal.h/.cpp` | `src/portal.rs` | `Warp`, `Side`, `connect`, `connect_warps` |
+| `Scene.h` | `src/scene.rs` | `Scene` trait, `PObjectVec`, `PPortalVec` |
+| `Ground.h` `House.h` `Pillar.h` `PillarRoom.h` `Statue.h` `Sky.h` `Tunnel.h` `Floorplan.h` | `src/props.rs` | the header-only props, collapsed into one module |
+| `Level1.h/.cpp` | `src/level1.rs` | |
+| `Level2.h/.cpp` | `src/level2.rs` | serves both scene 2 and scene 3 |
+| `Level3.h/.cpp` | `src/level3.rs` | |
+| `Level4.h/.cpp` | `src/level4.rs` | |
+| `Level5.h/.cpp` | `src/level5.rs` | |
+| `Level6.h/.cpp` | `src/level6.rs` | |
+| `Engine.h/.cpp` | `src/engine.rs` | engine core only — see below |
+| `Main.cpp` + the Win32 half of `Engine.cpp` | `src/main.rs` | window, GL context, event loop, fullscreen, cursor |
+
+`Engine.cpp` is the one file that splits. Its engine logic (`Render`, `Update`, `LoadScene`,
+`NearestPortalDist`) is in `src/engine.rs`; its platform layer — `CreateGLWindow`, `WindowProc`,
+`SetupInputs`, `ConfineCursor`, `ToggleFullscreen` and the `PeekMessage` pump — moves to
+`src/main.rs`, rebuilt on winit and glutin. That platform layer is the only genuine rewrite in the
+port; everything else is transcription.
+
+The four C++ globals are not ported as statics: `GH_ENGINE` and `GH_INPUT` are threaded through as
+`&RenderCtx` / `&UpdateCtx`, and `GH_REC_LEVEL` / `GH_FRAME` become `Cell` fields on `Engine`.
+
+## Assets
+
+`Meshes/` (14 files), `Textures/` (7 files) and `Shaders/` (10 files) are the original's, byte-for-byte,
+with one exception noted below.
+
+`assets/` holds what the game adds on top:
+
+| Path | What |
+|------|------|
+| `assets/fonts/RobotoCondensed[wght].ttf` | The UI face, Roboto Condensed (SIL OFL — the licence sits beside it). Vendored rather than taken from the system, because `tools/gen_ui.py` bakes it into `Textures/ui_font.bmp` and that atlas has to be reproducible. |
+| `assets/music/` | Soundtrack. Streamed, not decoded up front — see Audio below. |
+| `assets/sfx/` | One-shot effects, by name. |
+| `assets/ui/` | Source art for the cursor atlas. |
+
+---
+
+# Deviations from the original
+
+Everything below corresponds to a `// PORT:` comment in the source. Grouped by cause.
+
+## 1. Approved, deliberate behaviour changes
+
+These change what the program *does*, not just how it is written.
+
+### Shaders rewritten for the core profile — `Shaders/*`
+
+The only modified assets. GLSL removed `gl_FragColor` and `texture2D` when the core profile landed;
+each fragment shader declares `out vec4 fragColor` instead, and `texture2D(` becomes `texture(`.
+Nothing else in the shaders changed.
+
+### Mesh draw-call bug fixed — `mesh.rs:490`
+
+`Mesh::Draw` passes `(GLsizei)verts.size()` to `glDrawArrays` — the number of **floats**, i.e. three
+times the real vertex count. The original reads two vertex-strides past the end of every buffer on
+every draw. Ported as `verts.len() / 3`.
+
+### GL objects are freed on scene switch — `frame_buffer.rs:170`, `texture.rs:171`, and the `Drop` impls in `mesh.rs` / `shader.rs`
+
+`FrameBuffer` has no destructor at all in C++, and `Mesh`, `Shader` and `Texture` never delete their
+GL objects either. Cycling the seven scenes leaks roughly 78 framebuffers — about 1.8 GiB of texture
+and renderbuffer memory. Each type gets a `Drop` impl that deletes what it owns.
+
+### Occlusion queries no longer leak — `engine.rs:419`, `engine.rs:438`
+
+`glGenQueriesARB` sits *outside* the `GH_REC_LEVEL > 0` block that deletes the queries
+(`Engine.cpp:220-222`), so at the deepest recursion level one GL query per portal is created and
+never deleted, every frame. Creation moves into the same block as the deletion; the queries are used
+nowhere else.
+
+### Mipmap generation for the texture array — `texture.rs:92`
+
+`GL_GENERATE_MIPMAP` is a compatibility-profile texture parameter that does not exist in core (and
+glow does not even expose the enum). The original's own `glGenerateMipmap` call names
+`GL_TEXTURE_2D`, the wrong target for an array texture, so it is a no-op. Both are dropped and
+replaced by an explicit `generate_mipmap(TEXTURE_2D_ARRAY)` placed *after* `tex_image_3d`. This
+reproduces the Windows compat-profile behaviour of auto-generating mipmaps on upload — required,
+because the min filter is `LINEAR_MIPMAP_NEAREST` and a mipmap-less array texture samples black.
+(The original's inverted `width/rows` ÷ `height/cols` operands are transcribed literally; harmless,
+because the only atlas is a square 4×4.)
+
+### Silent failures become loud ones
+
+The original swallows every asset and GL error, then renders nothing and gives you no clue why.
+
+| Site | C++ behaviour | Port |
+| --- | --- | --- |
+| `shader.rs:58` | link failure → writes `<vert>.link.log`, sets `progId = 0`, returns | log to stderr, panic |
+| `shader.rs:100` | missing shader file → empty source string, then a compile error | panic with the io error |
+| `shader.rs:118` | compile failure → writes `<fname>.log`, returns 0 | log to stderr, panic |
+| `shader.rs:136` | no `;` after `"\nin "` → walks backwards from `npos` (UB) | panic |
+| `texture.rs:26` | missing `.bmp` → `texId = 0`, binds the default texture forever | panic |
+| `mesh.rs:433` | failed `.obj` open → returns from the ctor before `glGen*`, leaving garbage handles that `Draw` then uses | empty mesh, GL setup still runs — a well-defined no-op |
+| `frame_buffer.rs:115` | incomplete FBO → returns silently, half-constructed | same control flow, plus a warning |
+
+### Immediate-mode debug drawing dropped — `collider.rs:70`, `mesh.rs:509`, `object.rs:109`, `engine.rs:499`
+
+`Collider::DebugDraw` is written in `glBegin`/`glColor3f`/`glVertex4f`/`glEnd`, which does not exist
+in a 3.3+ core profile and which glow exposes no entry points for. It is dropped, and with it
+`Mesh::DebugDraw` and `Object::DebugDraw`, which are thin wrappers over it, plus the `#if 0` debug
+block at `Engine.cpp:264-269` that was their only caller.
+
+### Cursor handling on macOS — `main.rs:142`
+
+The original warps the pointer to the window centre every frame. Here that only happens on the
+*confined* fallback path: on macOS, winit's `set_cursor_position` finishes by re-associating the
+cursor with the pointer, which silently undoes a prior `Locked` grab — so warping on the locked path
+would break mouse look after exactly one frame. Related: `main.rs:444` deliberately ignores
+`WindowEvent::CursorMoved` (its absolute position stops changing once the cursor is locked) and
+drives look from `DeviceEvent::MouseMotion` deltas instead; `main.rs:372` re-applies the grab on
+focus gain, since alt-tabbing drops it on every platform.
+
+### Dropped code that nothing calls
+
+- `vector.rs:315` — the free `operator/=(float, Vector3&)` (`Vector.h:136-138`) assigns into its
+  *second* operand, which Rust's `DivAssign` cannot express. Uncalled.
+- `timer.rs:36` — `Start()` / `Stop()` / `StopStart()`. `Engine.cpp` only uses `GetTicks` and
+  `SecondsToTicks`.
+- `game_header.rs:13` — `GH_CLASS`, the Win32 window-class name passed to `RegisterClassEx`. winit
+  owns the window class; nothing can consume it.
+
+## 2. Core-profile and glow API translations
+
+Mechanical, no behaviour change.
+
+- **`GL_CLAMP` → `GL_CLAMP_TO_EDGE`** (`frame_buffer.rs:32`, `:39`). `GL_CLAMP` was removed in core.
+- **Unsized `GL_RGB` → sized `GL_RGB8`** (`frame_buffer.rs:56`) for the FBO colour attachment; an
+  unsized internal format is not a legal attachment format in core. The external format stays
+  `GL_RGB`; `nullptr` pixel data becomes `PixelUnpackData::Slice(None)`.
+- **All `*EXT` framebuffer/renderbuffer calls → core** (`frame_buffer.rs:73`, `:86`, `:99`, `:111`):
+  `glGenFramebuffersEXT`, `glGenRenderbuffersEXT`, `GL_DEPTH_ATTACHMENT_EXT`,
+  `glCheckFramebufferStatusEXT` and friends.
+- **All `*ARB` query calls → core** (`engine.rs:452`, `:466`, `:478`): `glBeginQueryARB` →
+  `begin_query`, `GL_SAMPLES_PASSED_ARB` → `glow::SAMPLES_PASSED`, `glGetQueryObjectuivARB` →
+  `get_query_parameter_u32` (which returns the value rather than writing through a pointer),
+  `glDeleteQueriesARB(n, ptr)` → one `delete_query` per handle.
+- **Framebuffer name 0 → `None`** (`frame_buffer.rs:128`, `engine.rs:245`, `:389`). glow models the
+  default framebuffer as `Option::None`; `GLuint curFBO` becomes `Option<glow::Framebuffer>`.
+- **Occlusion-support query dropped** (`engine.rs:106`). glow exposes no `glGetQueryiv`, so
+  `glGetQueryiv(GL_SAMPLES_PASSED_ARB, GL_QUERY_COUNTER_BITS_ARB, &occlusionCullingSupported)` cannot
+  be transcribed. Occlusion queries on `GL_SAMPLES_PASSED` are core since GL 1.5 and mandatory in
+  3.3+ core, so the answer is unconditionally "supported" on any context this port can run on.
+- **`glewInit()` has no equivalent** (`engine.rs:93`, `main.rs:297`) — glow resolves its function
+  pointers when the context is created.
+- **Explicit context everywhere** (`frame_buffer.rs:18`, `resources.rs:21`, `engine.rs:45`,
+  `camera.rs:93`, `props.rs:312`, `mesh.rs:528`, `object.rs:74`). C++ reaches the GL through GLEW's
+  global function pointers; glow needs a context value, so every GL-owning type carries an
+  `Rc<glow::Context>` and the free functions take one.
+- **`glBufferData(void*, bytes)` → `buffer_data_u8_slice(&[u8])`** (`mesh.rs:528`).
+- **`GLuint` handles → glow's opaque handle types** (`frame_buffer.rs:13`).
+
+## 3. C++ language features Rust does not have
+
+### Uninitialized members
+
+The C++ default constructors `Vector3() {}`, `Vector4() {}` and `Matrix4() {}` leave their fields as
+garbage. Rust has no such thing, so they are zero-initialized and then overwritten exactly as the
+C++ does (`vector.rs:15`, `:323`, `:428`). Same story at `camera.rs:24` (`near`/`far`),
+`collider.rs:17` (`Collider::mat`, which `CreateSorted` overwrites unconditionally anyway),
+`portal.rs:48` (both warp matrices, immediately `MakeIdentity()`'d), `physical.rs:30` and
+`player.rs:32` (fields zeroed before the `Reset()` the ctor relies on), and `engine.rs:414`
+(`GLuint drawTest[GH_MAX_PORTALS]`, only ever read on the path that also writes it).
+
+### Overloading and default arguments
+
+Overload sets become distinctly named functions:
+
+| C++ | Rust |
+| --- | --- |
+| `Vector3(float)` / `Vector3(const float*)` / `Vector3(float,float,float)` | `splat` / `from_slice` / `new` (`vector.rs:26`) |
+| `Vector4(float)` / `Vector4(const Vector3&, float)` / `Vector4(f,f,f,f)` | `splat` / `from_vec3` / `new` (`vector.rs:337`) |
+| `Matrix4::Scale(float)` / `Matrix4::Scale(const Vector3&)` | `scale_uniform` / `scale` (`vector.rs:544`) |
+| `Vector3 Matrix4::Scale() const` | `get_scale` — renamed to avoid the static `scale()` (`vector.rs:576`) |
+| `Sphere(float r = 1.0f)` / `Sphere(const Vector3&, float)` | `new` / `new_at` (`sphere.rs:15`) |
+| `AquireTexture(const char*, int rows = 1, int cols = 1)` | every caller passes them explicitly (`resources.rs:74`) |
+
+### Reserved words and name collisions
+
+`Use()` → `use_program` / `use_texture` (`shader.rs:82`, `texture.rs:156`, `frame_buffer.rs:141`);
+`Player::Move` → `move_player` (`player.rs:140`); `Player::Update` → `update_player`, so it does not
+collide with `Physical::update` reachable through `base` (`player.rs:64`); `Tunnel::type` → `ttype`
+(`props.rs:160`); `Object::Reset` → `reset_obj` on the trait, so it does not collide with the
+inherent `reset`s (`object.rs:160`).
+
+### Inheritance → composition
+
+`Physical : Object` (`physical.rs:9`), `Player : Physical` (`player.rs:12`), `Portal : Object`
+(`portal.rs:60`) and `Tunnel : Object` (`props.rs:158`) all become a `base` field plus an
+`impl ObjectT`, which carries the virtual interface. `player.rs:212` adds `obj()` / `obj_mut()`
+because reaching the `Object` through two levels of composition (`player.base.base`) is noisy.
+
+`object.rs:40` writes `Default` for `Object` by hand rather than deriving it — the C++ ctor sets
+`scale` and `p_scale` to 1, which `#[derive(Default)]` would get wrong.
+
+### `assert` → `debug_assert!`
+
+C's `assert` compiles out of release builds, so `debug_assert!` is the exact analogue:
+`vector.rs:155`, `sphere.rs:31`, `collider.rs:78`, `texture.rs:16`, `:41`, `portal.rs:106`.
+`engine.rs:292` drops `assert(vObjects[i].get())` entirely — an `Rc` is never null.
+
+### `#if 0` blocks
+
+Rust has no `#if 0`. The jumping block at `Player.cpp:61-66` is preserved verbatim as a never-called
+private fn (`player.rs:107`). The debug-collider block at `Engine.cpp:264-269` is dropped with the
+immediate-mode code it called (`engine.rs:499`).
+
+### Miscellaneous type mappings
+
+- `template<class T>` with C++'s implicit `operator<` requirement → an explicit `T: PartialOrd` bound
+  (`game_header.rs:58`).
+- `GH_MAX_PORTALS`: `const int` → `usize`, since it only ever sizes a `Vec` (`game_header.rs:20`).
+- `GH_SCREEN_WIDTH`/`HEIGHT`: `const int` → `u32`, to match winit's `PhysicalSize<u32>`
+  (`game_header.rs:28`, `:31`).
+- `FLT_EPSILON` → `f32::EPSILON` (`vector.rs:133`, `:142`); `FLT_MAX` → `f32::MAX` (`engine.rs:517`).
+- `memset` → array `fill` (`input.rs:44`, `:46`).
+- `delete[] img` → implicit, `img` is a `Vec` (`texture.rs:145`).
+- `*reinterpret_cast<int32_t*>(&input[18])` → `from_le_bytes`; BMP headers are always little-endian,
+  matching the original's x86 target (`texture.rs:34`).
+- `std::shared_ptr<T>` → `Option<Rc<T>>`, a null `shared_ptr` being `None` (`object.rs:33`).
+- Fixed-size C array → `Vec`, length expression unchanged (`portal.rs:69`).
+- `for (int i = 0; cond; ++i)` → a manual counter; Rust has no C-style `for` (`engine.rs:213`).
+- `int64_t GetTicks()` is non-`const` in C++ only because it stores into a scratch field; it takes
+  `&self` here, and the scratch fields are gone (`timer.rs:11`, `:26`).
+
+## 4. Borrow-checker accommodations
+
+Places where C++'s freedom with aliasing had to be expressed differently. None change behaviour.
+
+### Out-parameters become `Option`
+
+`bool Collide(const Matrix4&, Vector3& delta)` → `collide(..) -> Option<Vector3>` (`collider.rs:42`,
+`engine.rs:341`). `const Warp*` → `Option<&Warp>` (`physical.rs:97`, `portal.rs:183`).
+`void SetMVP(const float*, const float*)` took two nullable raw pointers → `Option<&Matrix4>`
+(`shader.rs:158`).
+
+### Portal identity: raw `this` pointers → `u32` ids
+
+`Warp` stores `const Portal* fromPortal / toPortal`, used **only** for identity comparison against
+`skipPortal` (`Engine.cpp:237/244/253`). Rust cannot hand out a raw self pointer from a constructor
+and later compare it through an `Rc`, so each portal takes a unique `u32` from a counter and `Warp`
+stores ids (`portal.rs:15`, `:41`, `:64`).
+
+`Portal::Connect(Warp& a, Warp& b)` is called as `Connect(p1->front, p3->back)` — two mutable
+references into two other objects at once, which borrowck forbids through `RefCell`. It becomes the
+free function `connect_warps(a, a_side, b, b_side)`, with a new `Side` enum naming the warp
+(`portal.rs:23`, `:223`, `:253`). `Portal::Connect(shared_ptr&, shared_ptr&)` likewise becomes the
+free fn `connect` (`portal.rs:245`). `portal.rs:262` reads both transforms and drops the borrows
+before writing anything, because `a` and `b` may be the same cell.
+
+### Dropped `Object& other` parameters
+
+`Object::OnHit(Object& other, Vector3& push)` and `Physical`/`Player::OnCollide(Object& other, const
+Vector3& push)` lose the `other` argument — no implementation in the codebase reads it, and passing
+it would require borrowing two `RefCell<dyn ObjectT>` cells mutably at once (`object.rs:117`,
+`physical.rs:71`, `player.rs:164`, `engine.rs:346`).
+
+### `on_collide` on the trait — `object.rs:139`
+
+Added, with no C++ counterpart. `Physical::OnCollide` is virtual and `Player` overrides it, but the
+contract's `as_physical_mut()` hands out a `&mut Physical`, on which Rust would *statically* resolve
+`on_collide` to the base implementation and silently lose `Player`'s `onGround` handling. `Engine`
+therefore calls `obj.on_collide(push)` through the trait, which dispatches virtually. The default
+impl reproduces the C++ behaviour for every non-`Player` `Physical`.
+
+### Collision loop restructured — `engine.rs:303`, `:323`
+
+`Physical* physical = vObjects[i]->AsPhysical()` cannot be held across the loop body: it would keep
+`vObjects[i]` borrowed while `vObjects[j]` is borrowed mutably and while `on_collide` re-borrows it.
+The two things the C++ reads through that pointer (the hit spheres and `worldToLocal`) are pulled out
+first, and every write goes back through a fresh borrow. Likewise the `Rc<Mesh>` is cloned out of
+`vObjects[j]` so the cell can be re-borrowed.
+
+### `Camera` copied out of its `RefCell` — `engine.rs:241`
+
+`Camera` is `Copy`. `Render` recurses arbitrarily deep and must not hold a borrow of `main_cam`, so
+the camera is copied before rendering.
+
+### `RefCell` and `Rc<RefCell<..>>` on the shared state
+
+`PObjectVec` becomes `Vec<Rc<RefCell<dyn ObjectT>>>` — `dyn ObjectT` is the equivalent of the C++
+vector of base-class pointers dispatching through `Object`'s vtable, and the `RefCell` restores the
+interior mutability a raw C++ pointer has for free (`scene.rs:17`). `PPortalVec` holds a concrete
+`Portal`, not `dyn`, because `Engine` calls `Portal`-specific methods on it (`scene.rs:22`).
+`Engine::main_cam` and `Engine::input` become `RefCell` because `Run` mutates them through an
+otherwise-shared `&self` (`engine.rs:51`, `:54`). `level2.rs:38` keeps `house2` as an `Option`,
+mirroring the default-constructed-null `shared_ptr` that is only `reset` when `num_rooms > 4`.
+
+> **`draw` takes `&self`, never `&mut self`.** `Portal::draw` recurses back into `Engine::render`,
+> which can reach the *same* portal again — `skipPortal` is `warp->toPortal`, the portal on the far
+> side, not the one being drawn. A nested `borrow_mut()` would panic; a nested `borrow()` is fine, so
+> the whole render path stays immutable.
+
+## 5. Globals threaded through as parameters
+
+`GH_ENGINE` and `GH_INPUT` (`GameHeader.h:48-50`) are not ported as statics. They become the
+`RenderCtx` and `UpdateCtx` structs (`object.rs:11`), passed explicitly:
+`GH_ENGINE->NearestPortalDist()` → `ctx.engine.nearest_portal_dist()` (`portal.rs:133`),
+`GH_INPUT` → `ctx.input` (`player.rs:64`), `FrameBuffer::Render` takes a `ctx` (`frame_buffer.rs:149`).
+`GH_REC_LEVEL` and `GH_FRAME` become `Cell` fields on `Engine` (`engine.rs:73`, `:75`), read through
+`RenderCtx` (`portal.rs:112`, `engine.rs:164`). `GH_FRAME` is never read by anything — it is kept
+because the original keeps it.
+
+The resource caches are function-local statics in `Resources.cpp`; they become an `Engine` member so
+scenes can reach them without a global (`engine.rs:47`). Consequently `Scene::Load` gains `gl` and
+`res` parameters (`scene.rs:27`), and so do the prop constructors and
+`floorplan_add_portals` (`level6.rs:26`), `Portal::new` (`portal.rs:75`), and `Sky::draw`
+(`props.rs:312`).
+
+`Resources` itself: `map[std::string(name)]` default-inserts an empty `weak_ptr` and returns a
+reference to it, which is exactly `entry(..).or_insert_with(Weak::new)` (`resources.rs:43`), and
+`expired()` + `lock()` collapse into a single `upgrade()` (`resources.rs:47`).
+
+## 6. Structural liberties
+
+Only two were taken. Both are called out in the source.
+
+### `parse_obj` split out of `Mesh::new` — `mesh.rs:11`
+
+`Mesh::Mesh` parses the `.obj` straight into its own members and then uploads them
+(`Mesh.cpp:8-153`). Here the parse is factored into a pure `parse_obj` that touches no OpenGL, so the
+reader can be unit-tested without a GL context — which is what `mesh::tests::all_meshes_parse` does
+against all 14 shipped meshes. `Mesh::new` calls it and then performs exactly the upload block of
+`Mesh.cpp:130-152`. `ParsedMesh` holds what were the C++ members plus `is3DTex`, a ctor local
+(`Mesh.cpp:18`) that the upload block read directly. `mesh.rs:420`: the C++ keeps `verts`/`uvs`/
+`normals` alive for the Mesh's whole lifetime purely so `Draw` can read `verts.size()`; only the
+count survives here.
+
+### The header-only props collapsed into `props.rs`
+
+`Ground.h`, `House.h`, `Pillar.h`, `PillarRoom.h`, `Statue.h`, `Sky.h`, `Tunnel.h` and `Floorplan.h`
+each declare one trivial `Object` subclass with a constructor and a couple of setters. They become
+free functions in one module. `props.rs:61`: the C++ `SetDoorN` helpers take `Object& portal` (the
+base class) even though every call site passes a `Portal`; the contract types them as `&mut Portal`,
+so the fields are reached through `portal.base`. `props.rs:148`: `enum Type { NORMAL = 0, SCALE = 1,
+SLOPE = 2 }` becomes a Rust enum — the explicit discriminants are never used numerically.
+
+Related smaller reshuffles: `Shader`'s `std::vector<std::string> attribs` member (`Shader.h:17`) is
+only written by `LoadShader` and read by the ctor, so it becomes a local threaded through
+(`shader.rs:10`, `:32`, `:90`). `Texture` slurps the whole file into a `Vec<u8>` and walks it with a
+cursor instead of streaming through an `ifstream` (`texture.rs:22`). `Engine`'s `sky` is a plain
+field rather than a `shared_ptr` — C++ needs the indirection only because `Sky` is constructed after
+the GL context exists (`engine.rs:60`) — and it is therefore built *before* `LoadScene(0)` rather
+than after (`engine.rs:118`); the only observable difference is the insertion order of
+`quad.obj`/`sky` in the resource caches, which nothing depends on. `Run`'s two loop locals
+(`Engine.cpp:71-72`) become fields, since the fixed-step loop is now driven one frame at a time from
+winit's `about_to_wait` and cannot keep them on the stack (`engine.rs:79`); `ticks_per_step` is
+constant and computed once (`engine.rs:137`).
+
+## 7. The `.obj` parser's C++ stream semantics
+
+`Mesh.cpp` leans on `std::istringstream` behaviour that Rust has no equivalent for, so it is
+reproduced explicitly (`mesh.rs:39`): a failed extraction sets the fail flag and zeroes the target
+(C++11 `num_get`), which is what `ss.fail()` is tested for at `Mesh.cpp:37` and `:94`; and once the
+fail flag is set, every later extraction is a no-op. (C++ leaves the target *unmodified* on an
+already-failed stream rather than zeroing it — every call site gates on the fail flag before reading
+those values, so the difference is unobservable.)
+
+`mesh.rs:47`: C++ `>>` consumes the longest valid numeric *prefix* of a token; this reads the whole
+whitespace-delimited token. All 14 shipped `.obj` files use clean whitespace-separated numbers, so
+the two agree. `mesh.rs:118`: `std::string::operator[]` returns `'\0'` at `index == size()`,
+reproduced so `line[2]` / `line[3]` on a short line behave the same. `mesh.rs:206`:
+`while (!fin.eof()) { std::getline(...) }` becomes a `.lines()` iteration — the C++ loop performs one
+extra pass on an empty `line` when the file ends in a newline, which matches no prefix and is a
+no-op, and `str::lines` strips a trailing `\r` the way Windows text-mode `getline` does.
+`mesh.rs:254`: the C++ mutates `line` in place replacing `/` with a space; `line` borrows the input
+here, so the edit is made on an owned copy.
+
+Four sites use `wrapping_sub` to preserve C++'s unsigned wraparound exactly, rather than panicking on
+an underflow the original quietly tolerated: `mesh.rs:147`, `:246`, `:263`, `:296`.
+
+`shader.rs:21` is the same class of thing: `str.find(pat, from)` has no std equivalent, so the
+offset search is written out.
+
+## 8. The platform layer
+
+`src/main.rs` is the one part of the port that is a rewrite rather than a transcription. It replaces
+`WinMain` (`Main.cpp:4-16`, whose `_DEBUG` `AllocConsole`/`freopen` block has no equivalent — a Rust
+binary already has stdout) and the entire Win32 half of `Engine.cpp`: `CreateGLWindow`
+(`330-413`), `WindowProc` (`272-328`), `SetupInputs` (`440-467`), `ConfineCursor` (`469-475`),
+`ToggleFullscreen` (`485-501`) and the `PeekMessage` pump inside `Run` (`77-127`)
+(`main.rs:1`, `:5`, `:247`, `:341`).
+
+- **Window creation** (`main.rs:65`) replaces the `WNDCLASSEX` registration and `CreateWindowEx`. The
+  size is logical, matching `CreateWindowEx`'s DPI-aware pixel size after `SetProcessDPIAware`.
+- **Pixel format** (`main.rs:83`) replaces `ChoosePixelFormat` + `PIXELFORMATDESCRIPTOR`. The
+  original asks for 32-bit colour, 32-bit depth, double-buffered RGBA. 32-bit depth is not offered by
+  every driver (macOS CGL tops out at 24 + 8 stencil), so the template asks for 24 and the picker
+  takes the deepest offered.
+- **Context creation** (`main.rs:100`) replaces `wglCreateContext`, which on Windows returns a legacy
+  *compatibility* context. This asks for 3.3 Core explicitly — which is what forces several of the
+  deviations in section 2.
+- **`wglMakeCurrent`** → `main.rs:289`. **`wglSwapIntervalEXT(1)`** → glutin's
+  `set_swap_interval(SwapInterval::Wait(1))`, which moves from `Engine.cpp:431` to `main.rs:307`
+  (`engine.rs:113`) — the original's typo in the surrounding code is preserved above it.
+- **`ShowCursor(FALSE)` + `ClipCursor`** → `main.rs:123`, which returns whether the pointer was
+  *locked* rather than merely confined; see the macOS note in section 1.
+- **Fullscreen** (`main.rs:220`): `SetWindowLong(GWL_STYLE, WS_POPUP)` + `SetWindowPos(HWND_TOPMOST,
+  …)` becomes winit's borderless fullscreen; the windowed branch restores the original size and
+  position. `iWidth`/`iHeight` are deliberately *not* written here — winit reports the new size
+  through `WindowEvent::Resized`, which is also where the GL surface is resized.
+- **`iWidth` / `iHeight`** (`main.rs:190`, `:320`) are **physical** pixels. glutin's macOS surface
+  sets `setWantsBestResolutionOpenGLSurface(true)`, so the GL drawable is the physical size —
+  typically 2× the logical window on a retina display. Feeding logical sizes to `glViewport` and
+  `Camera::SetSize` would render into the bottom-left quarter of the window. (The C++ sets them to
+  the logical constants at `Engine.cpp:352-353`.) `main.rs:352` guards against a zero dimension: the
+  first frame and a minimised window can report 0, and `NonZeroU32::new` would panic.
+- **`SetupInputs`** has no equivalent (`main.rs:328`): winit's `DeviceEvent::MouseMotion` already
+  delivers what `RegisterRawInputDevices` asked for. Correspondingly `input.rs:54` and `:63` replace
+  the mouse-move and button halves of `Input::UpdateRaw`, and `main.rs:427` feeds the buttons in.
+- **Keyboard** (`input.rs:83`): the `WndProc`'s `input.key[wParam & 0xFF]` virtual-key indexing
+  becomes `key_index`, mapping winit `KeyCode`s into the same ASCII slots the ported code reads
+  (`'W'`, `'A'`, `'S'`, `'D'`, `'1'`..`'7'`, `' '`). `player.rs:112` notes that `VK_SPACE == 0x20 ==
+  b' '`. `main.rs:391` preserves the key-repeat guard `if (lParam & 0x40000000) return 0;`.
+  `engine.rs:170` adds the entry point main.rs uses to feed these in.
+- **The frame loop**: `Run`'s prologue becomes `engine.rs:183`, and the body of its "no pending
+  message" `else` branch becomes `engine.rs:190` / `main.rs:469`. `ControlFlow::Poll`, not `Wait`
+  (`main.rs:502`) — the C++ renders whenever `PeekMessage` finds nothing to do. `ConfineCursor` and
+  `SwapBuffers` stay in `main.rs` with the window.
+- **Shutdown ordering** (`main.rs:171`): `Engine` owns every GL object and their `Drop` impls issue
+  real GL calls, so it is declared first and therefore dropped first — while the context is still
+  current. `engine.rs:504` is the `Unload` call, made from `main.rs` when the event loop exits;
+  `engine.rs:506` makes the always-set-by-then `curScene` an explicit `Option`.
+- **glutin's two-phase `DisplayBuilder`/`Init` dance** (`main.rs:156`): on most platforms `resumed`
+  fires once, but Android tears the surface down and re-creates it, so the display and context are
+  built only on the first pass.
+- `WM_SYSCOMMAND` and `WM_PAINT` have no winit equivalent and are dropped (`main.rs:341`).
+- `engine.rs:41` records where the rest of `Engine`'s Win32 members went: `hDC`/`hRC`/`hWnd`/
+  `hInstance` and `iWidth`/`iHeight`/`isFullscreen` now live in `main.rs` (`main.rs:183`, `:185`,
+  `:187`), and the window size arrives as parameters to `run_frame`.
+
+## 9. Trivia
+
+- `object.rs:22` — `typedef … PObjectVec` (`Object.h:46`) lives in `scene.rs` instead, next to
+  `PPortalVec`, so the two aliases sit together.
+- `object.rs:69` — `draw_impl` is the body of `Object::Draw` (`Object.cpp:20-31`), split out under a
+  separate name so `ObjectT::draw` (the virtual) can call it as its default. The `curFBO` parameter is
+  dropped from the base implementation, which never used it; only `Portal::Draw` does.
+- `portal.rs:151` — `mesh` and `shader` are `Option<Rc<..>>` on the ported `Object` while C++
+  dereferences the `shared_ptr`s unconditionally. `Portal::new` always fills both, so `unwrap`
+  reproduces the C++ behaviour exactly.
+- `portal.rs:162` — `DrawPink` takes a `ctx` only so it matches the call sites that already hold one.
+- `collider.rs:44` — the parameter is named `local_to_unit` after the `.cpp` definition; the
+  declaration at `Collider.h:9` confusingly calls the same parameter `localToWorld`.
+- `collider.rs:6` — `Collider::mat` stays private exactly as in `Collider.h:16`; `Copy` is derived so
+  colliders can be passed by value the way the C++ stores them in `std::vector<Collider>`.
+- `engine.rs:66` — `GLint occlusionCullingSupported` → `bool`.
+- `engine.rs:87` — `Engine::Engine()` minus the window/GL/raw-input setup, which `main.rs` does first.
+- `engine.rs:124` — the seven scene registrations keep their order; that is what makes `1`–`7` select
+  them.
+- `engine.rs:266`, `:276` — `Scene::Load` gains `gl`/`res`; the `Rc<RefCell<Player>>` unsize-coerces
+  to `Rc<RefCell<dyn ObjectT>>`, the equivalent of pushing a `shared_ptr<Player>` into a
+  `vector<shared_ptr<Object>>`.
+- `engine.rs:177` — a method nothing calls, kept for completeness.
+- `level1.rs:14` — the C++ level classes have no state and no members; unit structs are the same
+  thing.
+- `level1.rs:27` — `std::shared_ptr<Tunnel> tunnel1(new Tunnel(...))` → an `Rc<RefCell<Tunnel>>` kept
+  locally after being pushed into `objs`, because `SetDoor1`/`SetDoor2` are called on it later.
+- `level1.rs:69` — `player.SetPosition(..)` is `Physical::SetPosition`, reached through `base`.
+- `level2.rs:81`, `:97` — the `house2` `Option` is unwrapped in the branch where the C++ dereferences
+  a `shared_ptr` that is only non-null there; `Portal::Connect(Warp&, Warp&)` becomes
+  `connect_warps(portal, side, portal, side)`.
+- `physical.rs:24`, `player.rs:23`, `props.rs:160` — snake_case renames (`hitSpheres`, `onGround`,
+  `type`).
+- `resources.rs:39`, `:59` — `const char*` → `&str`, `shared_ptr` → `Rc`.
+- `game_header.rs:58` and the unused-but-preserved helpers (`gh_max`, `Matrix4::zero`,
+  `Vector4::homogenized`, `Camera::inverse_projection`, `Player::cam_to_world`, …) carry
+  `#[allow(dead_code)]` rather than being deleted. Fidelity to the original's API surface is the
+  point; nothing ported was removed merely because the seven shipped scenes do not reach it.
+
+---
+
+## Status
+
+`cargo build --release` — 0 errors, 0 warnings.
+`cargo test` — 9 passed, 0 failed.
+
+---
+
+# Extensions beyond the port
+
+Everything above documents the faithful port. Everything below is **new work** — it has no C++
+counterpart and is not part of HackerPoet/NonEuclidean.
+
+The split is enforced by convention and visible in the source: the port carries **220
+`// PORT:` comments** citing the original line each deviation came from, while additions carry
+**`// EXT:`** comments. New code lives in `src/ext/` and `src/level7..11.rs`; the ported files
+were touched only where a hook was unavoidable, and each of those is a handful of lines.
+
+## New scenes
+
+| Key | Scene | Idea |
+|----|-------|------|
+| `8` | **Perspective Gallery** | Forced-perspective grabbing. Pick something up and where you release it decides how big it really is. |
+| `9` | **Penrose Ascent** | Four descending corridors wired into a closed cycle. Walk forward to fall forever, turn around to climb forever. |
+| `0` | **Compound** | Carry a grabbed object through a scaling portal so both size effects multiply. Neither source game does this. |
+| `-` | **Unobserved** | Statues that only move while you are not looking at them, across two portal-linked chambers. |
+| `=` | **Anamorphic Chamber** | Twelve scattered fragments that resolve into a ring from exactly one spot in the room. |
+
+Scenes `1`–`7` are CodeParade's originals and are untouched.
+
+## New mechanics
+
+### Forced-perspective grabbing — `ext/grab.rs`
+
+Superliminal's signature mechanic. It is cheap here because the port kept `p_scale` as a genuine
+*physical* scale rather than a rendering trick: it already feeds the transform chain
+(`Object.cpp:38`), gravity (`Physical.cpp:21`), walk speed (`Player.cpp:105`) and the collision
+epsilon (`Physical.cpp:31`). CodeParade built the hard half of this mechanic without needing it.
+
+An object holds constant apparent size exactly when its size and distance stay in a fixed ratio,
+so on pickup we record `k = p_scale / distance` and hold it. Each frame a ray is cast down the
+crosshair, and the object is placed just short of the hit so it rests against the surface:
+
+```
+d = hit_dist / (1 + r·k)        p_scale = k · d
+```
+
+Closed form, no iteration. Three tests pin the invariants — apparent size never drifts, further
+placement is genuinely larger, and the object touches the surface rather than clipping it.
+
+### Ray casting — `ext/raycast.rs`
+
+The one genuine gap in the original. `Collider::Collide` (`Collider.cpp:23-45`) only answers
+"does this unit sphere overlap that rectangle"; grabbing needs "where along this ray does the
+world first block it". Since a `Collider` stores its rectangle as a matrix whose translation is
+the centre and whose X/Y axes are the half-extents, this is a plane hit plus two clamped axis
+tests — the same projection the collision routine already performs, solved for `t`.
+
+### Observation-dependent geometry — `ext/visibility.rs`
+
+The engine does run occlusion queries, but only for portals and only to prune recursion
+(`Engine.cpp:233-251`). Reusing them would mean threading new queries through the ported render
+path, so visibility is computed analytically instead: a view-cone test plus a line-of-sight
+raycast. That keeps the mechanic entirely inside `ext/`, and gives the answer during `update` —
+a frame earlier than the render pass could report it.
+
+### Per-frame room logic — `ext/room.rs`
+
+The ported `Scene` trait has exactly one method, `Load` (`Scene.h:7-9`) — scenes build objects
+and then have no further say. Rather than change that trait, rooms needing behaviour push a
+`RoomLogic` object: an ordinary `ObjectT` with no mesh and no shader, so `Object::Draw` skips it
+(`Object.cpp:21` only draws when both are present) while `Engine::Update` still ticks it.
+
+## Gamepad — `ext/gamepad.rs`
+
+CodeParade *registered* joystick and gamepad raw-input devices in `Engine::SetupInputs`
+(`Engine.cpp:454-465`) and left three `//TODO:` stubs behind (`Input.cpp:43-45`,
+`Input.h:23-30`). The handler was never written. This finishes it, via `gilrs` and the SDL
+controller database — so a DualSense maps correctly over USB or Bluetooth with no
+device-specific code.
+
+The analog stick needed only a two-line change to the ported movement code, because
+`Player::Move` already normalises the input vector *only* when its magnitude exceeds 1
+(`Player.cpp:92-96`). Stick and keyboard simply add and clamp correctly. The new fields went
+exactly where `Input.h:23` says `//Joystick //TODO:`.
+
+The same table is in the game, under **Options → Controls**, alongside the keyboard column.
+
+| Control | Action |
+|---------|--------|
+| Left stick | Move (analog) |
+| Right stick | Look |
+| Cross / Square / R2 | Grab / release |
+| R1 (hold) | Rotate the held object with the right stick |
+| D-pad ←→ | Previous / next scene (in a menu: change the setting under the cursor) |
+| D-pad ↑↓, Cross, Circle | Menu: move, confirm, back |
+| Options | Open the pause menu / close it again |
+| Create | Mute |
+| PS button | Fullscreen |
+
+Options and PS both moved. Without a pause binding a pad could start a game and never leave it —
+`menu_back` only reaches a menu that is already open, and nothing else on the pad opened one. That
+freed quitting to live where it belongs (pause → MAIN MENU → EXIT) and got it off the PS button,
+which is also the button you press to wake a sleeping DualSense: an unconfirmed instant exit on the
+wake button is a trap.
+
+One detail worth knowing if a controller ever seems invisible: a pad already connected when the
+process starts is **not** in `gilrs.gamepads()` yet. gilrs learns of it from a queued `Connected`
+event, so anything that counts pads before draining that queue reports zero for a controller sitting
+right there. `examples/pad_probe.rs` dumps the raw sequence, the SDL mapping and a live axis stream:
+
+```bash
+cargo run --release --example pad_probe
+```
+
+## Audio — `ext/audio.rs`
+
+The original engine is completely silent. Built on `kira`, chosen over `rodio` because scene
+switching wants real crossfades.
+
+**Music** — drop `ogg`/`mp3`/`wav`/`flac` into `assets/music/`. A numeric filename prefix binds
+a track to a scene (`03-pillars.ogg` → scene 3); anything else becomes the fallback for scenes
+without their own track. Scene changes crossfade.
+
+Music is **streamed**; effects are decoded up front. `StaticSoundData` holds a whole track as f32
+samples, which for the eight-minute soundtrack is ~275 MB resident and a third of a second of stall
+at the scene load that starts it. A streaming sound decodes ahead on kira's thread instead, so a
+track costs about the same whether it runs one minute or twenty. The trade is that a stream can fail
+*during* playback where a static sound cannot, so `Audio::tick` drains the handle's error queue every
+frame rather than letting the music stop with no explanation.
+
+**Sound effects** — drop files into `assets/sfx/` named `grab`, `release`, `portal`, `land` or
+`footstep`. The call sites are already wired; the files simply do not exist yet.
+
+Everything degrades to a no-op. No audio device, no `assets/` directory, or no files, and the
+engine still starts and runs silently — a demo should not refuse to launch over a missing sound
+file, and the ported engine has no error path to surface one through.
+
+## Settings — `ext/settings.rs`
+
+**Options** carries mouse sensitivity, gamepad sensitivity, mute, and a link to the **Controls**
+key map. Up/down moves between rows, left/right changes the row you are on — D-pad included, so
+the whole screen is reachable from the controller.
+
+Sensitivity is an integer notch 1–10 rather than a float, because ten labelled stops are
+navigable with a D-pad in a way a continuous value is not. Notch 5 is exactly 1.0×, so a player
+who never opens the menu gets the ported feel bit for bit; the ladder is geometric (×1.25 a
+notch, 0.41× to 3.05×), so each stop changes the feel by the same *proportion*. Mouse and pad
+carry separate notches — a stick is a rate control and a mouse a displacement one, and a player
+who uses both wants two numbers rather than one compromise.
+
+Values live in `settings.cfg` beside the other asset directories, written at most once a frame
+and only when something changed (the menu marks a flag; the engine flushes it), so a held D-pad
+direction never puts a filesystem write between the player and the value they are aiming for.
+The file is generated, not an asset — worth a `.gitignore` line. Everything degrades to a no-op:
+an unreadable file leaves the defaults, a corrupt line is skipped, an unwritable one loses the
+preference rather than interrupting the game about it.
+
+`GH_MOUSE_SENSITIVITY` is a compile-time constant read straight out of `Player::Look`
+(`Player.cpp:74,82`), so the runtime multiplier is a thread-local read at the two call sites —
+the same shape as `ext/view.rs`'s runtime FOV, and for the same reason: ported code has no path
+to the extension state.
+
+## Load time and frame cost
+
+Measured on an M3 Max at 3456×2168, scene 15 (the intro meadow, which is the heaviest thing the
+game loads and what the title screen sits in front of).
+
+| Stage | Before | After |
+|-------|--------|-------|
+| Door GLB (`Classic_Interior_Door.glb`) | 1.50 s | 0.22 s |
+| `grass_patch.obj` (124 MB, 2.08 M triangles) | 0.47 s | 0.37 s |
+| Terrain, sky, UI | 0.12 s | 0.11 s |
+| **Scene load** | **2.10 s** | **0.70 s** |
+| Peak resident | 1114 MB | 1058 MB |
+
+Where it went:
+
+* **Lanczos3 → Triangle for the 4096→512 map downscale.** `image` scales a filter's kernel by the
+  resampling ratio, so Lanczos3's support of 3 becomes a 24-pixel radius at 8:1 — about 2,300
+  taps per output pixel, and 870 ms of the door's 1.5 s. At a pure downscale Triangle is very
+  nearly a box average over the source footprint, which is the right answer anyway.
+* **The maps are decoded in parallel**, three at a time, biggest first, from a shared queue. This
+  is the only threaded code in the engine and stays contained by construction: `thread::scope`
+  joins before returning, the workers read immutable slices of the BIN chunk, and nothing touches
+  GL. Lane count is a memory/time trade — see the constant's comment for the measurements.
+* **`MAP` 1024 → 512.** The door is 1.7 units tall and seen at conversational distance; 512 is
+  already more texel than it can show.
+* **The OBJ parser stopped copying every face line.** It allocated twice per `f` line — an owned
+  byte copy to rewrite `/` as space, then a `String` round trip — which on `grass_patch.obj` is
+  two million allocations for a rewrite that only ever fed the tokenizer. The tokenizer now
+  splits on `/` directly. Every shipped mesh parses to a byte-identical result.
+* **Meshes past `grab::FIT_TRI_CAP` no longer keep a CPU triangle list.** `grab::fits` skips them
+  already, so the grass patch was building and holding 75 MB of triangles nothing could read.
+
+Frame cost is **2.6 ms** (≈380 fps) with vsync off, of which the grass blades are 0.85 ms. With
+vsync on — the default — the game is display-limited long before it is GPU-limited, so a frame
+measures ~7.8 ms on a 120 Hz panel no matter what is in it. That is worth knowing before
+optimising anything else here: the earlier 127 fps was the display, not the renderer.
+
+## Hooks into ported files
+
+Nine small additions, each tagged `// EXT:`:
+
+| File | Hook |
+|------|------|
+| `collider.rs` | read-only `mat()` accessor, so rays can transform the rectangle to world space |
+| `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`8`–`=` key mappings |
+| `player.rs` | stick axes added to the keyboard move and look vectors |
+| `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look |
+| `engine.rs` | one `ext` field, table-driven scene keys, a grab tick, and scene-load notification |
+| `main.rs` | gamepad polling in `about_to_wait` |
+
+### One bug this surfaced
+
+`Input::EndFrame` memsets `key_press` to zero (`Input.cpp:11`) and runs **inside** the 500 Hz
+fixed-step loop. Anything reading `key_press` after that loop always sees `false`. The ported
+scene keys avoid this only by being checked before it. Extension keys are now sampled in the same
+place and latched.
+
+## Known limits
+
+**Portals must stay vertical.** `Physical::try_portal` only rewrites `euler.y` on teleport
+(`Physical.cpp:57-59`), so passing through a tilted or rolled portal would leave the player
+un-reoriented. This rules out floor/ceiling portals, Klein-bottle corridors, and Manifold
+Garden-style player gravity flips. Per-*object* gravity is already an arbitrary `Vector3`, so
+objects are unaffected.
+
+**No object-vs-object collision.** The ported pass tests each `Physical`'s hit spheres against
+other objects' *mesh colliders* (`Engine.cpp:155-192`), so grabbed props collide with level
+geometry but pass through each other. They cannot be stacked.
+
+**No HUD.** There is no crosshair, so aiming a grab is currently guesswork at screen centre.
+
+## Meadow, grass and clouds (scene `\`)
+
+An outdoor scene built to look like the classic rolling-hills-and-cumulus photograph while
+costing less than any indoor room -- it renders at roughly 1,100 fps uncapped, against ~190 for
+the original demo's portal-recursive first level. Every expensive thing happens offline or once:
+
+| What | Where the cost went |
+|------|---------------------|
+| Cloud shapes (6-octave domain-warped FBM, single-scatter lighting, cirrus layer) | Baked **once** into a 1536x768 panorama by a GLSL pass (`src/ext/skybake.rs`, `Shaders/cloudbake.*`), re-baked every 5 s with advanced noise time so the field evolves. The runtime sky (`Shaders/sky.frag`) is one texture fetch + the original sun term -- which matters because the ported renderer draws the sky inside every 2048x2048 portal pass. |
+| Grass detail | Baked offline into a tileable noise atlas (`tools/gen_meadow.py` -> `Textures/grass_noise.bmp`). The shader does two or three taps and zero noise math. |
+| Rolling hills | One heightfield mesh with smooth normals smuggled through the engine's 3-component `vt` channel (the parser discards `vn`), plus a gradient-tilted collider shell -- same scheme as the Relativity walk shell. |
+| "Realism" | Three illusions in `Shaders/grass.frag`: drifting **cloud shadows** (a scrolled low-frequency tap), **valley occlusion** (world height as free AO), and **atmospheric perspective** toward the sky's horizon colour. Plus a backlit sun sheen and a wind ripple that moves no vertices. |
+
+The new sky applies to every scene; the ported gradient-only sky is kept as
+`Shaders/sky_plain.frag.txt`.
+
+### Dev tooling
+
+```bash
+cargo run --release -- --scene 14 --shot out.bmp --frames 120 --yaw 30 --pitch -5
+```
+
+skips the title, loads scene 14, aims the camera, renders 120 frames (so physics settles), writes a
+screenshot and exits. This is how the shaders were iterated without a human in the loop, and how
+the throughput numbers above were measured (600 frames, wall-clock).
+
+`--shot` **without** `--scene` leaves the menu alone and photographs whatever the game boots into,
+which is the title screen and the intro level running behind it — loading a scene would close the
+menu that is the thing being looked at.

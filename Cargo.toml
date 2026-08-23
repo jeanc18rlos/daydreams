@@ -1,0 +1,43 @@
+[package]
+name = "daydreams"
+version = "0.1.0"
+edition = "2021"
+description = "DayDreams -- a game built on a Rust port of CodeParade's NonEuclidean rendering engine (HackerPoet/NonEuclidean)"
+license = "MIT"
+
+[dependencies]
+# Window + event loop + raw mouse deltas (replaces Win32 window/message pump/WM_INPUT)
+winit = "0.30.13"
+# GL context + swap interval (replaces wglCreateContext / PIXELFORMATDESCRIPTOR / wglSwapIntervalEXT)
+glutin = "0.32.3"
+glutin-winit = "0.5.0"
+# GL function bindings (replaces GLEW).
+# 0.18 is REQUIRED, not merely preferred: glow <= 0.17 probes the wrong loaded-symbol flag in
+# get_query_parameter_u32 and panics on macOS with "called glGetQueryObjectuivEXT but it was not
+# loaded" -- which is exactly the call the portal occlusion-culling path makes every frame.
+# Fixed by grovesNL/glow#365, shipped in 0.18.0.
+glow = "0.18.0"
+raw-window-handle = "0.6.2"
+gilrs = "0.11.2"
+kira = "0.12.3"
+# Runtime glTF/GLB loader. The engine's ported Mesh reads a custom OBJ dialect and DISCARDS
+# vertex normals, recomputing flat per-face ones (Mesh.cpp:187) -- correct for the original's
+# assets, fatal for a scanned door whose look lives in its smooth normals, tangents and
+# material maps. EXT geometry loads through this instead. "utils" gives Primitive::reader,
+# "names" gives node/mesh/material names (the door is split by node name). NOT "import": that
+# would decode all ten of this model's images at once -- 400 MB resident -- where the loader
+# decodes and downsamples them one at a time.
+# Decodes the PNGs embedded in a GLB. Already pulled in by gltf's "import" feature; named here
+# because src/ext/gltf_model.rs resizes and repacks the maps itself rather than taking gltf's
+# decoded images wholesale (six 4096-square RGBA maps would be 400 MB resident).
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+gltf = { version = "1.4.1", default-features = false, features = ["utils", "names"] }
+
+[profile.release]
+opt-level = 3
+
+# The fixed-step loop runs at 500 Hz (GH_DT = 0.002) and the collision pass is
+# O(objects^2 * hitSpheres * colliders), so a debug build cannot keep up with real time.
+# Give the dev profile enough optimization to remain playable.
+[profile.dev]
+opt-level = 2

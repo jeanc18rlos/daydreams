@@ -1,0 +1,134 @@
+"""Generate the UI atlases: cursor sprites and a bitmap font.
+
+Emits 32-bit BMPs (BGRA, real alpha) -- the engine's loader gained an EXT branch for those --
+plus `src/ext/ui_atlas.rs` with the sprite/glyph rectangles as Rust consts, so nothing is parsed
+at runtime.
+
+UV convention: the engine's BMP loader leaves GL t=0 at the image TOP (Texture.cpp:27-41 reads
+rows bottom-first into img[height-1] downward). So all rects here are top-origin pixel rects and
+ui.vert flips the quad's v before sampling. Keep both halves of that in step.
+"""
+from PIL import Image, ImageDraw, ImageFont
+import struct, os
+
+OUT_CURSORS = "Textures/ui_cursors.bmp"
+OUT_FONT    = "Textures/ui_font.bmp"
+OUT_RS      = "src/ext/ui_atlas.rs"
+
+def write_bmp32(path, im):
+    """32-bit uncompressed BMP, BGRA, bottom-first rows, 54-byte header (data offset 54)."""
+    im = im.convert("RGBA")
+    w, h = im.size
+    px = im.load()
+    rows = []
+    for y in range(h - 1, -1, -1):                # bottom-first
+        row = bytearray()
+        for x in range(w):
+            r, g, b, a = px[x, y]
+            row += bytes((b, g, r, a))
+        rows.append(bytes(row))
+    data = b"".join(rows)
+    hdr  = struct.pack("<2sIHHI", b"BM", 54 + len(data), 0, 0, 54)
+    hdr += struct.pack("<IiiHHIIiiII", 40, w, h, 1, 32, 0, len(data), 2835, 2835, 0, 0)
+    open(path, "wb").write(hdr + data)
+
+# ── Cursors ──────────────────────────────────────────────────────────────────────────────────
+src = Image.open("assets/ui/cursors_src.png").convert("RGBA")
+# (name, x, y, w, h) from the sheet analysis
+SPRITES = {
+    "DOT":    (1,   1,   128, 128),
+    "OPEN":   (2,   404, 55,  41),
+    "CLOSED": (138, 339, 49,  42),
+}
+# Key out the teal background (0,128,128) that the sheet uses in place of alpha.
+def keyed(crop):
+    crop = crop.copy(); p = crop.load()
+    for y in range(crop.height):
+        for x in range(crop.width):
+            r, g, b, a = p[x, y]
+            if abs(r) < 10 and abs(g - 128) < 12 and abs(b - 128) < 12:
+                p[x, y] = (0, 0, 0, 0)
+    return crop
+
+atlas = Image.new("RGBA", (256, 128), (0, 0, 0, 0))
+rects = {}
+cx = 0
+for name, (x, y, w, h) in SPRITES.items():
+    crop = keyed(src.crop((x, y, x + w, y + h)))
+    atlas.paste(crop, (cx, 0))
+    rects[name] = (cx, 0, w, h)
+    cx += w + 2
+write_bmp32(OUT_CURSORS, atlas)
+print(f"cursors -> {OUT_CURSORS} {atlas.size}: {rects}")
+
+# ── Font ─────────────────────────────────────────────────────────────────────────────────────
+# The game's face is Roboto Condensed Bold, vendored under assets/fonts/ (SIL OFL, see the
+# LICENSE beside it). It ships with the repo rather than being taken from the system because a
+# baked atlas has to be reproducible: whatever font this picks is frozen into ui_font.bmp and
+# ui_atlas.rs, and a machine without it would silently regenerate the UI in something else.
+# The system faces stay as a fallback so the tool still runs on a checkout without the asset.
+ROBOTO = "assets/fonts/RobotoCondensed[wght].ttf"
+FONT_CANDIDATES = [
+    ROBOTO,
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
+]
+font_path = next(p for p in FONT_CANDIDATES if os.path.exists(p))
+SIZE = 72
+font = ImageFont.truetype(font_path, SIZE)
+# Roboto Condensed ships as a single variable font with a 100..900 weight axis whose default is
+# Regular. The UI is bold throughout -- white text over a photographed scene needs the weight --
+# so pin the Bold instance before anything is measured or drawn. Measurement and rasterisation
+# both read the current variation, so this must happen before the glyph loop below.
+if font_path == ROBOTO:
+    font.set_variation_by_name("Bold")
+chars = [chr(c) for c in range(32, 127)]
+PAD = 2
+# Measure, then pack into rows of a 1024-wide atlas.
+glyphs = {}
+x, y, row_h = PAD, PAD, 0
+ATLAS_W = 1024
+tmp = Image.new("L", (256, 256)); d = ImageDraw.Draw(tmp)
+for ch in chars:
+    l, t, r, b = d.textbbox((0, 0), ch, font=font)
+    w, h = max(1, r - l), max(1, b - t)
+    adv = int(round(d.textlength(ch, font=font)))
+    if x + w + PAD > ATLAS_W:
+        x = PAD; y += row_h + PAD; row_h = 0
+    glyphs[ch] = (x, y, w, h, l, t, adv)
+    x += w + PAD; row_h = max(row_h, h)
+ATLAS_H = 1
+while ATLAS_H < y + row_h + PAD: ATLAS_H *= 2
+fimg = Image.new("RGBA", (ATLAS_W, ATLAS_H), (255, 255, 255, 0))
+fd = ImageDraw.Draw(fimg)
+for ch, (gx, gy, gw, gh, l, t, adv) in glyphs.items():
+    fd.text((gx - l, gy - t), ch, font=font, fill=(255, 255, 255, 255))
+write_bmp32(OUT_FONT, fimg)
+ascent, descent = font.getmetrics()
+print(f"font -> {OUT_FONT} {fimg.size} from {os.path.basename(font_path)} @ {SIZE}px, "
+      f"ascent {ascent} descent {descent}")
+
+# ── Rust consts ──────────────────────────────────────────────────────────────────────────────
+with open(OUT_RS, "w") as f:
+    f.write("//! EXT: generated by tools/gen_ui.py -- DO NOT EDIT.\n")
+    f.write("//! Pixel rectangles into the UI atlases, top-origin (see the tool's UV note).\n\n")
+    f.write("/// (x, y, w, h) in `Textures/ui_cursors.bmp`.\n")
+    f.write("pub struct Sprite { pub x: u32, pub y: u32, pub w: u32, pub h: u32 }\n")
+    f.write(f"pub const CURSOR_ATLAS: (u32, u32) = ({atlas.width}, {atlas.height});\n")
+    for name, (sx, sy, sw, sh) in rects.items():
+        f.write(f"pub const CURSOR_{name}: Sprite = Sprite {{ x: {sx}, y: {sy}, w: {sw}, h: {sh} }};\n")
+    f.write("\n/// One glyph: atlas rect, then bearing (left, top) and advance, all in atlas pixels\n")
+    f.write("/// at the baked size `FONT_SIZE`. Scale by (target_px / FONT_SIZE) when drawing.\n")
+    f.write("#[derive(Clone, Copy)]\n")
+    f.write("pub struct Glyph { pub x: u32, pub y: u32, pub w: u32, pub h: u32, pub bx: i32, pub by: i32, pub adv: i32 }\n")
+    f.write(f"pub const FONT_ATLAS: (u32, u32) = ({fimg.width}, {fimg.height});\n")
+    f.write(f"pub const FONT_SIZE: f32 = {SIZE}.0;\n")
+    f.write(f"pub const FONT_ASCENT: f32 = {ascent}.0;\n")
+    f.write("/// Indexed by (codepoint - 32) for ASCII 32..=126.\n")
+    f.write("pub const GLYPHS: [Glyph; 95] = [\n")
+    for ch in chars:
+        gx, gy, gw, gh, l, t, adv = glyphs[ch]
+        f.write(f"    Glyph {{ x: {gx}, y: {gy}, w: {gw}, h: {gh}, bx: {l}, by: {t}, adv: {adv} }}, // {repr(ch)}\n")
+    f.write("];\n")
+print(f"rust -> {OUT_RS} ({len(chars)} glyphs)")
