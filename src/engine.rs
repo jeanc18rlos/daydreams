@@ -1273,10 +1273,18 @@ impl Engine {
         // The grab latch, set either by the E key at the top of run_frame or by the gamepad.
         // NOT read from key_press directly: EndFrame has already cleared it by this point.
         // The elevator has first claim on it: standing in its cabin, E rides rather than grabs
-        // (src/ext/elevator.rs).
+        // (src/ext/elevator.rs). The held key has the next: with a lock in its reach, E uses
+        // it rather than drops it (src/ext/key.rs) -- the same latch whichever device pressed,
+        // so the pad can use the key too. The key's offer is taken every frame, pressed or
+        // not, so it never outlives the frame it was made in.
         let mut grab_pressed = self.pad_grab.replace(false);
         if grab_pressed && crate::ext::elevator::wants_interact() {
             crate::ext::elevator::press();
+            grab_pressed = false;
+        }
+        let key_wants_use = crate::ext::key::take_wants_use();
+        if grab_pressed && key_wants_use {
+            crate::ext::key::press();
             grab_pressed = false;
         }
 

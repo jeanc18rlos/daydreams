@@ -13,17 +13,23 @@
 //!   `engine_collision` is false, so the collision pass never pushes it and the portal pass
 //!   never warps it. The grab can still take it, at any point of the animation.
 //! * **In hand and loose.** `on_grab` ends the floating life for good: the shared `taken`
-//!   flag tells the painting its key is gone, physics is on, and the grab carries it. Each
-//!   fixed step while held the key looks down the crosshair for something that
-//!   `ObjectT::accepts_key` -- the locked window -- within [`USE_REACH`], offers
-//!   [`USE_HINT`], and on that step's E press raises `room::request_unlock_window` and marks
-//!   itself used. The same E is also the grab's release (`Engine::run_frame` latches the key
-//!   for `ext_update`, which runs after the fixed steps), and `on_release` is where a used
-//!   key asks to be removed: the removal lands at the end of the next frame's first step, so
-//!   the key is drawn in hand for one more frame and then is gone. Ordering it this way,
-//!   rather than removing it in the step that used it, matters: a key removed mid-frame
-//!   leaves the grab holding nothing by `ext_update`, and the release press becomes a pickup
-//!   of whatever is under the crosshair -- the window.
+//!   flag tells the painting its key is gone, physics is on, and the grab carries it. While
+//!   held the key looks down the crosshair, once per rendered frame, for something that
+//!   `ObjectT::accepts_key` -- the locked window -- within [`USE_REACH`]; with one there it
+//!   offers [`USE_HINT`] and says so on a channel the engine reads ([`take_wants_use`]).
+//!
+//! # The press
+//!
+//! The use goes through the same latch as every other E: the keyboard's key, the gamepad's
+//! button and `--e-at` all set `Engine::pad_grab`, and `Engine::ext_update` hands the frame's
+//! press to whoever claims it first -- the elevator when the player stands in its cabin, then
+//! the held key when it wants the press ([`press`]), and only otherwise the grab, as a
+//! pickup or a release. So a press with a lock in reach uses the key and is NOT the grab's
+//! release, and a pad player is not left dropping the key at the window's foot. The key sees
+//! the press on its next fixed step ([`take_press`]), raises `room::request_unlock_window`,
+//! marks itself used and asks for its own removal (`room::request_remove`), which lands at
+//! the end of that step: the grab is told (`GrabState::on_removed`) and is simply holding
+//! nothing, with no release and no press left over that could pick up the window instead.
 //!
 //! # The window's side of the contract
 //!
@@ -50,6 +56,35 @@ use std::rc::{Rc, Weak};
 
 /// How far from the eye a lock may be for the held key to reach it, in metres.
 pub const USE_REACH: f32 = 2.5;
+
+thread_local! {
+    /// Set by the held key's step while a lock is in reach; taken by the engine once per
+    /// rendered frame, before it decides whose the frame's E press is.
+    static WANTS_USE: Cell<bool> = const { Cell::new(false) };
+    /// The frame's E, handed to the key by the engine; taken by the key's next step.
+    static PRESS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether the held key wants the frame's E press -- a lock is under the crosshair within
+/// reach. Consumed: the key's steps set it afresh every frame it holds, so the engine reads
+/// it once per frame and never sees a stale offer from a key since dropped or removed.
+pub fn take_wants_use() -> bool {
+    WANTS_USE.with(Cell::take)
+}
+
+/// Hand the frame's E press to the key (module docs, "The press").
+pub fn press() {
+    PRESS.with(|p| p.set(true));
+}
+
+/// The key's side: say the press is wanted, and take one the engine has handed over.
+fn offer_use() {
+    WANTS_USE.with(|w| w.set(true));
+}
+
+fn take_press() -> bool {
+    PRESS.with(Cell::take)
+}
 /// The prompt while the held key is on a lock.
 pub const USE_HINT: &str = "E  USE THE KEY";
 /// The prompt while the crosshair is on the key itself (through `pick_hint`).
@@ -70,6 +105,10 @@ pub struct Key {
     floating: bool,
     held: bool,
     used: bool,
+    /// The lock scan's answer and the frame clock it was taken at: the scan walks the scene,
+    /// and once per rendered frame is as often as its answer can change the HUD or the press.
+    lock_near: bool,
+    scanned_at: f32,
 }
 
 impl Key {
@@ -95,6 +134,8 @@ impl Key {
                 floating: true,
                 held: false,
                 used: false,
+                lock_near: false,
+                scanned_at: f32::NAN,
             })
         })
     }
@@ -186,9 +227,10 @@ pub fn dev_hold(
         log::info!("[key] --hold-key: nothing here accepts a key; a stand-in lock is planted {STUB_DIST} m ahead");
     }
     let key = Key::new(res, Rc::new(Cell::new(false)));
+    let hold = origin + dir * HOLD_DIST;
     let radius = {
         let mut k = key.borrow_mut();
-        k.base.set_position(origin + dir * HOLD_DIST);
+        k.base.set_position(hold);
         k.base.gravity = Vector3::zero();
         k.on_grab();
         bound_radius(k.base())
@@ -218,17 +260,29 @@ impl ObjectT for Key {
         if !self.held || self.used {
             return;
         }
-        if lock_under_crosshair(ctx.scene, &ctx.cam_to_world).is_none() {
+        // A press handed over is this frame's, whether or not the lock is still in reach: it
+        // is taken every step so that one cannot wait for a later aim.
+        let pressed = take_press();
+        // The frame clock moves once per rendered frame (`Engine::run_frame`): one scan per
+        // frame, shared by the steps in it.
+        let now = crate::ext::view::time();
+        if now != self.scanned_at {
+            self.scanned_at = now;
+            self.lock_near = lock_under_crosshair(ctx.scene, &ctx.cam_to_world).is_some();
+        }
+        if !self.lock_near {
             return;
         }
+        offer_use();
         hint::insist(USE_HINT);
-        // The latch is visible to the first fixed step of the frame it was pressed in
-        // (`Input::end_frame` clears it after that step), which is why this is tested here
-        // and not once per rendered frame.
-        if ctx.input.key_press[b'E' as usize] {
+        if pressed {
             self.used = true;
             room::request_unlock_window();
             log::info!("[key] used on the window: unlock requested");
+            // Removal by identity; the cell this key lives in is the one the scene holds.
+            if let Some(me) = self.me.upgrade() {
+                room::request_remove(&(me as Rc<RefCell<dyn ObjectT>>));
+            }
         }
     }
 
@@ -238,16 +292,13 @@ impl ObjectT for Key {
         self.taken.set(true);
         // Whatever point of the emergence it was taken at, in hand it is whole.
         self.base.base.scale = Vector3::ones();
+        // A fresh hold starts with no press pending and no scan to trust.
+        take_press();
+        self.scanned_at = f32::NAN;
     }
 
     fn on_release(&mut self, _velocity: Vector3) {
         self.held = false;
-        if self.used {
-            // Removal by identity; the cell this key lives in is the one the scene holds.
-            if let Some(me) = self.me.upgrade() {
-                room::request_remove(&(me as Rc<RefCell<dyn ObjectT>>));
-            }
-        }
     }
 
     fn engine_collision(&self) -> bool {
@@ -324,6 +375,21 @@ mod tests {
         let held = scene[2].borrow_mut();
         assert_eq!(lock_under_crosshair(&scene, &cam), Some(0));
         drop(held);
+    }
+
+    /// The press channel: the key's offer is consumed by the engine's read, so a stale offer
+    /// cannot claim a later frame's press; a press handed over is taken once by the key.
+    #[test]
+    fn the_offer_and_the_press_are_each_taken_once() {
+        assert!(!take_wants_use());
+        offer_use();
+        offer_use(); // several steps a frame
+        assert!(take_wants_use());
+        assert!(!take_wants_use(), "consumed by the frame's read");
+        assert!(!take_press());
+        press();
+        assert!(take_press());
+        assert!(!take_press(), "consumed by the key's step");
     }
 
     #[test]
