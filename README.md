@@ -758,7 +758,7 @@ binary already has stdout) and the entire Win32 half of `Engine.cpp`: `CreateGLW
 ## Status
 
 `cargo build --release` — 0 errors, 0 warnings; `cargo build --profile dist` — clean.
-`cargo test --release` — 246 passed, 0 failed.
+`cargo test --release` — 265 passed, 0 failed.
 `cargo clippy --release --all-targets -- -D warnings` — clean, with an empty `[lints.clippy]` table.
 `cargo fmt --check` — clean.
 `cargo deny check` — advisories, bans, licences, sources ok.
@@ -784,7 +784,7 @@ were touched only where a hook was unavoidable, and each of those is a handful o
 | `0` | **Compound** | Carry a grabbed object through a scaling portal so both size effects multiply. Neither source game does this. |
 | `-` | **Unobserved** | Statues that only move while you are not looking at them, across two portal-linked chambers. |
 | `=` | **Anamorphic Chamber** | Twelve scattered fragments that resolve into a ring from exactly one spot in the room. |
-| `'` | **Backrooms** | The intro's meadow and door, but the door opens onto a scanned, light-baked office maze with real wall, floor and furniture collision. See [Backrooms](#backrooms-scene-) below. |
+| `'` | **Backrooms** | The intro's meadow and door, but the door opens onto a scanned, light-baked office maze with real wall, floor and furniture collision -- and closes behind you. NEW GAME starts here. See [Backrooms](#backrooms-scene-) below. |
 
 Scenes `1`–`7` are CodeParade's originals and are untouched.
 
@@ -871,7 +871,10 @@ The one thing such logic cannot reach is the player — `Load` receives `&mut Pl
 `Rc` the engine keeps it in — so a room that needs to move them (the Backrooms, when they have
 fallen under its floor) calls `request_respawn`, and the engine applies it at the end of the
 same step, after the portal pass, through `set_position`: `prev_pos` moves with `pos`, so the
-next step's `try_portal` sees no segment that could sweep a doorway.
+next step's `try_portal` sees no segment that could sweep a doorway. Two more requests ride the
+same channel: `request_remove_portals` (the Backrooms' one-way door), applied at the same
+point, and `request_scene_load` (the elevator's ride), applied by `run_frame` once the
+fixed-step loop is over -- a load replaces the object vector a step is iterating.
 
 ## Gamepad — `ext/gamepad.rs`
 
@@ -932,9 +935,10 @@ track costs about the same whether it runs one minute or twenty. The trade is th
 *during* playback where a static sound cannot, so `Audio::tick` drains the handle's error queue every
 frame rather than letting the music stop with no explanation.
 
-**Sound effects** — drop files into `assets/sfx/` named `grab`, `release`, `portal`, `land` or
-`footstep`. `grab`, `release` and `footstep` have call sites; `portal` and `land` are loadable
-but nothing fires them yet. None of the files ship.
+**Sound effects** — drop files into `assets/sfx/` named `grab`, `release`, `portal`, `land`,
+`footstep` or `elevator`. `grab`, `release`, `footstep` and `elevator` (the doors closing on a
+ride) have call sites; `portal` and `land` are loadable but nothing fires them yet. None of the
+files ship.
 
 Everything degrades to a no-op. No audio device, no `assets/` directory, or no files, and the
 engine still starts and runs silently — a demo should not refuse to launch over a missing sound
@@ -1112,7 +1116,7 @@ Small additions, each tagged `// EXT:`:
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
 | `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look; `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery |
 | `frame_buffer.rs` | sized attachments instead of `GH_FBO_SIZE` square |
-| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn request applied after the portal pass; the `--forward`/`--strafe`/`--sprint` held keys; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`) |
+| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn and portal-removal requests applied after the portal pass, its scene-load request applied after the fixed-step loop; E offered to the elevator before the grab, and its hint and black-out in the overlay block; the `--forward`/`--strafe`/`--sprint` held keys and `--arrive`; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`) |
 | `portal.rs` | the nested pass scissored to the quad's screen footprint |
 | `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4`; `new` returns `Result<_, AssetError>` and the attribute scan is a pure, tested `scrape_attribs` |
 | `texture.rs` | `new` returns `Result<_, AssetError>`; the BMP byte walk is a pure, tested `decode_bmp` |
@@ -1168,12 +1172,15 @@ The new sky applies to every scene; the ported gradient-only sky is kept as
 
 ## Backrooms (scene `'`)
 
-The intro again -- same meadow, same white door, both built by `ext/meadow.rs`, which the two
-scenes share along with the far world's origin and the title screen's vantage -- except that
-through the door is
+**NEW GAME starts here**, and the title screen is this level seen from the meadow: the intro
+again -- same meadow, same white door, both built by `ext/meadow.rs`, which the two scenes
+share along with the far world's origin and the title screen's vantage -- except that through
+the door is
 `Meshes/backrooms_vr.glb`: a Sketchfab light-bake of the Backrooms, 29 primitives, 70k
-triangles, 27 maps, every material `KHR_materials_unlit`. Three things had to exist for it to be
-a place rather than a picture:
+triangles, 27 maps, every material `KHR_materials_unlit`. (`scenes::INTRO` is looked up by
+name, so the Intro proper -- the sunset sea, scene `;` -- is still in the level list, just no
+longer where the game begins.) Three things had to exist for it to be a place rather than a
+picture:
 
 | What | Where |
 |------|-------|
@@ -1208,6 +1215,86 @@ absolute numbers are pessimistic; the comparison is what matters): meadow spawn 
 **8.1 ms**, the same spawn in the Backrooms (the portal now draws the hall) **8.6 ms**, standing
 in the hall looking down it **6.1 ms**, looking back at the door (the portal draws the meadow)
 **8.0 ms**. Physics at 500 Hz with the triangle collider is inside those numbers.
+
+**The door is one way.** Step through it and, on the first step you take on the carpet, both
+doors and both portals are gone for good: the meadow door and the one on the carpet share a
+`DoorLink`, and the link carries a vanish flag (`DoorLink::vanish`) that makes each frame stop
+drawing, stop colliding (its collider proxy is dropped) and stop glowing, and ignore every
+reason to open -- proximity, the title's hold-open, its partner. The portals are removed
+through the engine (`room::request_remove_portals`, applied after the portal pass like the
+respawn, since that pass is what just warped you), because a door that is gone must not leave a
+hole in the air that still leads somewhere. The trigger is `meadow::in_far_world`: past the
+mood split, which -- the warp being instantaneous and the two worlds a kilometre apart -- is the
+same fact as having crossed. Arriving by elevator counts too. The title screen's camera is
+parked on the meadow and never crosses, so the backdrop keeps its open door and the hall
+through it. What is left at the hall's east end is its bare wall; the meadow stays loaded, a
+thousand units off and culled, for the title to come back to. The way on is the
+[elevator](#elevator), at the dead end of the entrance corridor south of the hall.
+
+## Elevator
+
+`ext/elevator.rs` is the hub between the game's interiors: EFX's *Elevator with Animation
+LOWPOLY* (`Meshes/elevator_with_animation_lowpoly.glb`, CC-BY-4.0, `THIRD_PARTY.md`) -- a
+cabin, a wallpapered wall slab around its doorway with a call button and a floor display, and
+two telescoping leaves the file's one clip, `Doors open`, slides open and shut. Stand in it and
+press E.
+
+**How it works.** The ride is a small state machine (`Ride`, GL-free, tested with a fake
+clock): `Idle` (doors open) -> E inside the cabin -> `Closing`, the leaves slide shut over 1.5
+s -> `Fading`, a black overlay comes up over 0.5 s -> `room::request_scene_load`, applied by
+the engine after the fixed-step loop, never mid-step -> the destination level takes the
+`Arrival` with `elevator::take_arrival()`, builds its own elevator with it (doors shut, screen
+black) and stands the player in the cabin with `Elevator::board` -> `Arriving`, the black clears
+over 0.5 s and the doors open over 1.5 s -> `Idle`. E is the grab key; standing in an idle
+cabin it rides instead, and the HUD says `E  RIDE TO <floor>` -- or `NO OTHER FLOORS`, when
+nothing else is registered. The doors are drawn as their own parts at the clip's `node_delta`
+for a clip time of `openness x T_OPEN`, where `T_OPEN` is the clip's widest moment, found once
+at load by sampling it, so closing is the opening curve played backwards. Collision is two
+triangle meshes: the cabin (floor, sill, walls, ceiling, slab) always; the shut leaves on a
+helper object (`ElevatorDoors`) offered only while the doors are less than half open. The
+fade, the hint, the E press, the ride-start cue for `Sfx::Elevator` and the arrival are
+ambient channels (thread-locals, as `ext::view`'s uniforms are), because nothing in the object
+vector survives the load and nothing in it can reach the engine's HUD or input.
+
+**Floors.** `elevator::FLOORS` lists the levels an elevator stops at, in riding order, by their
+registry name (`scenes::index_of`); a floor whose scene is not registered is skipped with one
+warning, so the list can name a level before it exists. From any floor the ride goes to the next
+in the list that resolves, wrapping round.
+
+| Floor | Scene | Label |
+|-------|-------|-------|
+| 0 | Backrooms | `BACKROOMS` |
+| 1 | Pool Rooms | `POOL ROOMS` |
+| 2 | Overgrown | `OVERGROWN` |
+
+**How a level adds one.**
+
+```rust
+let arrival = elevator::take_arrival();                 // Some(..) when a ride brought us
+let lift = Elevator::new(gl, res, threshold, door::yaw_facing(facing), arrival);
+if arrival.is_some() { lift.board(player); }            // in the cabin, facing the doors
+let rooms = Backrooms::new(gl, res, FAR, &[lift.wall_cut()]); // or whatever wall it sits in
+// fence in lift.world_bounds() along with the room's, then
+objs.push(lift.doors()); objs.push(lift);
+```
+
+`threshold` is the centre of the doorway at floor level on the outer face of the wall slab;
+the yaw is the one `door::yaw_facing` gives for the direction the doorway faces (local +z, as a
+`Door`). The cabin is 2.3 m deep behind the slab and the slab 4.2 m wide, the doorway a metre
+east of its centre (`elevator::SLAB_X`, `OPENING_X`, `THRESHOLD`, all measured from the GLB by a
+test). `wall_cut()` is the box to carve out of the host wall's collision (`trimesh::cut_box`):
+the loader cannot carve what is drawn, so `draw` punches the opening through the depth buffer
+before drawing the cabin -- a box over the opening rasterised with the colour mask off, the
+depth test passing always and the depth range pinned to the far plane, from the room side only
+(it has no face toward the cabin, and back faces cull) -- and the host wall's drawn triangles
+vanish behind it. In the Backrooms the slab stands 3 cm proud of the end wall of the entrance
+corridor, centred in it so a hand's width of the scan's own wall shows either side, its
+doorway east of the corridor's centre line to clear the armchair the scan parks against that
+wall; `level16::ELEVATOR_SPOT` is derived from the corridor's and the slab's extents, and a
+test measures the wall, the ceiling and the chair from the scan.
+
+`--scene N --arrive` (hidden) loads a scene as a ride would -- black, doors shut, stood in the
+cabin -- for photographing an arrival; `--pos` inside the cabin shows the hint.
 
 ## glTF loader
 
@@ -1273,7 +1360,7 @@ Options:
 ```
 
 `--shot` **without** `--scene` leaves the menu alone and photographs whatever the game boots into,
-which is the title screen and the intro level running behind it — loading a scene would close the
+which is the title screen and `scenes::INTRO` (the Backrooms) running behind it — loading a scene would close the
 menu that is the thing being looked at. `--yaw`, `--pitch`, `--pos` and the held keys only mean
 something with `--scene`.
 
@@ -1297,9 +1384,10 @@ parsing, so a double-clicked bundle starts clean.
 `daydreams gen-terrain` is the one subcommand: it rewrites `Meshes/meadow_tile.obj` under the
 asset root from `ext::terrain::height` and exits (see [Meadow](#meadow-grass-and-clouds-scene-)).
 
-Two flags are hidden from `--help` because they are tools rather than features: `--panic-test`
-(the crash dialog, below) and `--view-glb PATH` with `--view-translucent NAMES` (a scene of one
-model, see [glTF loader](#gltf-loader)). `--view-glb` excludes `--scene`; its path is taken
+Three flags are hidden from `--help` because they are tools rather than features: `--panic-test`
+(the crash dialog, below), `--view-glb PATH` with `--view-translucent NAMES` (a scene of one
+model, see [glTF loader](#gltf-loader)) and `--arrive` (with `--scene`: load it as an elevator
+ride would, see [Elevator](#elevator)). `--view-glb` excludes `--scene`; its path is taken
 under the working directory when a file is there, under the asset root otherwise.
 
 ### Logging
@@ -1393,7 +1481,10 @@ resolved here.
 in key order -- CodeParade's seven first, in the registration order of `Engine.cpp:41-47`, then
 `8` `9` `0` `-` `=` `[` `]` `\` `;` `'`. `Engine` builds its scene vector from it, the
 level-select menu reads the names from it and the key loop walks it; `scenes::INTRO` is the
-index NEW GAME and the title backdrop use. To add a scene, append an entry and make sure
-`input::key_index` maps its key -- the registry's tests check that there are seventeen entries,
-that keys and names are unique, that `SCENES[INTRO]` is the intro, that every constructor
-builds, and that every key byte is reachable from a physical `KeyCode`.
+index NEW GAME and the title backdrop use, resolved from the name `"Backrooms"` by
+`scenes::index_of` -- a `const fn`, so reordering the table cannot start the game somewhere
+else, and the same lookup the elevator turns its floor names into indices with at runtime. To
+add a scene, append an entry and make sure `input::key_index` maps its key -- the registry's
+tests check that there are seventeen entries, that keys and names are unique, that
+`SCENES[INTRO]` is the Backrooms, that `index_of` finds every name and nothing else, that every
+constructor builds, and that every key byte is reachable from a physical `KeyCode`.
