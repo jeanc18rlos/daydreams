@@ -206,6 +206,7 @@ impl Door {
                 max_map: MAP,
                 translucent: &[],
                 metallic_override: &[],
+                cut_boxes: &[],
             },
         );
 

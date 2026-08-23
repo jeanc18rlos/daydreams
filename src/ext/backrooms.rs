@@ -15,6 +15,10 @@
 //!   `TriMeshCollider`, built once in world space at load. The engine consults it through
 //!   `ObjectT::trimesh`. The object is therefore **static**: moving `base` after `new` would
 //!   leave the collision behind.
+//! * **It can have openings.** What the level sets into the scan's walls -- the elevator --
+//!   hands its box to `new`, and the loader carves it out of the model as it parses it
+//!   (`Load::cut_boxes`): the wall behind the elevator's doorway is gone from the drawing
+//!   and from the collider, which is built from the same triangles.
 //!
 //! # Where the door goes
 //!
@@ -34,6 +38,7 @@
 //! left the player standing in the dark under the floor for ever.
 
 use crate::camera::Camera;
+use crate::ext::bounds::model_box;
 use crate::ext::gltf_model::{Anchor, Fit, Frame, GltfModel, Load, PartSpec};
 use crate::ext::trimesh::TriMeshCollider;
 use crate::object::{Object, ObjectT, RenderCtx};
@@ -92,6 +97,7 @@ fn load_spec() -> Load<'static> {
         max_map: MAP,
         translucent: &[],
         metallic_override: &[],
+        cut_boxes: &[],
     }
 }
 
@@ -115,26 +121,26 @@ pub struct Backrooms {
 impl Backrooms {
     /// Load the model and place it so that [`DOOR_SPOT`] lands on `door_world`, unrotated --
     /// the model's axes stay the world's, so [`DOOR_FACING`] is the door's facing in world
-    /// space too. The world-space boxes in `openings` are carved out of the collision
-    /// (`ext::trimesh::cut_box`) -- for whatever the level sets into the scan's walls, such
-    /// as the elevator. The drawing is untouched: whatever is set in has to cover the wall it
-    /// replaces.
+    /// space too. The world-space boxes in `openings` are carved out of the model as it is
+    /// loaded (`Load::cut_boxes`), drawing and collision alike -- for whatever the level sets
+    /// into the scan's walls, such as the elevator, which must therefore be built first.
     pub fn new(
         gl: &Rc<glow::Context>,
         res: &Resources,
         door_world: Vector3,
         openings: &[(Vector3, Vector3)],
     ) -> Backrooms {
-        let model = GltfModel::acquire(gl, &load_spec());
-
         let mut base = Object::new();
         // No mesh: nothing to rasterise through draw_impl and no rectangle colliders. The
         // engine still collides with this object, through `trimesh()`.
         base.pos = door_world - DOOR_SPOT;
 
+        let cut: Vec<(Vector3, Vector3)> =
+            openings.iter().map(|&(lo, hi)| model_box(&base, lo, hi)).collect();
+        let model = GltfModel::acquire(gl, &Load { cut_boxes: &cut, ..load_spec() });
+
         let (pos, idx) = model.triangles(PART);
-        let collider =
-            Rc::new(TriMeshCollider::new_with_holes(pos, idx, &base.local_to_world(), openings));
+        let collider = Rc::new(TriMeshCollider::new(pos, idx, &base.local_to_world()));
 
         Backrooms { base, model, shader: res.acquire_shader("gltfunlit"), collider }
     }

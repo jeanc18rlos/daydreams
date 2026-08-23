@@ -41,11 +41,14 @@
 //! | `occlusion` | Portal occlusion queries read one frame late, never stalling   |
 //! | `meadow`   | The intro's meadow, door and title vantage, shared by the scenes that open on it |
 //! | `elevator` | The elevator between levels: the animated cabin, its ride and its floors |
+//! | `carve`    | Carving a box out of a triangle soup, generic over the vertex, for the loader |
+//! | `interior` | A glTF interior as a level: model, collider, fence, cap and respawn as one function |
 //! | `painting` | Portraits whose eyes follow the pass camera and whose faces change only unobserved |
 
 pub mod audio;
 pub mod backrooms;
 pub mod bounds;
+pub mod carve;
 pub mod cull;
 pub mod door;
 pub mod elevator;

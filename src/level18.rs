@@ -29,12 +29,14 @@
 //! 3.9 m in front. The arrival looks -z into the maze, which is the default heading, so the
 //! model is not turned -- only shifted so the arrival spot is the origin.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::ext::elevator::{self, Elevator, PROUD};
 use crate::ext::gltf_model::{Anchor, Fit, Frame, Load, PartSpec};
-use crate::ext::interior::{self, SPAWN_AHEAD};
+use crate::ext::interior::{self, Openings, SPAWN_AHEAD};
 use crate::game_header::GH_PI;
-use crate::object::Object;
+use crate::object::{Object, ObjectT};
 use crate::player::Player;
 use crate::resources::Resources;
 use crate::scene::{PObjectVec, PPortalVec, Scene};
@@ -63,6 +65,7 @@ fn load_spec() -> Load<'static> {
         max_map: MAP,
         translucent: &[],
         metallic_override: &DIELECTRIC,
+        cut_boxes: &[],
     }
 }
 
@@ -73,15 +76,17 @@ const FLOOR_Y: f32 = 0.0;
 const WALL_Z: f32 = 10.01;
 /// Centre of the clear stretch x[-3.7, 1.9] (module docs).
 const DOORWAY_X: f32 = -0.9;
-/// The doorway point in the model, and the way it faces: into the maze, -z.
-const DOORWAY_MODEL: Vector3 = Vector3 { x: DOORWAY_X, y: FLOOR_Y, z: WALL_Z };
+/// The doorway point in the model -- the slab's face stands `elevator::PROUD` off the wall
+/// -- and the way it faces: into the maze, -z.
+const DOORWAY_MODEL: Vector3 = Vector3 { x: DOORWAY_X, y: FLOOR_Y, z: WALL_Z - PROUD };
 const FACING_MODEL: Vector3 = Vector3 { x: 0.0, y: 0.0, z: -1.0 };
 
-/// World coordinates, for the step that drops the elevator in: the cabin's floor point on
-/// the wall's inner face, [`SPAWN_AHEAD`] behind the arrival along +z, and the yaw its
-/// doorway faces -- -z, into the maze, as an `Object::euler.y` (`interior::facing`,
-/// `door::yaw_facing`). The spawn is derived from these (`interior::arrival`), and the
-/// tests below measure the wall and the floor of the file against them.
+/// World coordinates of the elevator: its threshold -- the cabin's floor point on the slab's
+/// face, [`PROUD`] off the wall's inner face and [`SPAWN_AHEAD`] behind the arrival along
+/// +z -- and the yaw its doorway faces -- -z, into the maze, as an `Object::euler.y`
+/// (`interior::facing`, `door::yaw_facing`). The spawn is derived from these
+/// (`interior::arrival`), and the tests below measure the wall and the floor of the file
+/// against them.
 pub const ELEVATOR_SPOT: Vector3 = Vector3 { x: 0.0, y: 0.0, z: SPAWN_AHEAD };
 pub const ELEVATOR_YAW: f32 = GH_PI;
 
@@ -102,8 +107,20 @@ impl Scene for Level18 {
         _portals: &mut PPortalVec,
         player: &mut Player,
     ) {
+        // The elevator first, set into the south wall (`ext/elevator.rs`, "Set into a wall"):
+        // the model is carved round its doorway as it loads, and the fence takes in the
+        // cabin, which stands outside the model behind the wall.
+        let arrived = elevator::take_arrival();
+        let lift = Elevator::new(gl, res, ELEVATOR_SPOT, ELEVATOR_YAW, arrived);
+        let openings = Openings { cut: &[lift.wall_cut()], also_inside: &[lift.world_bounds()] };
         let arrival = interior::arrival(ELEVATOR_SPOT, ELEVATOR_YAW);
-        interior::load(gl, res, objs, player, &load_spec(), &placement(), 0.0, arrival);
+        interior::load(gl, res, objs, player, &load_spec(), &placement(), openings, 0.0, arrival);
+        if arrived.is_some() {
+            // Delivered by a ride: in the cabin, facing its doors, which are about to open.
+            lift.board(player);
+        }
+        objs.push(Rc::new(RefCell::new(lift.doors())) as Rc<RefCell<dyn ObjectT>>);
+        objs.push(Rc::new(RefCell::new(lift)) as Rc<RefCell<dyn ObjectT>>);
     }
 }
 
@@ -164,14 +181,14 @@ mod tests {
             let off = right * (-2.25 + 0.25 * i as f32);
             let from = ELEVATOR_SPOT + off + mid + ELEVATOR_FACING * 0.1;
             let d = nearest_hit(&t, from, back).expect("a wall behind");
-            assert!((d - 0.1).abs() < 0.02, "wall {d} behind at offset {off:?}");
+            assert!((d - 0.1 - PROUD).abs() < 0.02, "wall {d} behind at offset {off:?}");
             // ...and nothing in front for the stride out and two more.
             let ahead = nearest_hit(&t, from, ELEVATOR_FACING).unwrap_or(f32::MAX);
             assert!(ahead > SPAWN_AHEAD + 2.0, "{ahead} m clear at offset {off:?}");
         }
-        // Straight ahead: the central block's wall, 3.9 m off (module docs).
+        // Straight ahead: the central block's wall, 3.9 m off the wall (module docs).
         let ahead = nearest_hit(&t, ELEVATOR_SPOT + mid, ELEVATOR_FACING).expect("the block");
-        assert!((ahead - 3.9).abs() < 0.15, "{ahead} m to the first wall");
+        assert!((ahead + PROUD - 3.9).abs() < 0.15, "{ahead} m to the first wall");
         // Nothing of the doors: they are 5.6 m and more to the left.
         let door = placement().local_to_world().mul_point(Vector3::new(-7.1, 1.2, WALL_Z));
         assert!((door - ELEVATOR_SPOT).mag() > 5.5);

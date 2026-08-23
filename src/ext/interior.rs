@@ -17,9 +17,13 @@
 //! * Loads the model as a solid [`GltfProp`] at the placement given -- every part at one
 //!   `Object`, the collider from the **solid** triangles only (`GltfModel::solid_triangles`),
 //!   so the player wades through the pool's water and walks through the foliage cards rather
-//!   than bumping into their transparent corners.
-//! * Fences the model's world-space extent [`FENCE_MARGIN`] out, caps the ground under it in
-//!   the interior sky's dark (`backrooms::GroundCap`), and respawns anyone who ends up under
+//!   than bumping into their transparent corners -- with the world-space `openings` the
+//!   level asks for carved out of it as it is parsed (`Load::cut_boxes`, `bounds::model_box`):
+//!   the elevator's doorway, gone from the drawn wall and from the collision alike.
+//! * Fences the model's world-space extent [`FENCE_MARGIN`] out -- together with whatever
+//!   `also_inside` the level stands outside the model, which is the elevator's cabin, sunk
+//!   into the wall and reaching past its outer face -- caps the ground under it in the
+//!   interior sky's dark (`backrooms::GroundCap`), and respawns anyone who ends up under
 //!   the floor (`backrooms::fell_out`, the same rule as the Backrooms': the walls of these
 //!   rooms are single quads, and a sphere that starts a step inside one is pushed out
 //!   whichever side its centre is on).
@@ -28,20 +32,20 @@
 //! # The arrival point and the elevator
 //!
 //! Each level places its model so that its arrival spot -- a point of open floor with
-//! headroom, chosen by probing the file (`tools`-style rasters, and the tests that measure
-//! the same faces) -- is the world origin with the floor at y = 0, and the player faces -z,
-//! the engine's default heading, which keeps `--yaw 0` meaning "straight ahead" as on every
-//! other level. The arrival is [`SPAWN_AHEAD`] in front of a stretch of wall the level
-//! reserves for an elevator (`ELEVATOR_SPOT` / `ELEVATOR_YAW` in each level): the cabin's
-//! floor point on the wall's inner face, and the yaw its doorway faces. The cabin is 2.7 m
-//! deep and sinks into the wall, so it reaches past the model's outer face -- and past this
-//! fence, which the step that places it will have to push out on that side.
+//! headroom, chosen by probing the file (a throwaway occupancy raster, not shipped; the
+//! tests re-measure the numbers from the file) -- is the world origin with the floor at
+//! y = 0, and the player faces -z, the engine's default heading, which keeps `--yaw 0`
+//! meaning "straight ahead" as on every other level. The arrival is [`SPAWN_AHEAD`] in
+//! front of a stretch of wall the level reserves for its elevator (`ELEVATOR_SPOT` /
+//! `ELEVATOR_YAW` in each level): the cabin's floor point on the wall's inner face, and the
+//! yaw its doorway faces. The level builds the elevator first (`ext/elevator.rs`, "How a
+//! level adds one") and hands its `wall_cut()` and `world_bounds()` in here.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::ext::backrooms::{fell_out, GroundCap};
-use crate::ext::bounds::bounds_box;
+use crate::ext::bounds::{bounds_box, model_box, transformed_box};
 use crate::ext::gltf_model::Load;
 use crate::ext::gltf_prop::GltfProp;
 use crate::ext::room::{request_respawn, Respawn, RoomLogic};
@@ -79,27 +83,36 @@ pub fn arrival(spot: Vector3, yaw: f32) -> Respawn {
 }
 
 /// World-space axis-aligned bounds of a part's fitted bounds `b` (`[minx, maxx, miny, maxy,
-/// minz, maxz]`) placed by `obj`: the eight corners through its transform, then min and
-/// max. Exact for the quarter turns the levels use, and a safe over-estimate otherwise.
+/// minz, maxz]`) placed by `obj` (`bounds::transformed_box`).
 pub fn world_bounds(b: [f32; 6], obj: &Object) -> (Vector3, Vector3) {
-    let m = obj.local_to_world();
-    let mut lo = Vector3::splat(f32::MAX);
-    let mut hi = Vector3::splat(f32::MIN);
-    for corner in 0..8 {
-        let p = m.mul_point(Vector3::new(
-            b[usize::from(corner & 1 != 0)],
-            b[2 + usize::from(corner & 2 != 0)],
-            b[4 + usize::from(corner & 4 != 0)],
-        ));
-        lo = Vector3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
-        hi = Vector3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
-    }
-    (lo, hi)
+    transformed_box(
+        &obj.local_to_world(),
+        Vector3::new(b[0], b[2], b[4]),
+        Vector3::new(b[1], b[3], b[5]),
+    )
 }
 
-/// Build the interior (see the module docs): `spec` placed by `placement`, its floor at
-/// world `floor_y` where the player arrives, the player stood at `arrival`. Returns the
-/// model's world-space bounds, which the fence and the respawn rule were built from.
+/// The smallest box holding both.
+fn union((alo, ahi): (Vector3, Vector3), (blo, bhi): (Vector3, Vector3)) -> (Vector3, Vector3) {
+    (
+        Vector3::new(alo.x.min(blo.x), alo.y.min(blo.y), alo.z.min(blo.z)),
+        Vector3::new(ahi.x.max(bhi.x), ahi.y.max(bhi.y), ahi.z.max(bhi.z)),
+    )
+}
+
+/// What a level has built outside its model before the model is loaded: the elevator.
+pub struct Openings<'a> {
+    /// World-space boxes carved out of the model, drawn and collided alike: the cabin's
+    /// `wall_cut()`.
+    pub cut: &'a [(Vector3, Vector3)],
+    /// World-space boxes the fence must also enclose: the cabin's `world_bounds()`.
+    pub also_inside: &'a [(Vector3, Vector3)],
+}
+
+/// Build the interior (see the module docs): `spec` placed by `placement` with
+/// `openings.cut` carved out of it, its floor at world `floor_y` where the player arrives,
+/// the player stood at `arrival`, the fence round the model and `openings.also_inside`.
+/// Returns the world-space bounds the fence and the respawn rule were built from.
 pub fn load(
     gl: &Rc<glow::Context>,
     res: &Resources,
@@ -107,20 +120,27 @@ pub fn load(
     player: &mut Player,
     spec: &Load,
     placement: &Object,
+    openings: Openings,
     floor_y: f32,
     arrival: Respawn,
 ) -> (Vector3, Vector3) {
     // An interior from the first step: every eye grades as one (no meadow split to cross).
     view::set_scene_mood(view::MOOD_INTERIOR);
 
-    let prop = GltfProp::new(gl, res, spec, placement.pos, placement.euler.y, &[], true);
-    let mut lo = Vector3::splat(f32::MAX);
-    let mut hi = Vector3::splat(f32::MIN);
+    // The cuts, in the model's space; the loader carves them from what it draws and what
+    // the prop's collider is then built from.
+    let cut: Vec<(Vector3, Vector3)> =
+        openings.cut.iter().map(|&(lo, hi)| model_box(placement, lo, hi)).collect();
+    let spec = Load { cut_boxes: &cut, ..*spec };
+    let prop = GltfProp::new(gl, res, &spec, placement.pos, placement.euler.y, &[], true);
+    let mut bounds = (Vector3::splat(f32::MAX), Vector3::splat(f32::MIN));
     for part in spec.parts {
-        let (plo, phi) = world_bounds(prop.model().bounds(part.name), placement);
-        lo = Vector3::new(lo.x.min(plo.x), lo.y.min(plo.y), lo.z.min(plo.z));
-        hi = Vector3::new(hi.x.max(phi.x), hi.y.max(phi.y), hi.z.max(phi.z));
+        bounds = union(bounds, world_bounds(prop.model().bounds(part.name), placement));
     }
+    for &b in openings.also_inside {
+        bounds = union(bounds, b);
+    }
+    let (lo, hi) = bounds;
 
     // The cap first, then the model: a translucent surface blends over what was drawn
     // before it, and the cap is the dark the water would otherwise show the sky through
@@ -262,20 +282,19 @@ mod tests {
         assert!((forward - Vector3::new(1.0, 0.0, 0.0)).mag() < 1e-5);
     }
 
+    /// The loader's `[minx, maxx, miny, maxy, minz, maxz]` read as a box, through a
+    /// placement (the placement itself is `bounds::transformed_box`'s business).
     #[test]
-    fn world_bounds_follow_a_placement() {
+    fn world_bounds_read_the_loaders_six_numbers() {
         let b = [-1.0, 3.0, 0.0, 2.0, -5.0, 7.0];
         let mut obj = Object::new();
         obj.pos = Vector3::new(10.0, 1.0, 100.0);
         let (lo, hi) = world_bounds(b, &obj);
         assert!((lo - Vector3::new(9.0, 1.0, 95.0)).mag() < 1e-5, "{lo:?}");
         assert!((hi - Vector3::new(13.0, 3.0, 107.0)).mag() < 1e-5, "{hi:?}");
-        // A quarter turn: local +x becomes world -z, local +z becomes world +x.
-        let mut obj = Object::new();
-        obj.euler.y = GH_PI / 2.0;
-        let (lo, hi) = world_bounds(b, &obj);
-        assert!((lo - Vector3::new(-5.0, 0.0, -3.0)).mag() < 1e-4, "{lo:?}");
-        assert!((hi - Vector3::new(7.0, 2.0, 1.0)).mag() < 1e-4, "{hi:?}");
+        let u = union((lo, hi), (Vector3::new(20.0, -1.0, 0.0), Vector3::new(21.0, 0.0, 1.0)));
+        assert!((u.0 - Vector3::new(9.0, -1.0, 0.0)).mag() < 1e-5, "{:?}", u.0);
+        assert!((u.1 - Vector3::new(21.0, 3.0, 107.0)).mag() < 1e-5, "{:?}", u.1);
     }
 
     #[test]

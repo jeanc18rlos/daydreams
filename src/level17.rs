@@ -36,12 +36,14 @@
 //! 4.4 m cabin panel covers a window wherever it goes on this wall, and the cabin, being
 //! opaque and 3.3 m tall, is what hides the hole.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::ext::elevator::{self, Elevator, PROUD};
 use crate::ext::gltf_model::{Anchor, Fit, Frame, Load, PartSpec};
-use crate::ext::interior::{self, SPAWN_AHEAD};
+use crate::ext::interior::{self, Openings, SPAWN_AHEAD};
 use crate::game_header::GH_PI;
-use crate::object::Object;
+use crate::object::{Object, ObjectT};
 use crate::player::Player;
 use crate::resources::Resources;
 use crate::scene::{PObjectVec, PPortalVec, Scene};
@@ -68,6 +70,7 @@ fn load_spec() -> Load<'static> {
         max_map: MAP,
         translucent: &[WATER],
         metallic_override: &[],
+        cut_boxes: &[],
     }
 }
 
@@ -82,18 +85,20 @@ const WALL_X: f32 = -3.15;
 /// -6.86, so the cabin's 4.4 m panel clears both by a hand); the window over it spans
 /// z[-10.75, -8.0], between the piers at z[-12.75, -11.0] and z[-7.75, -6.0].
 const DOORWAY_Z: f32 = -9.15;
-/// The doorway point in the model, and the way it faces: down the hall.
-const DOORWAY_MODEL: Vector3 = Vector3 { x: WALL_X, y: FLOOR_Y, z: DOORWAY_Z };
+/// The doorway point in the model -- the slab's face stands `elevator::PROUD` off the wall
+/// -- and the way it faces: down the hall.
+const DOORWAY_MODEL: Vector3 = Vector3 { x: WALL_X + PROUD, y: FLOOR_Y, z: DOORWAY_Z };
 const FACING_MODEL: Vector3 = Vector3 { x: 1.0, y: 0.0, z: 0.0 };
 /// The turn that takes model +x to world -z (`Matrix4::rot_y`: local +x goes to
 /// (cos a, 0, -sin a)).
 const MODEL_YAW: f32 = GH_PI / 2.0;
 
-/// World coordinates, for the step that drops the elevator in: the cabin's floor point on
-/// the wall's inner face, [`SPAWN_AHEAD`] behind the arrival along +z, and the yaw its
-/// doorway faces -- -z, down the hall, as an `Object::euler.y` (`interior::facing`,
-/// `door::yaw_facing`). The spawn is derived from these (`interior::arrival`), and the
-/// tests below measure the wall and the floor of the file against them.
+/// World coordinates of the elevator: its threshold -- the cabin's floor point on the slab's
+/// face, [`PROUD`] off the wall's inner face and [`SPAWN_AHEAD`] behind the arrival along
+/// +z -- and the yaw its doorway faces -- -z, down the hall, as an `Object::euler.y`
+/// (`interior::facing`, `door::yaw_facing`). The spawn is derived from these
+/// (`interior::arrival`), and the tests below measure the wall and the floor of the file
+/// against them.
 pub const ELEVATOR_SPOT: Vector3 = Vector3 { x: 0.0, y: 0.0, z: SPAWN_AHEAD };
 pub const ELEVATOR_YAW: f32 = GH_PI;
 
@@ -116,8 +121,20 @@ impl Scene for Level17 {
         _portals: &mut PPortalVec,
         player: &mut Player,
     ) {
+        // The elevator first, set into the hall's west wall (`ext/elevator.rs`, "Set into a wall"):
+        // the model is carved round its doorway as it loads, and the fence takes in the
+        // cabin, which stands outside the model behind the wall.
+        let arrived = elevator::take_arrival();
+        let lift = Elevator::new(gl, res, ELEVATOR_SPOT, ELEVATOR_YAW, arrived);
+        let openings = Openings { cut: &[lift.wall_cut()], also_inside: &[lift.world_bounds()] };
         let arrival = interior::arrival(ELEVATOR_SPOT, ELEVATOR_YAW);
-        interior::load(gl, res, objs, player, &load_spec(), &placement(), 0.0, arrival);
+        interior::load(gl, res, objs, player, &load_spec(), &placement(), openings, 0.0, arrival);
+        if arrived.is_some() {
+            // Delivered by a ride: in the cabin, facing its doors, which are about to open.
+            lift.board(player);
+        }
+        objs.push(Rc::new(RefCell::new(lift.doors())) as Rc<RefCell<dyn ObjectT>>);
+        objs.push(Rc::new(RefCell::new(lift)) as Rc<RefCell<dyn ObjectT>>);
     }
 }
 
@@ -192,16 +209,16 @@ mod tests {
         for side in [-2.0, 2.0] {
             let from = ELEVATOR_SPOT + Vector3::new(side, 0.0, 0.0) + high + ELEVATOR_FACING * 0.1;
             let d = nearest_hit(&t, from, back).expect("a pier");
-            assert!((d - 0.1).abs() < 0.02, "pier {d} behind at {side}");
+            assert!((d - 0.1 - PROUD).abs() < 0.02, "pier {d} behind at {side}");
         }
         let right = ELEVATOR_FACING.cross(Vector3::new(0.0, 1.0, 0.0));
         for i in 0..=18 {
             let side = -2.25 + 0.25 * i as f32;
             let off = right * side;
-            // From just inside the doorway, the wall is a hair behind...
+            // From just inside the doorway, the wall is a hair behind the slab's face...
             let from = ELEVATOR_SPOT + off + mid + ELEVATOR_FACING * 0.1;
             let d = nearest_hit(&t, from, back).expect("a wall behind");
-            assert!((d - 0.1).abs() < 0.02, "wall {d} behind at offset {side}");
+            assert!((d - 0.1 - PROUD).abs() < 0.02, "wall {d} behind at offset {side}");
             // ...and nothing in front nearer than the pillar rows, which flank the cabin.
             let ahead = nearest_hit(&t, from, ELEVATOR_FACING).unwrap_or(f32::MAX);
             assert!(ahead > 2.3, "{ahead} m clear at offset {side}");
@@ -210,10 +227,11 @@ mod tests {
                 assert!(ahead > 25.0, "{ahead} m of hall at offset {side}");
             }
         }
-        // And the doorway is ELEVATOR_SPOT exactly: the wall's inner face is the model's.
+        // And the wall's inner face is PROUD behind ELEVATOR_SPOT exactly.
         let face = placement().local_to_world().mul_point(Vector3::new(WALL_X, 1.2, DOORWAY_Z));
         let d = nearest_hit(&t, face + ELEVATOR_FACING * 0.05, back).expect("the face");
         assert!((d - 0.05).abs() < 0.005, "face {d}");
+        assert!(((face - ELEVATOR_SPOT).dot(ELEVATOR_FACING) + PROUD).abs() < 1e-4);
     }
 
     /// The arrival is inside the fence, and the fence is outside the model.

@@ -1313,31 +1313,40 @@ in the list that resolves, wrapping round.
 | 1 | Pool Rooms | `POOL ROOMS` |
 | 2 | Overgrown | `OVERGROWN` |
 
-**How a level adds one.**
+**How a level adds one.** The elevator first, then the model it is set into, because the
+model is carved round it as it loads:
 
 ```rust
-let arrival = elevator::take_arrival();                 // Some(..) when a ride brought us
-let lift = Elevator::new(gl, res, threshold, door::yaw_facing(facing), arrival);
-if arrival.is_some() { lift.board(player); }            // in the cabin, facing the doors
-let rooms = Backrooms::new(gl, res, FAR, &[lift.wall_cut()]); // or whatever wall it sits in
+let arrived = elevator::take_arrival();                  // Some(..) when a ride brought us
+let lift = Elevator::new(gl, res, threshold, door::yaw_facing(facing), arrived);
+let rooms = Backrooms::new(gl, res, FAR, &[lift.wall_cut()]); // or, for a glTF interior,
+// interior::load(.., Openings { cut: &[lift.wall_cut()], also_inside: &[lift.world_bounds()] }, ..)
+if arrived.is_some() { lift.board(player); }             // in the cabin, facing the doors
 // fence in lift.world_bounds() along with the room's, then
 objs.push(lift.doors()); objs.push(lift);
 ```
 
-`threshold` is the centre of the doorway at floor level on the outer face of the wall slab;
-the yaw is the one `door::yaw_facing` gives for the direction the doorway faces (local +z, as a
+`threshold` is the centre of the doorway at floor level on the outer face of the wall slab,
+`elevator::PROUD` (3 cm) in front of the host wall's face so the two are never coplanar; the
+yaw is the one `door::yaw_facing` gives for the direction the doorway faces (local +z, as a
 `Door`). The cabin is 2.3 m deep behind the slab and the slab 4.2 m wide, the doorway a metre
 east of its centre (`elevator::SLAB_X`, `OPENING_X`, `THRESHOLD`, all measured from the GLB by a
-test). `wall_cut()` is the box to carve out of the host wall's collision (`trimesh::cut_box`):
-the loader cannot carve what is drawn, so `draw` punches the opening through the depth buffer
-before drawing the cabin -- a box over the opening rasterised with the colour mask off, the
-depth test passing always and the depth range pinned to the far plane, from the room side only
-(it has no face toward the cabin, and back faces cull) -- and the host wall's drawn triangles
-vanish behind it. In the Backrooms the slab stands 3 cm proud of the end wall of the entrance
-corridor, centred in it so a hand's width of the scan's own wall shows either side, its
-doorway east of the corridor's centre line to clear the armchair the scan parks against that
-wall; `level16::ELEVATOR_SPOT` is derived from the corridor's and the slab's extents, and a
-test measures the wall, the ceiling and the chair from the scan.
+test). `wall_cut()` is the world-space box the host carves out of its model -- everything
+behind the slab's face that the elevator occupies, the slab's width, from a hand under the
+cabin's floor to the slab's top -- and the carving is the glTF loader's (`Load::cut_boxes`,
+`ext/carve.rs`): as the file is parsed every triangle crossing the box is clipped so exactly
+the part outside survives, its UVs, normals and tangents interpolated along the cut, and the
+collider is built from the same triangles. The host's wall is genuinely absent behind the
+doorway -- and so is a thick wall's inside or a floor where the cabin now stands -- with no
+depth-buffer trick that a wall in front of the doorway could fall through. A world box stays
+a box in the model's space only because every interior is placed by translation and quarter
+turns (`bounds::model_box` asserts it). In the Backrooms the slab stands in the end wall of
+the entrance corridor, centred in it so a hand's width of the scan's own wall shows either
+side, its doorway east of the corridor's centre line to clear the armchair the scan parks
+against that wall; `level16::ELEVATOR_SPOT` is derived from the corridor's and the slab's
+extents, and a test measures the wall, the ceiling and the chair from the scan. In the Pool
+Rooms it is set into the hall's west wall at mid-length, in the Overgrown room into the south
+wall (`ELEVATOR_SPOT` / `ELEVATOR_YAW` in `level17.rs` and `level18.rs`; the sections below).
 
 `--scene N --arrive` (hidden) loads a scene as a ride would -- black, doors shut, stood in the
 cabin -- for photographing an arrival; `--pos` inside the cabin shows the hint.

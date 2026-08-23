@@ -158,8 +158,9 @@ pub enum Fit<'a> {
 }
 
 /// Everything `GltfModel::acquire` needs to know about a file. `Debug` is load-bearing: its
-/// output is the cache key (see `acquire`).
-#[derive(Debug)]
+/// output is the cache key (see `acquire`). `Copy`, so a scene can take a level's constant
+/// spec and add the boxes it carves out of it (`Load { cut_boxes: &cut, ..spec }`).
+#[derive(Debug, Clone, Copy)]
 pub struct Load<'a> {
     /// Relative to the asset root (`app::assets`): `"Meshes/door.glb"`.
     pub path: &'a str,
@@ -191,6 +192,16 @@ pub struct Load<'a> {
     /// (0.0) they were meant to be without re-exporting the file. Applied to PBR materials
     /// only; an unlit material has no metalness to override.
     pub metallic_override: &'a [(&'a str, f32)],
+    /// Axis-aligned boxes, `(min, max)` in the MODEL's space -- the fitted space
+    /// [`GltfModel::triangles`] reports in -- carved out of every part as it is parsed
+    /// (`ext/carve.rs`): triangles inside a box are dropped, triangles crossing its faces are
+    /// clipped so exactly the part outside survives, with its UVs, normals and tangents
+    /// interpolated along the cut. What is drawn and what collides are the same triangles, so
+    /// a wall is gone from both. This is how a thing set into a model's wall -- the elevator
+    /// -- gets a real doorway through it rather than a wall 3 cm behind its leaves. A scene
+    /// converts the world-space box it wants gone into the model's space first
+    /// (`bounds::model_box`).
+    pub cut_boxes: &'a [(Vector3, Vector3)],
 }
 
 struct Prim {
@@ -878,7 +889,7 @@ fn parse(spec: &Load) -> Result<Parsed, AssetError> {
 
 /// `parse` on a GLB already in memory; `path` only names it in errors.
 fn parse_bytes(bytes: &[u8], spec: &Load, path: std::path::PathBuf) -> Result<Parsed, AssetError> {
-    let Load { parts, fit, translucent, metallic_override, .. } = *spec;
+    let Load { parts, fit, translucent, metallic_override, cut_boxes, .. } = *spec;
     let bad = |reason: String| AssetError::Gltf { path: path.clone(), reason };
     let gltf = gltf::Gltf::from_slice(bytes).map_err(|e| bad(format!("parse: {e}")))?;
     let blob = gltf.blob.clone().ok_or_else(|| bad("no BIN chunk".to_string()))?;
@@ -976,6 +987,22 @@ fn parse_bytes(bytes: &[u8], spec: &Load, path: std::path::PathBuf) -> Result<Pa
     }
     let bounds: HashMap<String, [f32; 6]> =
         raw.iter().map(|(name, list)| (name.clone(), bbox(list))).collect();
+
+    // ── The cuts, in the fitted space the bounds were just taken in. A part left with no
+    // triangle at all was wholly inside a box, which no scene means.
+    for &(lo, hi) in cut_boxes {
+        for (name, list) in raw.iter_mut() {
+            for r in list.iter_mut() {
+                *r = cut_raw(r, lo, hi);
+            }
+            list.retain(|r| !r.idx.is_empty());
+            if list.is_empty() {
+                return Err(bad(format!(
+                    "part {name:?} lies wholly inside the cut box {lo:?}..{hi:?}"
+                )));
+            }
+        }
+    }
 
     // ── Alpha policy and metalness per material, and whether its UVs tile. One slot past
     // the file's materials is the default material, for primitives that declare none; it is
@@ -1141,6 +1168,78 @@ fn bbox(list: &[Raw]) -> [f32; 6] {
         }
     }
     b
+}
+
+/// One vertex of a [`Raw`], for the cut: what a clipped edge interpolates.
+#[derive(Clone, Copy)]
+struct Vertex {
+    pos: [f32; 3],
+    uv: [f32; 2],
+    nrm: [f32; 3],
+    tan: [f32; 4],
+}
+
+/// `r` with the box `[lo, hi]` carved out (`ext/carve.rs`): triangles clear of the box keep
+/// their vertices and indices, triangles crossing it are clipped and their outside pieces
+/// fanned from new vertices whose UV, normal and tangent are blended along the cut edge --
+/// the normal and tangent renormalised, the tangent's handedness the edge's first vertex's
+/// (a triangle's three share it). The double-sided copy of the winding, if the material has
+/// one, is made again from the cut front faces.
+fn cut_raw(r: &Raw, lo: Vector3, hi: Vector3) -> Raw {
+    let mut pos = r.pos.clone();
+    let mut uv = r.uv.clone();
+    let mut nrm = r.nrm.clone();
+    let mut tan = r.tan.clone();
+    let mut idx: Vec<u32> = Vec::with_capacity(r.front);
+    let vertex = |i: u32| {
+        let i = i as usize;
+        Vertex { pos: r.pos[i], uv: r.uv[i], nrm: r.nrm[i], tan: r.tan[i] }
+    };
+    let at = |v: &Vertex| Vector3::from_slice(&v.pos);
+    let lerp = |a: &Vertex, b: &Vertex, t: f32| {
+        let mix = |x: f32, y: f32| x + (y - x) * t;
+        let unit = |v: [f32; 3]| {
+            let m = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            if m > 1e-12 {
+                [v[0] / m, v[1] / m, v[2] / m]
+            } else {
+                v
+            }
+        };
+        let n = unit([mix(a.nrm[0], b.nrm[0]), mix(a.nrm[1], b.nrm[1]), mix(a.nrm[2], b.nrm[2])]);
+        let t3 = unit([mix(a.tan[0], b.tan[0]), mix(a.tan[1], b.tan[1]), mix(a.tan[2], b.tan[2])]);
+        Vertex {
+            pos: [mix(a.pos[0], b.pos[0]), mix(a.pos[1], b.pos[1]), mix(a.pos[2], b.pos[2])],
+            uv: [mix(a.uv[0], b.uv[0]), mix(a.uv[1], b.uv[1])],
+            nrm: n,
+            tan: [t3[0], t3[1], t3[2], a.tan[3]],
+        }
+    };
+    for t in r.idx[..r.front].chunks_exact(3) {
+        let tri = [vertex(t[0]), vertex(t[1]), vertex(t[2])];
+        if crate::ext::carve::clear_of_box(&[at(&tri[0]), at(&tri[1]), at(&tri[2])], lo, hi) {
+            idx.extend_from_slice(t);
+            continue;
+        }
+        crate::ext::carve::clip_outside_box(tri, lo, hi, at, lerp, |poly| {
+            let base = pos.len() as u32;
+            for v in poly {
+                pos.push(v.pos);
+                uv.push(v.uv);
+                nrm.push(v.nrm);
+                tan.push(v.tan);
+            }
+            for i in 1..poly.len() as u32 - 1 {
+                idx.extend_from_slice(&[base, base + i, base + i + 1]);
+            }
+        });
+    }
+    let front = idx.len();
+    if r.idx.len() > r.front {
+        let back: Vec<u32> = idx.chunks_exact(3).flat_map(|t| [t[2], t[1], t[0]]).collect();
+        idx.extend(back);
+    }
+    Raw { pos, uv, nrm, tan, idx, front, material: r.material }
 }
 
 /// The base colour texture's `KHR_texture_transform`, if the primitive's material has one.
@@ -1757,6 +1856,128 @@ mod tests {
         assert!((d[1] - 1.0).abs() < 1e-6, "got {d:?}");
     }
 
+    // ── The cut (`Load::cut_boxes`, `cut_raw`).
+
+    /// A 2 x 2 quad in the plane z = 0, facing +z, u along +x and v along +y, with a
+    /// double-sided material (the back winding after `front`).
+    fn quad_raw() -> Raw {
+        let pos = vec![[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [1.0, 1.0, 0.0], [-1.0, 1.0, 0.0]];
+        let uv = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        let nrm = vec![[0.0, 0.0, 1.0]; 4];
+        let tan = vec![[1.0, 0.0, 0.0, 1.0]; 4];
+        let front = vec![0u32, 1, 2, 0, 2, 3];
+        let back: Vec<u32> = front.chunks_exact(3).flat_map(|t| [t[2], t[1], t[0]]).collect();
+        let idx = [front, back].concat();
+        Raw { pos, uv, nrm, tan, idx, front: 6, material: 0 }
+    }
+
+    fn raw_area(r: &Raw, idx: &[u32]) -> f32 {
+        idx.chunks_exact(3)
+            .map(|t| {
+                let v = |i: u32| Vector3::from_slice(&r.pos[i as usize]);
+                (v(t[1]) - v(t[0])).cross(v(t[2]) - v(t[0])).mag() * 0.5
+            })
+            .sum()
+    }
+
+    /// A box straddling the quad's lower-right quarter: that quarter goes, the rest stays
+    /// with its winding, and every vertex the cut made has the UV the quad's mapping gives
+    /// its position -- the texture does not tear at the hole.
+    #[test]
+    fn cut_raw_keeps_the_outside_with_interpolated_attributes_and_winding() {
+        let r = quad_raw();
+        let cut = cut_raw(&r, Vector3::new(0.0, -2.0, -0.5), Vector3::new(2.0, 0.0, 0.5));
+        // Front faces first, the back copy after: still double-sided, still mirrored.
+        assert_eq!(cut.idx.len(), 2 * cut.front);
+        let front = &cut.idx[..cut.front];
+        assert!((raw_area(&cut, front) - 3.0).abs() < 1e-5, "area {}", raw_area(&cut, front));
+        for (t, b) in front.chunks_exact(3).zip(cut.idx[cut.front..].chunks_exact(3)) {
+            let v = |i: u32| Vector3::from_slice(&cut.pos[i as usize]);
+            assert!((v(t[1]) - v(t[0])).cross(v(t[2]) - v(t[0])).z > 0.0, "front faces +z");
+            assert_eq!(b, [t[2], t[1], t[0]], "the back copy is the front reversed");
+        }
+        // Nothing of the cut quarter survives, nothing outside it is lost.
+        for t in front.chunks_exact(3) {
+            let c = (0..3)
+                .fold(Vector3::zero(), |c, k| c + Vector3::from_slice(&cut.pos[t[k] as usize]))
+                * (1.0 / 3.0);
+            assert!(!(c.x > 0.0 && c.y < 0.0), "a piece inside the box at {c:?}");
+        }
+        // The original four vertices are still the first four; the new ones carry the UVs
+        // the quad's mapping gives their positions (u = (x + 1) / 2, v = (y + 1) / 2), the
+        // normal, the tangent and its handedness.
+        assert_eq!(cut.pos[..4], r.pos[..]);
+        assert!(cut.pos.len() > 4, "the cut made vertices");
+        for i in 4..cut.pos.len() {
+            let [x, y, z] = cut.pos[i];
+            assert!(z.abs() < 1e-6);
+            let [u, v] = cut.uv[i];
+            assert!((u - (x + 1.0) * 0.5).abs() < 1e-5, "u at {x}: {u}");
+            assert!((v - (y + 1.0) * 0.5).abs() < 1e-5, "v at {y}: {v}");
+            assert_eq!(cut.nrm[i], [0.0, 0.0, 1.0]);
+            assert_eq!(cut.tan[i], [1.0, 0.0, 0.0, 1.0]);
+            // On the box's faces, or on the quad's edge.
+            assert!(
+                x.abs() < 1e-5 || y.abs() < 1e-5 || x.abs() > 1.0 - 1e-5 || y.abs() > 1.0 - 1e-5
+            );
+        }
+    }
+
+    /// A box clear of the quad leaves it untouched -- same vertices, same indices -- and one
+    /// around it empties it.
+    #[test]
+    fn cut_raw_leaves_the_clear_and_empties_the_contained() {
+        let r = quad_raw();
+        let clear = cut_raw(&r, Vector3::new(5.0, 5.0, 5.0), Vector3::new(6.0, 6.0, 6.0));
+        assert_eq!((clear.pos.len(), clear.idx, clear.front), (4, r.idx.clone(), 6));
+        let gone = cut_raw(&r, Vector3::splat(-2.0), Vector3::splat(2.0));
+        assert!(gone.idx.is_empty() && gone.front == 0);
+    }
+
+    /// Top of the elevator's cabin floor, as `ext/elevator.rs` measures it.
+    const FLOOR_CHECK: f32 = -0.022;
+
+    /// The cut reaches the loader's output: the elevator file with a box over a patch of its
+    /// floor loses exactly the triangles there, and a box around everything is an error.
+    #[test]
+    fn cut_boxes_carve_the_parsed_model() {
+        let whole_spec = |cut: &'static [(Vector3, Vector3)]| Load {
+            path: "Meshes/elevator_with_animation_lowpoly.glb",
+            parts: &WHOLE,
+            fit: Fit::Identity,
+            max_map: 256,
+            translucent: &[],
+            metallic_override: &[],
+            cut_boxes: cut,
+        };
+        // A box round a patch of the cabin's floor, at its middle: a ray down onto the patch
+        // finds the floor before the cut and nothing at all after it (the file has nothing
+        // under its floor), while the rest of the model is as it was.
+        static PATCH: [(Vector3, Vector3); 1] =
+            [(Vector3 { x: -1.2, y: -0.5, z: -0.5 }, Vector3 { x: -0.6, y: 0.5, z: 0.3 })];
+        let whole = GltfModel::probe_triangles(&whole_spec(&[]), "all");
+        let cut = GltfModel::probe_triangles(&whole_spec(&PATCH), "all");
+        let tris = |(pos, idx): &(Vec<[f32; 3]>, Vec<u32>)| -> Vec<[Vector3; 3]> {
+            let v = |i: u32| Vector3::from_slice(&pos[i as usize]);
+            idx.chunks_exact(3).map(|t| [v(t[0]), v(t[1]), v(t[2])]).collect()
+        };
+        let (whole_t, cut_t) = (tris(&whole), tris(&cut));
+        let over = Vector3::new(-0.9, 0.4, -0.1);
+        let floor = crate::ext::interior::probe::floor_under(&whole_t, over).expect("a floor");
+        assert!((floor - FLOOR_CHECK).abs() < 0.01, "the cabin floor at {floor}");
+        assert!(crate::ext::interior::probe::floor_under(&cut_t, over).is_none(), "cut away");
+        // Beside the patch the floor is still there, and above it nothing changed.
+        let beside = Vector3::new(-0.3, 0.4, -0.1);
+        let still = crate::ext::interior::probe::floor_under(&cut_t, beside).expect("floor");
+        assert!((still - floor).abs() < 1e-4);
+        let high = |t: &[[Vector3; 3]]| t.iter().filter(|t| t.iter().all(|p| p.y > 0.5)).count();
+        assert_eq!(high(&whole_t), high(&cut_t));
+        static ALL: [(Vector3, Vector3); 1] =
+            [(Vector3 { x: -10.0, y: -10.0, z: -10.0 }, Vector3 { x: 10.0, y: 10.0, z: 10.0 })];
+        let err = parse(&whole_spec(&ALL)).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(err.contains("wholly inside"), "{err}");
+    }
+
     // ── KHR_texture_transform: `uv' = offset + R(rotation) * (scale * uv)`.
 
     fn close2(a: [f32; 2], b: [f32; 2]) -> bool {
@@ -1981,6 +2202,7 @@ mod tests {
             max_map: 1024,
             translucent,
             metallic_override: &[],
+            cut_boxes: &[],
         };
         parse(&spec).unwrap_or_else(|e| panic!("{e}"))
     }
@@ -2062,6 +2284,7 @@ mod tests {
             max_map: 1024,
             translucent: &[],
             metallic_override: &[],
+            cut_boxes: &[],
         };
         let p = parse(&spec).unwrap_or_else(|e| panic!("{e}"));
         // The leaf's triangles are in one part or the other, never both.
@@ -2164,6 +2387,7 @@ mod tests {
             max_map: 1024,
             translucent: &[],
             metallic_override: &[],
+            cut_boxes: &[],
         };
         let p = parse_bytes(&bare_triangle_glb(), &spec, "bare.glb".into())
             .unwrap_or_else(|e| panic!("{e}"));
@@ -2281,6 +2505,7 @@ mod tests {
             max_map: 1024,
             translucent: &[],
             metallic_override: &[("Bush_*", 0.0), ("Thick_Moss", 0.25)],
+            cut_boxes: &[],
         };
         let p = parse(&spec).unwrap_or_else(|e| panic!("{e}"));
         let at = |name: &str| p.policies[material_index(&p, name)].metallic;
@@ -2307,6 +2532,7 @@ mod tests {
             max_map: 1024,
             translucent: &[],
             metallic_override: &[("Shrub_*", 0.0)],
+            cut_boxes: &[],
         };
         let err = parse(&spec).err().expect("rejected");
         assert!(err.to_string().contains("Shrub_*"), "{err}");
@@ -2321,6 +2547,7 @@ mod tests {
             max_map: 1024,
             translucent: &["Water.003"],
             metallic_override: &[],
+            cut_boxes: &[],
         };
         let err = parse(&spec).err().expect("rejected");
         assert!(err.to_string().contains("Water.003"), "{err}");

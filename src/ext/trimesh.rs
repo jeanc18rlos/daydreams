@@ -30,10 +30,9 @@
 //!
 //! Scenery sometimes needs a hole where the scan has a wall: the Backrooms' elevator is set
 //! into the end wall of a corridor, and the wall's triangles would stop the player on the
-//! threshold. [`cut_box`] carves an axis-aligned box out of a triangle soup -- every triangle
-//! is clipped against the box's six planes and the pieces outside are kept, so a wall that is
-//! wider than the opening keeps colliding either side of it. Collision only: what is drawn is
-//! untouched, which is why the thing set into the wall has to cover the hole visually itself.
+//! threshold. That is not done here but in the glTF loader, which carves boxes out of a model
+//! as it is parsed (`Load::cut_boxes`, `ext/carve.rs`), so the triangles a collider is built
+//! from are the ones that are drawn -- a wall is gone from both or from neither.
 
 use crate::vector::{Matrix4, Vector3};
 use parry3d::math::Vector as PVec;
@@ -91,29 +90,6 @@ impl TriMeshCollider {
         TriMeshCollider { mesh }
     }
 
-    /// As [`TriMeshCollider::new`], with the world-space boxes in `holes` carved out of the
-    /// geometry first (see [`cut_box`]). The transform is applied before the cut, so the holes
-    /// are given in the space the collider answers in.
-    pub fn new_with_holes(
-        positions: &[[f32; 3]],
-        indices: &[u32],
-        local_to_world: &Matrix4,
-        holes: &[(Vector3, Vector3)],
-    ) -> TriMeshCollider {
-        let mut pos: Vec<[f32; 3]> = positions
-            .iter()
-            .map(|p| {
-                let w = local_to_world.mul_point(Vector3::new(p[0], p[1], p[2]));
-                [w.x, w.y, w.z]
-            })
-            .collect();
-        let mut idx = indices.to_vec();
-        for &(lo, hi) in holes {
-            (pos, idx) = cut_box(&pos, &idx, lo, hi);
-        }
-        TriMeshCollider::new(&pos, &idx, &Matrix4::identity())
-    }
-
     /// Test-only: how many triangles survived the build.
     #[cfg(test)]
     pub fn num_triangles(&self) -> usize {
@@ -162,82 +138,6 @@ impl TriMeshCollider {
         }
         Some((hit.time_of_impact, n))
     }
-}
-
-/// The triangle soup `(positions, indices)` with the axis-aligned box `[lo, hi]` carved out:
-/// triangles clear of the box are kept as they are, triangles inside it are dropped, and
-/// triangles crossing its faces are clipped so that exactly the part outside survives, with
-/// its winding. Convexity makes it simple: a triangle is a convex polygon, and a convex polygon
-/// split by a plane is two convex polygons, so each of the six faces in turn peels off the
-/// outside piece (fanned back into triangles) and hands the inside piece to the next face.
-/// Whatever is still inside after the sixth face is inside the box.
-pub fn cut_box(
-    positions: &[[f32; 3]],
-    indices: &[u32],
-    lo: Vector3,
-    hi: Vector3,
-) -> (Vec<[f32; 3]>, Vec<u32>) {
-    let v = |i: u32| {
-        let p = positions[i as usize];
-        Vector3::new(p[0], p[1], p[2])
-    };
-    let axis = |p: Vector3, k: usize| [p.x, p.y, p.z][k];
-    let (lo_a, hi_a) = ([lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z]);
-    let mut out_pos: Vec<[f32; 3]> = Vec::with_capacity(positions.len());
-    let mut out_idx: Vec<u32> = Vec::with_capacity(indices.len());
-    let emit = |poly: &[Vector3], out_pos: &mut Vec<[f32; 3]>, out_idx: &mut Vec<u32>| {
-        let base = out_pos.len() as u32;
-        out_pos.extend(poly.iter().map(|p| [p.x, p.y, p.z]));
-        for i in 1..poly.len() as u32 - 1 {
-            out_idx.extend_from_slice(&[base, base + i, base + i + 1]);
-        }
-    };
-    for t in indices.chunks_exact(3) {
-        let tri = [v(t[0]), v(t[1]), v(t[2])];
-        let clear = (0..3).any(|k| {
-            tri.iter().all(|p| axis(*p, k) <= lo_a[k]) || tri.iter().all(|p| axis(*p, k) >= hi_a[k])
-        });
-        if clear {
-            emit(&tri, &mut out_pos, &mut out_idx);
-            continue;
-        }
-        // Six planes: for each axis, "below lo" is outside, then "above hi" is outside.
-        let mut inside: Vec<Vector3> = tri.to_vec();
-        for k in 0..3 {
-            for (bound, sign) in [(lo_a[k], -1.0f32), (hi_a[k], 1.0)] {
-                // Signed distance: positive outside the box on this face.
-                let d = |p: Vector3| sign * (axis(p, k) - bound);
-                let mut outside_poly: Vec<Vector3> = Vec::new();
-                let mut inside_poly: Vec<Vector3> = Vec::new();
-                for i in 0..inside.len() {
-                    let (a, b) = (inside[i], inside[(i + 1) % inside.len()]);
-                    let (da, db) = (d(a), d(b));
-                    if da > 0.0 {
-                        outside_poly.push(a);
-                    } else {
-                        inside_poly.push(a);
-                    }
-                    if (da > 0.0) != (db > 0.0) {
-                        let x = a + (b - a) * (da / (da - db));
-                        outside_poly.push(x);
-                        inside_poly.push(x);
-                    }
-                }
-                if outside_poly.len() >= 3 {
-                    emit(&outside_poly, &mut out_pos, &mut out_idx);
-                }
-                inside = inside_poly;
-                if inside.len() < 3 {
-                    break;
-                }
-            }
-            if inside.len() < 3 {
-                break;
-            }
-        }
-        // `inside` is now the part within the box: dropped.
-    }
-    (out_pos, out_idx)
 }
 
 #[cfg(test)]
@@ -350,77 +250,5 @@ mod tests {
         let idx = [0u32, 1, 2, 0, 1, 3];
         let m = TriMeshCollider::new(&p, &idx, &Matrix4::identity());
         assert_eq!(m.num_triangles(), 1);
-    }
-
-    /// Doubled signed area sum of a soup, as a check that a cut neither loses nor invents
-    /// surface.
-    fn area(pos: &[[f32; 3]], idx: &[u32]) -> f32 {
-        idx.chunks_exact(3)
-            .map(|t| {
-                let v = |i: u32| {
-                    Vector3::new(pos[i as usize][0], pos[i as usize][1], pos[i as usize][2])
-                };
-                (v(t[1]) - v(t[0])).cross(v(t[2]) - v(t[0])).mag() * 0.5
-            })
-            .sum()
-    }
-
-    /// A 10 x 4 wall in the plane z = 0 (two triangles, facing +z) with a 2 x 3 doorway cut
-    /// out of its middle: the doorway lets a sphere through, the wall either side of it and
-    /// above it still pushes, and the surface that is left is the wall less the opening.
-    #[test]
-    fn cut_box_opens_a_doorway_and_keeps_the_wall_around_it() {
-        let p = [[-5.0, 0.0, 0.0], [5.0, 0.0, 0.0], [5.0, 4.0, 0.0], [-5.0, 4.0, 0.0]];
-        let idx = [0u32, 1, 2, 0, 2, 3];
-        let (pos, cut) =
-            cut_box(&p, &idx, Vector3::new(-1.0, -0.5, -0.5), Vector3::new(1.0, 3.0, 0.5));
-        // 40 - 2 * 3.5 (the box reaches below the wall's foot, so the hole is 2 x 3).
-        assert!((area(&pos, &cut) - (40.0 - 6.0)).abs() < 1e-4, "area {}", area(&pos, &cut));
-        // Winding kept: every piece still faces +z.
-        for t in cut.chunks_exact(3) {
-            let v =
-                |i: u32| Vector3::new(pos[i as usize][0], pos[i as usize][1], pos[i as usize][2]);
-            assert!((v(t[1]) - v(t[0])).cross(v(t[2]) - v(t[0])).z > 0.0);
-        }
-        let wall = TriMeshCollider::new(&pos, &cut, &Matrix4::identity());
-        // Through the doorway: nothing to touch.
-        assert!(wall.push_sphere(Vector3::new(0.0, 1.0, 0.0), 0.2).is_none());
-        assert!(wall.push_sphere(Vector3::new(0.0, 2.5, 0.1), 0.2).is_none());
-        // Beside it, and above it: the wall is still there.
-        assert!(wall.push_sphere(Vector3::new(2.0, 1.0, 0.1), 0.2).is_some());
-        assert!(wall.push_sphere(Vector3::new(-3.0, 3.5, -0.1), 0.2).is_some());
-        assert!(wall.push_sphere(Vector3::new(0.0, 3.5, 0.1), 0.2).is_some());
-        // The jamb: a sphere whose edge overlaps the wall beside the opening is caught.
-        assert!(wall.push_sphere(Vector3::new(1.1, 1.0, 0.1), 0.2).is_some());
-    }
-
-    /// Triangles clear of the box pass through untouched, triangles inside it vanish, and a
-    /// box touching a triangle only at its edge leaves it whole.
-    #[test]
-    fn cut_box_leaves_the_clear_and_drops_the_contained() {
-        let p = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
-        let idx = [0u32, 1, 2];
-        let (pos, cut) =
-            cut_box(&p, &idx, Vector3::new(5.0, 5.0, 5.0), Vector3::new(6.0, 6.0, 6.0));
-        assert_eq!((pos.len(), cut.len()), (3, 3));
-        let (_, cut) =
-            cut_box(&p, &idx, Vector3::new(-1.0, -1.0, -1.0), Vector3::new(2.0, 2.0, 2.0));
-        assert!(cut.is_empty());
-        // Box beginning exactly on the triangle's far edge: the triangle is not inside it.
-        let (_, cut) =
-            cut_box(&p, &idx, Vector3::new(1.0, -1.0, -1.0), Vector3::new(2.0, 2.0, 2.0));
-        assert_eq!(cut.len(), 3);
-    }
-
-    #[test]
-    fn holes_are_cut_in_world_space() {
-        // A floor quad moved to x = 100 with a hole under x = 100: a sphere over the hole falls.
-        let p = [[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, 1.0], [-1.0, 0.0, 1.0]];
-        let idx = [0u32, 2, 1, 0, 3, 2];
-        let at = Matrix4::trans(Vector3::new(100.0, 0.0, 0.0));
-        let hole = (Vector3::new(99.7, -0.5, -0.3), Vector3::new(100.3, 0.5, 0.3));
-        let floor = TriMeshCollider::new_with_holes(&p, &idx, &at, &[hole]);
-        assert!(floor.push_sphere(Vector3::new(100.0, 0.1, 0.0), 0.2).is_none());
-        assert!(floor.push_sphere(Vector3::new(100.7, 0.1, 0.0), 0.2).is_some());
     }
 }

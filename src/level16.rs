@@ -42,7 +42,7 @@ use std::rc::Rc;
 use crate::ext::backrooms::{fell_out, Backrooms, GroundCap, DOOR_FACING, DOOR_SPOT, FLOOR_Y};
 use crate::ext::bounds::bounds_box;
 use crate::ext::door::yaw_facing;
-use crate::ext::elevator::{self, Elevator, SLAB_X, THRESHOLD};
+use crate::ext::elevator::{self, Elevator, PROUD, SLAB_X, THRESHOLD};
 use crate::ext::meadow::{door_with_portal, in_far_world, load_meadow, FAR};
 use crate::ext::room::{request_remove_portals, request_respawn, Respawn, RoomLogic};
 use crate::ext::view;
@@ -70,10 +70,6 @@ const ARRIVAL: Vector3 = Vector3 { x: FAR.x - 1.0, y: FAR.y + GH_PLAYER_HEIGHT, 
 /// the scan behind it. The elevator's cabin goes there.
 const CORRIDOR_END_Z: f32 = -1.89;
 const CORRIDOR_X: (f32, f32) = (-2.68, 2.38);
-/// How far the elevator's wall slab stands proud of that wall, so the two never z-fight. The
-/// slab is drawn over the scan's wall; the scan's collision is cut away behind the doorway
-/// (`Backrooms::new`, from `Elevator::wall_cut`).
-const ELEVATOR_PROUD: f32 = 0.03;
 /// Where the elevator's threshold meets the end wall, in model coordinates. The slab is
 /// 4.23 m wide and its doorway is off its centre, a metre east of it; centring the SLAB in
 /// the 5.06 m corridor -- so a hand's width of the scan's own wall shows either side of it
@@ -85,7 +81,9 @@ const ELEVATOR_PROUD: f32 = 0.03;
 const ELEVATOR_SPOT: Vector3 = Vector3 {
     x: 0.5 * (CORRIDOR_X.0 + CORRIDOR_X.1) + THRESHOLD.x - 0.5 * (SLAB_X.0 + SLAB_X.1),
     y: FLOOR_Y,
-    z: CORRIDOR_END_Z + ELEVATOR_PROUD,
+    // The slab stands proud of the wall, and the scan is carved away behind it
+    // (`Backrooms::new`, from `Elevator::wall_cut`).
+    z: CORRIDOR_END_Z + PROUD,
 };
 /// The doorway faces up the corridor, toward the hall (+z in the model's space).
 const ELEVATOR_FACING: Vector3 = Vector3 { x: 0.0, y: 0.0, z: 1.0 };
@@ -256,6 +254,7 @@ mod tests {
             max_map: 1024,
             translucent: &[],
             metallic_override: &[],
+            cut_boxes: &[],
         };
         let (pos, idx) = GltfModel::probe_triangles(&spec, "all");
         let v = |i: u32| Vector3::from_slice(&pos[i as usize]);

@@ -37,23 +37,13 @@
 //! # Set into a wall
 //!
 //! The cabin is meant to stand BEHIND the wall of whatever room it serves, its slab a few
-//! centimetres proud of that wall and its doorway cut through it. The host's collision is
-//! cut with [`Elevator::wall_cut`]; its drawing cannot be -- the Backrooms is one uploaded
-//! mesh -- so the host wall would show through the open doorway, 3 cm behind the leaves,
-//! with the cabin hidden behind it. `draw` therefore punches the doorway through the depth
-//! buffer first: a box filling the opening from the leaves' plane to the slab's face is
-//! rasterised with the colour mask off, the depth test set to always pass and the depth range
-//! pinned to the far plane, which writes "nothing here" over every pixel the opening covers
-//! -- including the host wall's -- and the cabin, drawn next, lands on a clean slate. The
-//! slab and the jambs are drawn after the punch too, so nothing of the elevator's own is
-//! lost; what is lost is anything drawn EARLIER that stood in front of the opening, and the
-//! thing set into a wall has nothing in front of its door by construction.
-//!
-//! The box has no face on the cabin's side. Faces are back-face culled like everything else,
-//! so from inside the cabin -- where the host wall's back is culled anyway and the corridor
-//! is in plain view through the doorway -- no face of the box faces the eye and nothing is
-//! punched; from inside the doorway itself, the eye is within the box and every face is
-//! turned away. Only from the room does the punch fire.
+//! centimetres proud of that wall and its doorway cut through it. The host carves the box
+//! [`Elevator::wall_cut`] out of its model as the glTF loader parses it (`Load::cut_boxes`,
+//! `ext/carve.rs`): the wall's triangles behind the doorway are gone from what is drawn and
+//! from what collides, so through the open leaves the player sees the cabin and nothing of
+//! the host, and walks in. The slab, a margin wider than the cut on every side, covers the
+//! cut's edges. A level therefore builds its elevator BEFORE the model it is set into, so the
+//! box is known when the model is loaded (`Backrooms::new`, `interior::load`).
 //!
 //! # Channels
 //!
@@ -69,18 +59,17 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::camera::Camera;
+use crate::ext::bounds::transformed_box;
 use crate::ext::gltf_model::{Anchor, Fit, Frame, GltfModel, Load, PartSpec};
 use crate::ext::room::{request_scene_load, Respawn};
 use crate::ext::scenes;
 use crate::ext::trimesh::TriMeshCollider;
 use crate::game_header::{GH_DT, GH_PLAYER_HEIGHT};
-use crate::mesh::Mesh;
 use crate::object::{Object, ObjectT, RenderCtx, UpdateCtx};
 use crate::player::Player;
 use crate::resources::Resources;
 use crate::shader::Shader;
 use crate::vector::{Matrix4, Vector3};
-use glow::HasContext;
 
 /// A level the elevator stops at.
 pub struct Floor {
@@ -141,10 +130,6 @@ const CABIN_HI: Vector3 = Vector3 { x: 1.14, y: FLOOR_Y + 3.0, z: 0.95 };
 /// The doorway's clear opening: the faces of its two jambs. The shut leaves overlap the west
 /// jamb by 14 cm, so they span more than this.
 pub const OPENING_X: (f32, f32) = (-0.797, 0.979);
-/// The leaves' span at rest, outer edge to outer edge.
-const DOORWAY_X: (f32, f32) = (-0.934, 0.979);
-/// Top of the leaves.
-const DOOR_TOP_Y: f32 = 2.767;
 /// The inner face of the leaves: a player past this z is in the doorway, not the cabin.
 const DOOR_PLANE_Z: f32 = 0.98;
 /// The outer face of the wall slab the doorway is set in, and the slab's x extent -- what
@@ -156,14 +141,14 @@ pub const SLAB_X: (f32, f32) = (-3.02, 1.21);
 /// behind it follows.
 pub const THRESHOLD: Vector3 =
     Vector3 { x: 0.5 * (OPENING_X.0 + OPENING_X.1), y: FLOOR_Y, z: WALL_FACE_Z };
-/// The wall cut (`wall_cut`): how far beyond the opening it reaches to each side, below and
-/// above, so the host wall's jambs cannot catch a shoulder; how far behind the slab's face,
-/// which is where the host wall's own plane lies; and how far in front -- a hair only,
-/// because the host's floor meets its wall on that line and would lose a strip of collision
-/// as deep as the cut reaches past it. The model's sill covers the hair.
+/// How far the slab's face should stand proud of the host wall it is set into
+/// (`ELEVATOR_SPOT` in each level is the wall's face plus this, along the facing): enough
+/// that the two are never coplanar, less than the call button stands out from the slab.
+pub const PROUD: f32 = 0.03;
+/// The wall cut (`wall_cut`): how far under the cabin's floor and past its back it reaches,
+/// so the host's floor cannot z-fight the cabin's and a host wall a hand behind the cabin's
+/// back is gone too.
 const CUT_MARGIN: f32 = 0.1;
-const CUT_BEHIND: f32 = 0.3;
-const CUT_IN_FRONT: f32 = 0.01;
 
 const PARTS: [PartSpec<'static>; 3] = [
     PartSpec {
@@ -198,6 +183,7 @@ fn load_spec() -> Load<'static> {
         max_map: MAP,
         translucent: &[],
         metallic_override: &[],
+        cut_boxes: &[],
     }
 }
 
@@ -466,36 +452,11 @@ fn time_of_widest_opening(model: &GltfModel) -> f32 {
         .0
 }
 
-/// The world-space box of a model-space box placed by `obj`: every corner transformed, then
-/// bounded. Exact for a yaw that is a multiple of a quarter turn; over-wide for any other.
-fn world_box(obj: &Object, lo: Vector3, hi: Vector3) -> (Vector3, Vector3) {
-    let m = obj.local_to_world();
-    let mut wlo = Vector3::splat(f32::MAX);
-    let mut whi = Vector3::splat(f32::MIN);
-    for k in 0..8 {
-        let c = Vector3::new(
-            if k & 1 == 0 { lo.x } else { hi.x },
-            if k & 2 == 0 { lo.y } else { hi.y },
-            if k & 4 == 0 { lo.z } else { hi.z },
-        );
-        let w = m.mul_point(c);
-        wlo = Vector3::new(wlo.x.min(w.x), wlo.y.min(w.y), wlo.z.min(w.z));
-        whi = Vector3::new(whi.x.max(w.x), whi.y.max(w.y), whi.z.max(w.z));
-    }
-    (wlo, whi)
-}
-
 pub struct Elevator {
     /// The model's placement. Static after `new`: the colliders are baked in world space.
     base: Object,
     model: Rc<GltfModel>,
     shader: Rc<Shader>,
-    /// The depth punch through the host wall (see the module docs): a unit box placed over
-    /// the doorway, drawn as five unit quads, with any shader that positions them -- their
-    /// colour is never written.
-    punch: Object,
-    punch_quad: Rc<Mesh>,
-    punch_shader: Rc<Shader>,
     t_open: f32,
     ride: Ride,
     /// The ride's openness, shared with the doors' collider object.
@@ -542,31 +503,12 @@ impl Elevator {
         let t_open = time_of_widest_opening(&model);
         log::info!("[elevator] {CLIP:?} widest at {t_open:.2} s");
 
-        // The punch: the leaves' span (wider than the opening, which is harmless: the slab
-        // is drawn after it) from the leaves' plane to the slab's face. Placed as a child of
-        // the model's placement -- `punch.pos` and `punch.scale` are in model space, composed
-        // under `base` at draw time.
-        let mut punch = Object::new();
-        punch.pos = Vector3::new(
-            0.5 * (DOORWAY_X.0 + DOORWAY_X.1),
-            0.5 * (FLOOR_Y + DOOR_TOP_Y),
-            0.5 * (DOOR_PLANE_Z + WALL_FACE_Z),
-        );
-        punch.scale = Vector3::new(
-            0.5 * (DOORWAY_X.1 - DOORWAY_X.0),
-            0.5 * (DOOR_TOP_Y - FLOOR_Y),
-            0.5 * (WALL_FACE_Z - DOOR_PLANE_Z),
-        );
-
         let ride = if arrival.is_some() { Ride::arriving() } else { Ride::at_rest() };
         let openness = Rc::new(Cell::new(ride.openness()));
         Elevator {
             base,
             model,
             shader: res.acquire_shader("gltfpbr"),
-            punch,
-            punch_quad: res.acquire_mesh("quad.obj"),
-            punch_shader: res.acquire_shader("pink"),
             t_open,
             ride,
             openness,
@@ -607,8 +549,8 @@ impl Elevator {
         let mut hi = Vector3::splat(f32::MIN);
         for part in PARTS.iter().map(|p| p.name) {
             let b = self.model.bounds(part);
-            let (wlo, whi) = world_box(
-                &self.base,
+            let (wlo, whi) = transformed_box(
+                &self.base.local_to_world(),
                 Vector3::new(b[0], b[2], b[4]),
                 Vector3::new(b[1], b[3], b[5]),
             );
@@ -618,63 +560,25 @@ impl Elevator {
         (lo, hi)
     }
 
-    /// The world-space box a level should carve out of the collision of the wall this
-    /// elevator is set into (`Backrooms::new`): the doorway, a margin wider and
-    /// taller, reaching from just in front of the slab's face to well behind it.
+    /// The world-space box a level carves out of the model this elevator is set into
+    /// (`Backrooms::new`, `interior::load`; see the module docs): everything behind the
+    /// slab's face that the elevator occupies -- the slab's width, from a margin under the
+    /// cabin's floor to the slab's top, from a margin behind the cabin's back to the face.
+    /// The host's wall behind the doorway goes, and so does whatever of the host stood where
+    /// the cabin now is (a thick wall's inside, a floor under the cabin's); the slab, which
+    /// stands [`PROUD`] of the host's face, covers the cut's edges.
     pub fn wall_cut(&self) -> (Vector3, Vector3) {
-        world_box(
-            &self.base,
-            Vector3::new(OPENING_X.0 - CUT_MARGIN, FLOOR_Y - CUT_MARGIN, WALL_FACE_Z - CUT_BEHIND),
-            Vector3::new(
-                OPENING_X.1 + CUT_MARGIN,
-                DOOR_TOP_Y + CUT_MARGIN,
-                WALL_FACE_Z + CUT_IN_FRONT,
-            ),
+        let b = self.model.bounds(CABIN);
+        transformed_box(
+            &self.base.local_to_world(),
+            Vector3::new(SLAB_X.0, FLOOR_Y - CUT_MARGIN, b[4] - CUT_MARGIN),
+            Vector3::new(SLAB_X.1, b[3], WALL_FACE_Z),
         )
     }
 
     /// Whether the player (eye position) is in the cabin.
     pub fn contains(&self, player_pos: Vector3) -> bool {
         inside_cabin(self.base.world_to_local().mul_point(player_pos))
-    }
-
-    /// Clear the depth buffer where the doorway is (see the module docs), so the cabin can be
-    /// drawn through the host's wall. Every piece of GL state touched is put back to the
-    /// ported renderer's: colour writes on, `LESS`, the full depth range.
-    fn punch_doorway(&self, ctx: &RenderCtx, cam: &Camera) {
-        let local_to_world = self.base.local_to_world() * self.punch.local_to_world();
-        // The same sphere cull as any part: the punch box about its centre.
-        let centre = local_to_world.mul_point(Vector3::zero());
-        if !ctx.frustum.sphere(centre, self.punch.scale.mag()) {
-            return;
-        }
-        let gl = ctx.gl;
-        unsafe {
-            gl.color_mask(false, false, false, false);
-            gl.depth_func(glow::ALWAYS);
-            gl.depth_range_f32(1.0, 1.0);
-        }
-        self.punch_shader.use_program();
-        // The unit quad (`quad.obj`, facing +z) on five faces of the unit cube, each turned
-        // to face outward; the -z face, toward the cabin, is left off (see the module docs).
-        let half_turn = std::f32::consts::FRAC_PI_2;
-        let faces = [
-            Matrix4::trans(Vector3::new(0.0, 0.0, 1.0)),
-            Matrix4::trans(Vector3::new(1.0, 0.0, 0.0)) * Matrix4::rot_y(half_turn),
-            Matrix4::trans(Vector3::new(-1.0, 0.0, 0.0)) * Matrix4::rot_y(-half_turn),
-            Matrix4::trans(Vector3::new(0.0, 1.0, 0.0)) * Matrix4::rot_x(-half_turn),
-            Matrix4::trans(Vector3::new(0.0, -1.0, 0.0)) * Matrix4::rot_x(half_turn),
-        ];
-        let vp = cam.matrix() * local_to_world;
-        for face in &faces {
-            self.punch_shader.set_mvp(Some(&(vp * *face)), None);
-            self.punch_quad.draw();
-        }
-        unsafe {
-            gl.depth_range_f32(0.0, 1.0);
-            gl.depth_func(glow::LESS);
-            gl.color_mask(true, true, true, true);
-        }
     }
 
     /// The `Object` a leaf is drawn at: the elevator's, slid by the clip at the current
@@ -726,7 +630,6 @@ impl ObjectT for Elevator {
     }
 
     fn draw(&self, ctx: &RenderCtx, cam: &Camera, _fbo: Option<glow::Framebuffer>) {
-        self.punch_doorway(ctx, cam);
         // draw_part culls each part by its own sphere, the leaves at their slid placement.
         self.model.draw_part(CABIN, &self.base, &self.shader, cam, ctx);
         self.model.draw_part(DOOR1, &self.leaf_placement(NODE_DOOR1), &self.shader, cam, ctx);
@@ -985,14 +888,16 @@ mod tests {
         // The leaves: between them they span the doorway, and DOOR_PLANE_Z is their inner
         // face.
         let (d1, d2) = (bounds(DOOR1, &[NODE_DOOR1]), bounds(DOOR2, &[NODE_DOOR2]));
-        assert!((d1.0.x - DOORWAY_X.0).abs() < 0.01 && (d2.1.x - DOORWAY_X.1).abs() < 0.01);
-        assert!(DOORWAY_X.0 < OPENING_X.0 && DOORWAY_X.1 >= OPENING_X.1, "leaves cover the jambs");
-        assert!((d1.1.y.max(d2.1.y) - DOOR_TOP_Y).abs() < 0.01);
+        // The leaves' span at rest, outer edge to outer edge: over the west jamb by 14 cm.
+        assert!((d1.0.x + 0.934).abs() < 0.01 && (d2.1.x - 0.979).abs() < 0.01);
+        assert!(d1.0.x < OPENING_X.0 && d2.1.x >= OPENING_X.1, "leaves cover the jambs");
+        // Top of the leaves: head room and more.
+        let top = d1.1.y.max(d2.1.y);
+        assert!((top - 2.767).abs() < 0.01 && top - FLOOR_Y > GH_PLAYER_HEIGHT + 0.5);
         let inner = d1.0.z.min(d2.0.z);
         assert!((inner - DOOR_PLANE_Z).abs() < 0.01, "leaves from z = {inner}");
         assert!(d1.1.z.max(d2.1.z) < WALL_FACE_Z, "leaves inside the slab's face");
-        // The doorway is a doorway: wide enough to walk through, and under the leaves' top.
+        // The doorway is a doorway: wide enough to walk through.
         const { assert!(OPENING_X.1 - OPENING_X.0 > 1.5) }
-        const { assert!(DOOR_TOP_Y - FLOOR_Y > GH_PLAYER_HEIGHT + 0.5) }
     }
 }
