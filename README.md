@@ -1784,7 +1784,14 @@ daydreams --windowed --mute --scene 16 --unlock-window --pos 987,1.5,-0.5 --yaw 
 The window hangs with its centre at 1.35 m rather than eye height: grown to a door it must
 still fit under the far room's 2.43 m ceiling, and the partner hangs at the frame's height.
 The Backrooms' load grows by the copy, about 90 ms (`[load] scene 16 in 255 ms`, from 165);
-the crossing itself, with the model shared, is the 2 ms above. The rules -- the state from
+the crossing itself, with the model shared, is the 2 ms above. Frame cost, windowed at
+2560x1440 on the shared M3 Max with vsync off, 600 frames: with the window anywhere in view
+the hall costs **about 1.9-2.0 ms a frame** (`--pos 999,1.5,0 --yaw 90`: 1.98 ms; up close,
+`--pos 987,1.5,-1.2 --yaw 180`: 1.83 ms) against **0.9-1.0 ms** with it out of view (the same
+spots at yaw 270 and yaw 0: 0.99 and 0.92 ms) -- the nested pass renders the whole Overgrown
+copy, grass shaders included, into the portal framebuffer even for the 30 cm locked pane.
+The occlusion query skips the pass once the quad is hidden; while it shows, that is the
+price of a real room behind the glass. The rules -- the state from
 lock, pose and size; what is passable, tinted and said; the portal's transform from the
 frame; the partner's match and the warp's rigidity; the parked portal; the arrival channel
 -- are unit tested with detached portals, and `level16.rs` measures the window's wall and
