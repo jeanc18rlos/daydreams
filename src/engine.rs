@@ -486,9 +486,9 @@ impl Engine {
         *self.dev_hold.borrow_mut() = hold.to_vec();
         if let Some(scene) = scene {
             self.ext.borrow_mut().menu.close();
-            if scene < self.v_scenes.len() {
-                self.load_scene(scene);
-            }
+            // In range: the command line checks the index against the registry, and
+            // `v_scenes` is built from the same table.
+            self.load_scene(scene);
             self.player.borrow_mut().set_look(yaw.to_radians(), pitch.to_radians());
             if let Some(p) = pos {
                 self.player

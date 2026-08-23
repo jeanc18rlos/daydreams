@@ -36,7 +36,7 @@ pub struct Args {
     pub no_log_file: bool,
 
     /// Skip the title and load scene N (0-based, in key order).
-    #[arg(long, value_name = "N")]
+    #[arg(long, value_name = "N", value_parser = parse_scene)]
     pub scene: Option<usize>,
 
     /// Save a screenshot here after --frames frames and quit. Alone: the title screen.
@@ -84,6 +84,19 @@ pub struct Args {
 pub enum Command {
     /// Regenerate Meshes/meadow_tile.obj from ext::terrain::height and exit.
     GenTerrain,
+}
+
+/// A scene index, checked against the registry at parse time so that `--scene 99` is a usage
+/// error (exit 2) naming the range, rather than a run that silently stayed on the intro because
+/// `Engine::start_direct` skipped the load. A custom parser instead of
+/// `value_parser!(usize).range(..)` so the message can say what the range is the index of.
+fn parse_scene(s: &str) -> Result<usize, String> {
+    let last = crate::ext::scenes::SCENES.len() - 1;
+    let n: usize = s.parse().map_err(|e| format!("'{s}': {e}"))?;
+    if n > last {
+        return Err(format!("{n} is not a scene; the registry has 0..={last}"));
+    }
+    Ok(n)
 }
 
 /// `x,y,z`, each an f32. The old parser kept whichever components parsed and then dropped
@@ -185,8 +198,21 @@ mod tests {
         assert!(Args::try_from_tokens(&["--frames", "ten"]).is_err());
         assert!(Args::try_from_tokens(&["--frames", "-1"]).is_err());
         assert!(Args::try_from_tokens(&["--scene", "x"]).is_err());
+        assert!(Args::try_from_tokens(&["--scene", "-1"]).is_err());
         assert!(Args::try_from_tokens(&["--log-level", "loud"]).is_err());
         assert!(Args::try_from_tokens(&["--bogus"]).is_err());
+    }
+
+    #[test]
+    fn scene_must_be_in_the_registry() {
+        let n = crate::ext::scenes::SCENES.len();
+        assert_eq!(Args::try_from_tokens(&["--scene", "0"]).unwrap().scene, Some(0));
+        let last = (n - 1).to_string();
+        assert_eq!(Args::try_from_tokens(&["--scene", &last]).unwrap().scene, Some(n - 1));
+        let err = Args::try_from_tokens(&["--scene", &n.to_string()]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(err.to_string().contains(&format!("0..={last}")), "{err}");
+        assert!(Args::try_from_tokens(&["--scene", "99"]).is_err());
     }
 
     #[test]
