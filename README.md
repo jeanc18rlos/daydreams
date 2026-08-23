@@ -1892,6 +1892,7 @@ Options:
       --windowed           Open a 1280x720 window instead of taking the whole display
       --no-vsync           Swap interval 0, so `[shot]` frame times measure the renderer rather than the panel
       --mute               No sound for this run, whatever the saved setting says (also: DAYDREAMS_MUTE=1). The `M` key cannot lift it and nothing is written to the settings file
+      --no-gamepad         Ignore every connected controller for this run. Automated screenshot and benchmark runs pass it: a pad on the desk with a little stick drift injects look input and makes their frames non-deterministic (found while verifying the portraits)
       --assets <DIR>       Directory holding Shaders/, Meshes/, Textures/ and assets/ (also: DAYDREAMS_ASSETS)
       --log-level <LEVEL>  off, error, warn, info, debug or trace (also: DAYDREAMS_LOG). Default info
       --no-log-file        Log to the terminal only; do not write the per-user log file
@@ -1914,7 +1915,7 @@ menu that is the thing being looked at. `--yaw`, `--pitch`, `--pos` and the held
 something with `--scene`.
 
 `--pos x,y,z` places the player; `--windowed` opens a 1280×720 window instead of taking the
-display; `--mute` (or `DAYDREAMS_MUTE=1`) silences the run without touching the saved setting, which is what every automated screenshot or benchmark should pass; `--no-vsync` requests a swap interval of 0 so the `[shot]` line's second half — `avg
+display; `--mute` (or `DAYDREAMS_MUTE=1`) silences the run without touching the saved setting, and `--no-gamepad` ignores every connected controller (a drifting stick on the desk steers long runs) -- automated screenshot and benchmark runs should pass both; `--no-vsync` requests a swap interval of 0 so the `[shot]` line's second half — `avg
 frame X ms, p95 Y ms over N frames`, measured over the frames after the first ten — reports what
 the renderer costs rather than what the panel allows. `--forward` / `--strafe` hold `W` / `A` down for
 the whole run and `--sprint` holds `Shift`, so the `[shot]` position print shows how far the

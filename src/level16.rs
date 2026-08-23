@@ -206,6 +206,13 @@ impl Scene for Level16 {
                 let facing = Vector3::new(0.0, 0.0, facing_z);
                 let key = (seed == KEY_SEED).then_some(KEY_SPEC);
                 let portrait = &PORTRAITS[seed as usize % PORTRAITS.len()];
+                // EXT: the anamorphic key's KEY_ON_PLANE spot was tuned for the Mona's dark
+                // bodice; a third portrait in the rotation would silently re-seat the key on
+                // whichever sitter lands on this seed. Pin it so the sheet that adds one
+                // fails here instead of shipping a key on the wrong painting.
+                if key.is_some() {
+                    assert_eq!(portrait.name, "mona", "KEY_SEED must land on the Mona");
+                }
                 Painting::new(gl, res, centre, facing, WIDTH, portrait, seed, watch.clone(), key)
             };
             let north =

@@ -556,7 +556,7 @@ impl ApplicationHandler for App {
         // fixed-step updates. Polled here rather than in device_event because gilrs keeps its
         // own event queue, independent of winit's.
         let pad = match self.engine.as_ref() {
-            Some(engine) => {
+            Some(engine) if !self.args.no_gamepad => {
                 let pad = {
                     let pads = &mut self.gamepads;
                     engine.with_input(|input| pads.poll(input))
@@ -586,6 +586,8 @@ impl ApplicationHandler for App {
                 }
                 pad
             }
+            // EXT: `--no-gamepad` -- the pad is never polled, so no drift, no edges.
+            Some(_) => ext::gamepad::PadEvents::default(),
             None => return,
         };
         // EXT: the pad no longer carries a quit of its own -- it reaches EXIT through the pause

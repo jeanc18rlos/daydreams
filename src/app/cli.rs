@@ -28,6 +28,12 @@ pub struct Args {
     #[arg(long)]
     pub mute: bool,
 
+    /// Ignore every connected controller for this run. Automated screenshot and benchmark
+    /// runs pass it: a pad on the desk with a little stick drift injects look input and makes
+    /// their frames non-deterministic (found while verifying the portraits).
+    #[arg(long)]
+    pub no_gamepad: bool,
+
     /// Directory holding Shaders/, Meshes/, Textures/ and assets/ (also: DAYDREAMS_ASSETS).
     #[arg(long, value_name = "DIR")]
     pub assets: Option<PathBuf>,
