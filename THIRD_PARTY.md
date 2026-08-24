@@ -143,20 +143,18 @@ by Blenderust (<https://sketchfab.com/narighillya>) licensed under CC-BY-4.0
 `Meshes/intro_door.ATTRIBUTION.txt`, and credit it. If the licence turns out to be CC-BY-NC
 or a Sketchfab Standard licence, the model cannot ship in a commercial build.
 
-## Soundtrack — `assets/music/ost.mp3`
+## Audio — `assets/sfx/*.flac`, `assets/music/*.flac`
 
 | | |
 |---|---|
-| Source | Not recorded in the repository. |
-| Licence | **None recorded.** |
-| What the file says | Its ID3 tags read title *"Demon's Souls OST - Character Creation Theme (extended)"*, artist *"Zombiesneglen"*, encoder `Lavf59.27.100` (an ffmpeg transcode, with a `dash` major brand — a download of a streamed upload). |
+| What | Every sound in the game: 42 effects and 5 ambience loops. |
+| Source | **Generated.** `tools/gen_sfx.py` synthesises all of them from filtered noise, sine partials, envelopes and a synthetic room impulse. No samples, no recordings, no libraries of either. |
+| Licence | The project's own (MIT), like any other file the repository's tools produce. |
+| Notes | Seeded and deterministic: `python3 tools/gen_sfx.py` rewrites the same bytes. The tool's docstring is the manifest — one line per sound saying how it is made. Nothing here needs crediting to anyone. |
 
-**ACTION REQUIRED:** on its own tags this is a track from the *Demon's Souls* soundtrack
-(composed by Shunsuke Kida, © Sony Interactive Entertainment / FromSoftware), re-uploaded and
-extended by a third party. That is not licensable for distribution in any form. Replace it
-with a track whose licence is recorded here before any build leaves this machine. The audio
-code needs nothing specific: drop any `ogg`/`mp3`/`wav`/`flac` into `assets/music/`
-(README, "Audio").
+The soundtrack that used to sit here (`assets/music/ost.mp3`) was a *Demon's Souls* track
+re-uploaded by a third party — its own ID3 tags said so — and was not licensable for
+distribution in any form. It is **deleted**, and the generated loops replace it.
 
 ## Grass shading — `Shaders/grassblade.frag`
 
@@ -197,10 +195,11 @@ Made for this project by its tools; no third-party content, nothing to credit.
 | `Textures/cube_sticker.bmp` | `tools/bake_cube.py` |
 | `Textures/ui_font.bmp`, `Textures/ui_cursors.bmp` | `tools/gen_ui.py` (derived from the font and cursor art above) |
 | `Textures/portrait_mona.bmp`, `portrait_mona_parts.bmp`, `portrait_vermeer.bmp`, `portrait_vermeer_parts.bmp` | `tools/gen_portraits.py` (derived from the portrait sheets — see "The portraits" above) |
+| `assets/sfx/*.flac` (42 effects), `assets/music/*.flac` (5 ambience loops) | `tools/gen_sfx.py` — synthesised from nothing, see above |
 | `Shaders/*` other than the five listed under the engine | Written for this project |
 
 `Textures/cube_projection.bmp` is referenced by no code and no tool, and its origin is not
-recorded; it is in the same position as the cursor art above (item 5 below) and should either
+recorded; it is in the same position as the cursor art above (item 4 below) and should either
 be accounted for or dropped from the shipped set.
 
 ## Crates
@@ -239,18 +238,16 @@ cargo tree --format "{p} {l}" --prefix none | sort -u
 
 ## ACTION REQUIRED — summary
 
-1. **`assets/music/ost.mp3`** — identifies itself as a *Demon's Souls* soundtrack re-upload.
-   Not distributable. Replace.
-2. **`Meshes/Classic_Interior_Door.glb`** — licence unconfirmed, author unrecorded. Find the
+1. **`Meshes/Classic_Interior_Door.glb`** — licence unconfirmed, author unrecorded. Find the
    Sketchfab page; record both in `Meshes/intro_door.ATTRIBUTION.txt`; credit or remove.
-3. **`Meshes/backrooms_vr.glb`**, **`Meshes/elevator_with_animation_lowpoly.glb`**,
+2. **`Meshes/backrooms_vr.glb`**, **`Meshes/elevator_with_animation_lowpoly.glb`**,
    **`Meshes/backrooms_room_with_plants_overgrown.glb`**,
    **`Meshes/level_37_flooded_tiled_complex.glb`** — CC-BY-4.0 per each file's own
    metadata (carlcapu9, EFX, Blenderust, Blenderust). The licence files and the credit
    lines are in place; the Sketchfab check of each page is what remains.
-4. **`Shaders/grassblade.frag`** — ideas credited to a CC BY-NC-SA 3.0 Shadertoy. Needs a
+3. **`Shaders/grassblade.frag`** — ideas credited to a CC BY-NC-SA 3.0 Shadertoy. Needs a
    legal read for a commercial build, or the three borrowed constants re-derived.
-5. **`assets/ui/cursors_src.png`** and **`Textures/cube_projection.bmp`** — provenance not
+4. **`assets/ui/cursors_src.png`** and **`Textures/cube_projection.bmp`** — provenance not
    recorded. Confirm original (and drop the unreferenced texture, or say what it is).
-6. **`LICENSE`** — the copyright holder reads "DayDreams contributors", a placeholder.
+5. **`LICENSE`** — the copyright holder reads "DayDreams contributors", a placeholder.
    Confirm the name (and the year) before a build leaves this machine.
