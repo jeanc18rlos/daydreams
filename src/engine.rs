@@ -646,6 +646,24 @@ impl Engine {
                 // EXT: and the rigid-body world's step cost and where its props are
                 // (src/ext/physics.rs).
                 crate::ext::physics::log_report();
+                // EXT: and what the carry is doing, which a screenshot cannot show: the
+                // apparent size is pinned on purpose, so a held object looks the same in
+                // every shot and only these numbers say where it really is and how big it
+                // really got.
+                {
+                    let ext = self.ext.borrow();
+                    let g = &ext.grab;
+                    if let Some(i) = g.held {
+                        log::info!(
+                            "[grab] holding object #{i} at {:.2} units, p_scale {:.3} (asked {:.3} at {:.2}){}",
+                            g.eased_scale / g.ratio.max(1e-6),
+                            g.eased_scale,
+                            g.target_scale,
+                            g.target_dist,
+                            if g.fit_shrunk { ", shrunk to fit" } else { "" }
+                        );
+                    }
+                }
             }
             Err(e) => log::error!("[shot] could not write {}: {e}", path.display()),
         }
