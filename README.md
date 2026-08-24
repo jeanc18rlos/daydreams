@@ -185,8 +185,9 @@ logs are to name source lines, keep `debug = 1` in `dist` (and drop the strip), 
 The files the LFS patterns below match come to about 70 MB across 26 files (the 47 MB Escher
 mesh, the 20 MB Backrooms GLB, the door GLB, the other meshes, the font; `git ls-files -z |
 xargs -0 du -ch` filtered by the patterns), and the history holds more: the door GLB was
-committed at 79 MB before its textures were shrunk, and the deleted `assets/music/ost.mp3` is
-20 MB more (THIRD_PARTY.md). `.gitattributes` already routes `*.glb`, `*.mp3`, `*.ttf` and
+committed at 79 MB before its textures were shrunk, and `assets/music/ost.mp3` — the demo's
+placeholder soundtrack, which is not distributable and goes before release — is 20 MB more
+(THIRD_PARTY.md). `.gitattributes` already routes `*.glb`, `*.mp3`, `*.ttf` and
 `Meshes/*.obj` through Git LFS for files added from now on, but the files already in history are
 ordinary blobs until they are rewritten. There is no remote yet, so the rewrite is cheap; run it
 once, before the first push:
@@ -1514,9 +1515,13 @@ cargo run --release --example pad_probe
 The original engine is completely silent. Built on `kira`, chosen over `rodio` because scene
 switching wants real crossfades.
 
-**Nothing here is a recording.** All 47 files are synthesised by `tools/gen_sfx.py` (numpy +
-Pillow, ffmpeg for the encode) out of filtered noise, sine partials, envelopes and a synthetic
-room impulse, so the shipped audio carries no third-party rights of any kind (THIRD_PARTY.md).
+**Nothing generated here is a recording.** All 47 of those files are synthesised by
+`tools/gen_sfx.py` (numpy + Pillow, ffmpeg for the encode) out of filtered noise, sine
+partials, envelopes and a synthetic room impulse, so they carry no third-party rights of any
+kind. The one exception is deliberate: `assets/music/ost.mp3` is a borrowed track kept as a
+placeholder **for demos only**, and it is not distributable — deleting it is the whole of the
+change, because the fallback rule below hands the job straight back to the generated drone
+(THIRD_PARTY.md, which says what has to happen before release).
 The tool is seeded: regenerating writes byte-identical files, and
 
 ```bash
@@ -1540,6 +1545,13 @@ noise made from a random-phase spectrum, reverb applied circularly, sparse event
 round the end — so the head is the continuation of the tail and there is no seam to fade. The
 measured step across the wrap is 12 to 27 dB **smaller** than the 99th-percentile step the
 signal takes between adjacent samples everywhere else.
+
+**Which track plays** — a scene takes the file whose numeric prefix names it; anything with no
+prefix is the fallback, for scenes with no track of their own. Two unprefixed files resolve in
+favour of the one the generator did not write (`ambient`), so a track of your own dropped into
+`assets/music/` outranks the drone and removing it hands the job back with no code change. The
+title screen prefers that track too — a title screen is where a game plays music — and falls
+back to the meadow's wind when the only fallback is the generated drone.
 
 **Binding a track to a scene** — a numeric filename prefix, counting scenes from **one**, the
 same numbering as the keys `1`..`7`: `assets/music/17-backrooms.flac` is `SCENES[16]`, which

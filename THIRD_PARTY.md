@@ -152,14 +152,18 @@ or a Sketchfab Standard licence, the model cannot ship in a commercial build.
 | Licence | The project's own (MIT), like any other file the repository's tools produce. |
 | Notes | Seeded and deterministic: `python3 tools/gen_sfx.py` rewrites the same bytes. The tool's docstring is the manifest — one line per sound saying how it is made. Nothing here needs crediting to anyone. |
 
-The soundtrack that used to sit here (`assets/music/ost.mp3`) was a *Demon's Souls* track
-re-uploaded by a third party — its own ID3 tags said so — and was not licensable for
-distribution in any form. It is **deleted** from the tree, and the generated loops replace it.
+## Placeholder soundtrack — `assets/music/ost.mp3`
 
-**ACTION REQUIRED:** deleting a file does not remove it from the repository. The 20 MB blob is
-still reachable in git history, so any clone or push carries it. Run the history rewrite in
-README "Shipping" (`git lfs migrate` / `git filter-repo`) before the first push, and only then is
-this resolved.
+| | |
+|---|---|
+| What | The track that plays on the title screen and in any scene without room tone of its own. |
+| Source | A *Demon's Souls* soundtrack track re-uploaded by a third party — its own ID3 tags say so ("Demon's Souls OST - Character Creation Theme (extended)", uploader "Zombiesneglen"). |
+| Licence | **None that permits distribution.** It is a placeholder kept deliberately, for demos only. |
+| Notes | The generated `ambient.flac` stands ready to take its place: whichever unprefixed track is not the generated one wins (`ext/audio.rs`, `index_music`), so deleting this file is the whole of the change — no code, no rename. |
+
+**ACTION REQUIRED — before anything ships:** delete `assets/music/ost.mp3`, and rewrite it out of
+history as well (README "Shipping": `git lfs migrate` / `git filter-repo`), because deleting a
+file does not remove the 20 MB blob from the repository and any clone or push carries it.
 
 ## Grass shading — `Shaders/grassblade.frag`
 
@@ -256,5 +260,6 @@ cargo tree --format "{p} {l}" --prefix none | sort -u
    recorded. Confirm original (and drop the unreferenced texture, or say what it is).
 5. **`LICENSE`** — the copyright holder reads "DayDreams contributors", a placeholder.
    Confirm the name (and the year) before a build leaves this machine.
-6. **`assets/music/ost.mp3`** — deleted from the tree, still in history. Rewrite it out before
-   the repository is pushed anywhere.
+6. **`assets/music/ost.mp3`** — a *Demon's Souls* track, kept **on purpose** as a demo
+   placeholder and not distributable. Delete the file (the generated `ambient.flac` takes over
+   by itself) and rewrite it out of history before the repository is pushed anywhere.

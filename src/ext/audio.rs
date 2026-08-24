@@ -26,6 +26,7 @@
 //!   assets/music/01-tunnels.flac    -> SCENES[0]  (key 1)
 //!   assets/music/17-backrooms.flac  -> SCENES[16] (the Backrooms, src/level16.rs)
 //!   assets/music/ambient.flac       -> fallback for any scene with no track of its own
+//!   assets/music/ost.mp3            -> a track of your own outranks it, and the title plays it
 //! ```
 //!
 //! The off-by-one is a trap worth stating twice: `src/level16.rs` is the seventeenth entry in
@@ -492,11 +493,21 @@ impl Audio {
         self.bind_track();
     }
 
-    /// The file the title screen plays: the meadow scene's track, or the fallback.
+    /// The file the title screen plays: music of the project's own if there is any, otherwise
+    /// the meadow scene's room tone.
+    ///
+    /// A title screen is where a game plays its music, and the fallback slot is where music of
+    /// the project's own lands (`index_music`) -- so it is preferred here, and the meadow's
+    /// wind stands in when the fallback is only the generated room tone or is missing.
     fn title_track(&self) -> Option<&PathBuf> {
-        crate::ext::scenes::index_of(TITLE_TRACK_SCENE)
-            .and_then(|ix| self.music_files.get(&ix))
-            .or(self.fallback_music.as_ref())
+        let own = self
+            .fallback_music
+            .as_ref()
+            .filter(|p| p.file_stem().and_then(|s| s.to_str()) != Some(GENERATED_FALLBACK));
+        own.or_else(|| {
+            crate::ext::scenes::index_of(TITLE_TRACK_SCENE).and_then(|ix| self.music_files.get(&ix))
+        })
+        .or(self.fallback_music.as_ref())
     }
 
     /// Start whatever the title screen or the current scene calls for, crossfading out what is
@@ -684,10 +695,14 @@ fn scene_of_stem(stem: &str) -> Option<usize> {
     digits.parse::<usize>().ok().filter(|&n| n >= 1).map(|n| n - 1)
 }
 
+/// The stem `tools/gen_sfx.py` writes for the generated fallback. Anything else without a
+/// scene number is somebody's own music and is preferred to it.
+const GENERATED_FALLBACK: &str = "ambient";
+
 /// Index `assets/music/`, binding `NN-*` files to scene `NN` and treating the rest as fallback.
 fn index_music(dir: &Path) -> (HashMap<usize, PathBuf>, Option<PathBuf>) {
     let mut by_scene = HashMap::new();
-    let mut fallback = None;
+    let mut fallback: Option<PathBuf> = None;
 
     let Ok(entries) = std::fs::read_dir(dir) else {
         return (by_scene, fallback);
@@ -703,7 +718,18 @@ fn index_music(dir: &Path) -> (HashMap<usize, PathBuf>, Option<PathBuf>) {
                 by_scene.insert(scene, path);
             }
             None => {
-                if fallback.is_none() {
+                // EXT: a track of the project's own outranks the generated one, whatever the
+                // alphabet says. `tools/gen_sfx.py` writes `ambient` as room tone for the
+                // scenes with nothing of their own; a file dropped in beside it is somebody's
+                // choice of music and wins. Removing that file needs no code change -- the
+                // generated one simply takes the job back.
+                let generated =
+                    |p: &Path| p.file_stem().and_then(|s| s.to_str()) == Some(GENERATED_FALLBACK);
+                let better = match &fallback {
+                    None => true,
+                    Some(have) => generated(have) && !generated(&path),
+                };
+                if better {
                     fallback = Some(path);
                 }
             }
@@ -907,6 +933,40 @@ mod tests {
     /// The music prefix counts scenes from ONE, so the Backrooms -- `src/level16.rs`, the
     /// seventeenth entry in the registry -- is `17-backrooms`. Every shipped name is checked
     /// against the registry here, because the off-by-one is invisible in the filename.
+    /// The demo ships a placeholder soundtrack beside the generated room tone. Which one is
+    /// the fallback cannot be left to the alphabet -- `ambient` sorts first and would have
+    /// silenced it.
+    #[test]
+    fn a_track_of_our_own_outranks_the_generated_room_tone() {
+        let dir = std::env::temp_dir().join(format!("dd_music_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let write =
+            |name: &str| std::fs::write(dir.join(name), b"not really audio").expect("write");
+
+        write("ambient.flac");
+        let (_, only_generated) = index_music(&dir);
+        assert_eq!(only_generated.as_ref().and_then(|p| p.file_stem()), Some("ambient".as_ref()));
+
+        // Whatever it is called, and whichever side of `ambient` it sorts.
+        for own in ["ost.mp3", "aaa.mp3"] {
+            write(own);
+            let (_, chosen) = index_music(&dir);
+            let stem = own.split('.').next().unwrap();
+            assert_eq!(
+                chosen.as_ref().and_then(|p| p.file_stem()),
+                Some(stem.as_ref()),
+                "{own} should outrank the generated room tone"
+            );
+            std::fs::remove_file(dir.join(own)).expect("remove");
+        }
+
+        // And taking it away hands the job back with no code change.
+        let (_, back) = index_music(&dir);
+        assert_eq!(back.as_ref().and_then(|p| p.file_stem()), Some("ambient".as_ref()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn music_names_bind_to_their_scenes() {
         use crate::ext::scenes;
@@ -961,8 +1021,15 @@ mod tests {
         for path in by_scene.values().chain(fallback.as_ref()) {
             let data = StreamingSoundData::from_file(path)
                 .unwrap_or_else(|e| panic!("{} does not decode: {e}", path.display()));
-            let secs = data.duration().as_secs_f32();
-            assert!((25.0..=65.0).contains(&secs), "{} is {secs} s long", path.display());
+            // Room tone has to be a loop, and a loop that long is a file somebody forgot to
+            // trim. Music of the project's own is held only to decoding: the demo's
+            // placeholder soundtrack is eight minutes, and that is what a soundtrack is.
+            let room_tone = by_scene.values().any(|p| p == path)
+                || path.file_stem().and_then(|s| s.to_str()) == Some(GENERATED_FALLBACK);
+            if room_tone {
+                let secs = data.duration().as_secs_f32();
+                assert!((25.0..=65.0).contains(&secs), "{} is {secs} s long", path.display());
+            }
         }
     }
 
