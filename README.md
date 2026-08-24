@@ -219,6 +219,7 @@ no crate-wide allows, and the tests pass (see [Status](#status)).
 | Mouse | Look |
 | `W` `A` `S` `D` | Walk |
 | `Shift` (hold) | Run — see [Running](#running--extsprintrs) |
+| `Space` | Jump — see [Jumping](#jumping--extjumprs) |
 | `1` – `7` | Load scene 1–7 |
 | `Alt` + `Enter` | Toggle fullscreen |
 | `Esc` | Quit |
@@ -480,9 +481,11 @@ C's `assert` compiles out of release builds, so `debug_assert!` is the exact ana
 
 ### `#if 0` blocks
 
-Rust has no `#if 0`. The jumping block at `Player.cpp:61-66` is preserved verbatim as a never-called
-private fn (`player.rs:107`). The debug-collider block at `Engine.cpp:264-269` is dropped with the
-immediate-mode code it called (`engine.rs:499`).
+Rust has no `#if 0`. The jumping block at `Player.cpp:61-66` used to be preserved verbatim as a
+never-called private fn; it is now switched on and extended — see
+[Jumping](#jumping--extjumprs), which is the only place a ported *ordering* changed. The
+debug-collider block at `Engine.cpp:264-269` is dropped with the immediate-mode code it called
+(`engine.rs:499`).
 
 ### Miscellaneous type mappings
 
@@ -759,7 +762,7 @@ binary already has stdout) and the entire Win32 half of `Engine.cpp`: `CreateGLW
 ## Status
 
 `cargo build --release` — 0 errors, 0 warnings; `cargo build --profile dist` — clean.
-`cargo test --release` — 358 passed, 0 failed.
+`cargo test --release` — 384 passed, 0 failed.
 `cargo clippy --release --all-targets -- -D warnings` — clean, with an empty `[lints.clippy]` table.
 `cargo fmt --check` — clean.
 `cargo deny check` — advisories, bans, licences, sources ok.
@@ -862,6 +865,98 @@ the bob phase (two per cycle) and fire `Sfx::Footstep`, at most once per rendere
 
 A key held across an alt-tab never sees its release, so every key level is dropped when the
 window loses focus — a stuck `Shift` would otherwise run the player until it was pressed again.
+
+### Jumping — `ext/jump.rs`
+
+CodeParade wrote a jump and then switched it off. `Player::Update` carries it inside an `#if 0`
+(`Player.cpp:61-66`): two lines that add a flat 2 units of upward velocity while Space is down
+and `onGround` is set. It is on now, on **`Space`** and on the pad's **Cross**, and the two lines
+grew three things before they worked.
+
+**The apex is 0.62 m and the impulse is solved from it**, not tuned. High enough to step onto the
+Backrooms' low furniture and over the pool room's kerbs, and a quarter of the 2.43 m ceilings, so
+no jump in the game puts the player's head through one. `v = sqrt(2 g h)` is the schoolbook answer
+and it is wrong here by 12 cm: the ported player carries `drag = 0.002` per 2 ms step
+(`Player.cpp:20`), a one-second time constant against a third of a second of climb, and it eats a
+fifth of the height. So the vacuum answer is only the first guess, and thirty bisections against
+the closed form for gravity *and* that drag give the impulse that really reaches 0.62 —
+**3.911 u/s**, measured back through the engine's own integrator at **0.617 m** and **0.714 s** in
+the air. The impulse is scaled by `p_scale` exactly as the `#if 0` block scaled its 2.0, and that
+is arithmetic rather than convention: gravity scales with `p_scale` too (`Physical.cpp:21`), so a
+player of any size clears the same height in their own body-lengths.
+
+**Coyote time 0.12 s, input buffer 0.12 s.** A jump pressed within 0.12 s *after* walking off an
+edge still fires, and one pressed within 0.12 s *before* landing fires on touchdown instead of
+being dropped. Both are the same human reaction time seen from the two sides, and both are what a
+500 Hz fixed step needs before a jump feels like a jump rather than a lottery. At walking speed
+0.12 s is 35 cm of floor — enough to forgive the reaction, short enough that nobody notices they
+were already falling.
+
+**The block had to move above the physics step**, which is the one change to the ported ordering
+that is not an addition, and the reason it could never have worked where it was. Applied after
+`Physical::update`, the impulse misses the position integration for that step, so the feet are
+still a few hundredths of a millimetre inside the carpet when the collision pass runs — and that
+pass projects the velocity onto the floor's push and cancels it outright. Not every time: a push
+under `Physical::OnCollide`'s `1e-8` threshold leaves the velocity alone, and a standing player
+crosses that threshold every few steps, so the jump worked or silently did not depending on where
+in that cycle the button landed. (A unit test caught it on the first run; a play session would
+have called it "sticky controls".) Applied before the physics step, the player rises 8 mm on the
+spot and there is nothing left for the floor to push out of. A 0.05 s launch lockout backs that up
+for the case where they cannot rise — a jump under a low enough ceiling — by refusing to read a
+ground contact as ground until the flight is under way.
+
+The button is read as a **level**, not a press edge: `Input::EndFrame` runs inside the fixed-step
+loop, so an edge slot is clear for every step of a rendered frame but the first. Held, it hops
+again on each landing, which is what the buffer already implies. There is no double jump and no
+change to air control — `Move` already accelerates in the air, and it clips only the *horizontal*
+component of the velocity (`Player.cpp:101-107`), so the speed a jump took off with is the speed
+it keeps: a standing jump goes nowhere, a walking one covers 2.1 m and a sprinting one 3.7 m, for
+free. Head bob does not run mid-air; `mag_t` is already zeroed while `!onGround`
+(`Player.cpp:29-31`).
+
+Space and Cross also confirm a menu row, so every menu action that hands control back to the game
+makes the jump wait for its button to come up — otherwise CONTINUE would launch the player on the
+frame the menu closed under them.
+
+Two events are published for sound and for headless measurement, both taken once per rendered
+frame: `Player::just_jumped()` and `Player::just_landed()`, the second carrying the downward speed
+at touchdown (about 3.1 u/s off a full jump, a few tenths off a kerb) so a landing can be soft or
+heavy. They are taken rather than counted like the footfall counter beside them, because two
+footfalls fit inside one rendered frame at 500 Hz and two jumps cannot. `--log-level debug` prints
+them, with the position, as `[jump] launched at (…)` and `[jump] landed at (…), 3.05 u/s down`.
+
+A landing needs **0.08 s of air** behind it before it counts, which is the fall out of a 3 cm
+drop. That is not a nicety: the Backrooms floor is a scanned triangle mesh, and walking its seams
+and the feet of its furniture leaves the player unsupported for a step or two at a time. Without
+the floor under it, `just_landed` answered all of them — twelve touchdowns between 0.03 and
+0.5 u/s in a two-metre walk, measured — and the walk would have sounded like a flight of stairs.
+
+Jumping through a portal works, because `Physical::try_portal` warps the velocity along with the
+position (`Physical.cpp:50-57`): take off in the meadow, cross the door's plane on the way up, and
+you arrive in the far world still climbing, 0.6 units off its floor, and land there. What the jump
+did surface is that a *door-sized* portal is only as tall as its opening — the meadow door's is
+1.7 units and the player's eye walks at 1.5 — so a crossing more than 0.2 units off the ground
+passes over the top of the quad instead of through it, and since the door's collision is two posts
+and no lintel, a well-timed jump sails over the portal and lands behind the door, in the meadow.
+It costs nothing (walk back round and through) but it is worth knowing before a door portal is
+ever put somewhere it matters.
+
+**Known limit: you cannot stand on a rigid-body prop.** The player is mirrored into the rapier
+world as a *kinematic* cylinder ([Real physics](#real-physics--extphysicsrs-extrigidrs)), which
+is one-way by construction: the player pushes the apple, the die and the chess king around, and
+nothing they do moves the player. Landing on the die passes through it and lands on the carpet
+underneath. Making it two-way means giving the player a dynamic body and taking their motion off
+the ported `Physical`, which is a different project.
+
+`--jump-at N` presses Space on rendered frame N — held for thirty frames, because a headless frame
+is well under the 2 ms step and a shorter press can fall entirely between two of them, and still
+far short of the flight, so it is always exactly one jump — which is how the arc is photographed
+and measured without a human:
+
+```bash
+cargo run --release -- --scene 16 --pos 990,1.5,0 --yaw 90 --jump-at 30 --frames 60 \
+  --shot arc.bmp --windowed --mute --no-gamepad --no-vsync --log-level debug
+```
 
 ### Paintings that watch you — `ext/painting.rs`, `tools/gen_portraits.py`
 
@@ -1175,14 +1270,23 @@ The same table is in the game, under **Options → Controls**, alongside the key
 |---------|--------|
 | Left stick | Move (analog) |
 | L3 (stick click) | Run: press to start; ends when the stick returns to centre or on the next press. Holding it runs too |
+| Cross | Jump |
 | Right stick | Look |
-| Cross / Square / R2 | Grab / release |
+| Square / R2 | Grab / release |
 | R1 (hold) | Rotate the held object with the right stick |
 | D-pad ←→ | Previous / next scene (in a menu: change the setting under the cursor) |
 | D-pad ↑↓, Cross, Circle | Menu: move, confirm, back |
 | Options | Open the pause menu / close it again |
 | Create | Mute |
 | PS button | Fullscreen |
+
+Cross moved too, and grab moved with it. Cross was the grab — and with it the elevator and the
+key, which share that one button — until [Jumping](#jumping--extjumprs) arrived and took it,
+because Cross-to-jump is what a pad player's thumb already believes and because a button cannot be
+both "jump" and "pick this up": every hop in front of a prop would have grabbed it. Grab moved one
+seat left to Square, which was already an alternate for it, and R2 stayed. Cross keeps menu
+confirm, since a menu has nothing to jump over; the frame a menu closes makes the jump wait for
+the button to come up, so a confirm cannot follow the player back into the world as a launch.
 
 Options and PS both moved. Without a pause binding a pad could start a game and never leave it —
 `menu_back` only reaches a menu that is already open, and nothing else on the pad opened one. That
@@ -1392,11 +1496,11 @@ Small additions, each tagged `// EXT:`:
 | File | Hook |
 |------|------|
 | `collider.rs` | read-only `mat()` accessor, so rays can transform the rectangle to world space; `Collider::rect(centre, half_u, half_v)`, the three-corner constructor with the sorting already done |
-| `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`R` and the scene keys `8`–`.` (`8` `9` `0` `-` `=` `[` `]` `\` `;` `'` `,` `.`); `Shift` into the `VK_SHIFT` slot and the resolved sprint multipliers |
-| `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter |
+| `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`R` and the scene keys `8`–`.` (`8` `9` `0` `-` `=` `[` `]` `\` `;` `'` `,` `.`); `Shift` into the `VK_SHIFT` slot and the resolved sprint multipliers; the pad's rotate, sprint and jump *levels* |
+| `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter; the `#if 0` jump switched on (`ext/jump.rs`) — moved above the physics step, which is the only ported *ordering* that changed and the reason it never worked where it was — plus the touchdown speed sampled in `OnCollide` and the two take-once jump events |
 | `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look, and the scene's object vector (`scene`), for an object that reads the others during its step (the held key); `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery; `Object::rot`, a rotation matrix that stands in for `euler` in `local_to_world`/`world_to_local`/`forward` when set (a rigid body's orientation does not round-trip through Euler angles); the prop hooks on `ObjectT`, all defaulted: `engine_collision()` (false: the collision pass never pushes it and the portal pass never warps it -- something else owns its motion), `on_grab()`, `on_release(velocity)`, `on_rescale(p_scale)` (called by `ext/grab.rs`), `place_flat()` (the grab lays it on the surface it hits instead of standing it off by its sphere), `pick_hint()` (a HUD line while the crosshair is on it), `accepts_key()` (the held key can be used on it: the window, while locked) and `static_collision()` (whether its colliders go into the rigid-body world's load-time snapshot: false for the elevator's leaves and the window) |
 | `frame_buffer.rs` | sized attachments instead of `GH_FBO_SIZE` square |
-| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn, portal-removal, spawn and remove requests applied after the portal pass (a removal's freed indices handed to the grab), its scene-load request applied after the fixed-step loop; the collision pass skipping an `engine_collision() == false` object as its subject and the portal pass skipping it outright; E offered to the elevator, then to the held key, before the grab, the frame's hint (`ext/hint.rs`) and the elevator's black-out in the overlay block (the black-out under the pause menu too); the `--forward`/`--strafe`/`--sprint` held keys, `--arrive`, `--ride-at`, `--hold-key` and `--e-at`, handed over as one `cli::DirectRun`; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`); the rigid-body world's static rebuild once a load's object list is complete, its step between the collision and portal passes, its `[phys]`/`[prop]` report at shot time and `--drop-props` (`ext/physics.rs`) |
+| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn, portal-removal, spawn and remove requests applied after the portal pass (a removal's freed indices handed to the grab), its scene-load request applied after the fixed-step loop; the collision pass skipping an `engine_collision() == false` object as its subject and the portal pass skipping it outright; E offered to the elevator, then to the held key, before the grab, the frame's hint (`ext/hint.rs`) and the elevator's black-out in the overlay block (the black-out under the pause menu too); the `--forward`/`--strafe`/`--sprint` held keys, `--arrive`, `--ride-at`, `--hold-key`, `--e-at` and `--jump-at`, handed over as one `cli::DirectRun`; the frame's jump events logged and offered for sound (`ext/jump.rs`), and the menu's own confirm button released from the grab latch and the jump when a menu hands control back; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`); the rigid-body world's static rebuild once a load's object list is complete, its step between the collision and portal passes, its `[phys]`/`[prop]` report at shot time and `--drop-props` (`ext/physics.rs`) |
 | `portal.rs` | the nested pass scissored to the quad's screen footprint; `passable` (default true) and `tint` (default clear), the second uploaded to `portal.frag` as `uniform vec4 tint` and mixed over the far side by its alpha |
 | `physical.rs` | `try_portal` returns false without warping through a portal that is not `passable` |
 | `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4`; `new` returns `Result<_, AssetError>` and the attribute scan is a pure, tested `scrape_attribs` |
@@ -1426,6 +1530,13 @@ other objects' *mesh colliders* (`Engine.cpp:155-192`), so grabbed props collide
 geometry but pass through each other. They cannot be stacked. The rigid-body props are the
 exception ([Real physics](#real-physics--extphysicsrs-extrigidrs)): those collide with each
 other, and with nothing on the ported path but the player's cylinder.
+
+**You cannot stand on a rigid-body prop.** That cylinder is *kinematic*, which makes the
+arrangement one-way by construction: the player shoves the apple, the die and the chess king
+around, and nothing the props do moves the player back. Jumping onto the die passes through it
+and lands on the carpet underneath. Two-way would mean giving the player a dynamic body and
+taking their motion off the ported `Physical` — a different project. See
+[Jumping](#jumping--extjumprs).
 
 **No HUD.** There is no crosshair, so aiming a grab is currently guesswork at screen centre.
 
@@ -1921,8 +2032,12 @@ the renderer costs rather than what the panel allows. `--forward` / `--strafe` h
 the whole run and `--sprint` holds `Shift`, so the `[shot]` position print shows how far the
 player walked — or, with `--forward --sprint`, ran — in the frames before the shot, and the
 shot itself shows the sprint's 68° projection. `--strafe --sprint` covers the same ground as
-`--strafe` alone: a sidestep never sprints. `[load] scene N in M ms` is printed on every
-scene load. The numbers in [Load time and frame cost](#load-time-and-frame-cost) are
+`--strafe` alone: a sidestep never sprints. `--jump-at N` presses Space on rendered frame N — held
+for thirty frames, which is one jump however few fixed steps a headless frame turns out to run,
+and far short of the 0.71 s a jump is in the air, so it can never be two — and at `--log-level debug`
+the `[jump] launched at` / `[jump] landed at` pair prints both ends of the arc, which is how a
+running jump's range is measured (a screenshot can only show one point of it). `[load] scene N in
+M ms` is printed on every scene load. The numbers in [Load time and frame cost](#load-time-and-frame-cost) are
 `--shot --frames 600 --no-vsync` at fullscreen.
 
 The `[shot]`, `[load]` and `[grass]` measurement lines are **info**-level log lines (see
