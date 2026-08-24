@@ -8,6 +8,8 @@ use crate::object::{Object, ObjectT, UpdateCtx};
 use crate::physical::Physical;
 use crate::sphere::Sphere;
 use crate::vector::{Matrix4, Vector3};
+// EXT: the jump's take-once events are read through a shared borrow; see the fields.
+use std::cell::Cell;
 
 // PORT: `class Player : public Physical` -> composition, same as Physical/Object
 // (was: class Player : public Physical, Player.h:5).
@@ -28,6 +30,18 @@ pub struct Player {
     // the rest of the player because the consumer compares by inequality (see
     // `ExtState::fire_footstep_sfx`) and a reset could alias a real step.
     steps: u32,
+
+    // EXT: everything between the jump button and the one line that adds the impulse: coyote
+    // time, the input buffer, and the lockout that keeps one press from launching twice. See
+    // src/ext/jump.rs.
+    jump: crate::ext::jump::Jump,
+    // EXT: this frame's jump events, for whoever wants to sound them. Taken once rather than
+    // counted like `steps`, because `steps` has to be a counter -- two footfalls fit inside one
+    // rendered frame at 500 Hz -- and these cannot: the shortest flight is 0.7 s. `Cell`, so
+    // `Engine::ext_update` can take them through the shared borrow it already holds, the same
+    // shape as `hint::take`.
+    jumped: Cell<bool>,
+    landed: Cell<Option<f32>>,
 }
 
 // Preserved verbatim from the C++ API surface; not every member is reachable from the
@@ -46,6 +60,9 @@ impl Player {
             on_ground: true,
             // EXT:
             steps: 0,
+            jump: crate::ext::jump::Jump::new(),
+            jumped: Cell::new(false),
+            landed: Cell::new(None),
         };
         p.reset();
         p.base.hit_spheres.push(Sphere::new_at(Vector3::new(0.0, 0.0, 0.0), GH_PLAYER_RADIUS));
@@ -65,6 +82,13 @@ impl Player {
         self.base.friction = 0.04;
         self.base.drag = 0.002;
         self.on_ground = true;
+        // EXT: a buffered press or a half-spent coyote window must not survive the scene load
+        // that reset the player, or the new level opens with a jump nobody asked for. `steps`
+        // deliberately does not reset (see the field); this does, because its consumer reads a
+        // state and not a difference.
+        self.jump = crate::ext::jump::Jump::new();
+        self.jumped.set(false);
+        self.landed.set(None);
     }
 
     // PORT: named `update_player` so it does not collide with `Physical::update`, which is
@@ -96,6 +120,34 @@ impl Player {
             if self.bob_phi < prev_phi || (prev_phi < GH_PI && self.bob_phi >= GH_PI) {
                 self.steps += 1;
             }
+        }
+
+        //Jumping
+        // EXT: the `#if 0` block CodeParade left further down this function (Player.cpp:61-66),
+        // turned back on and grown the three things it needed to work: coyote time, an input
+        // buffer, and a lockout that stops the floor the player has not left yet from firing a
+        // second impulse. All of that is `ext::jump`; what is left here is the block's own shape.
+        //
+        // It has moved ABOVE the physics step, which is the one change to the original that is
+        // not an addition, and the reason it could never have worked where it was. Applied after
+        // `Physical::update` the impulse misses this step's position integration, so the feet are
+        // still a few hundredths of a millimetre inside the carpet when the collision pass runs
+        // -- and that pass projects the velocity onto the floor's push and cancels it outright.
+        // Not always: a push under `Physical::on_collide`'s 1e-8 threshold leaves the velocity
+        // alone, and a resting player crosses that threshold every few steps. So the jump worked
+        // or silently did not, depending on where in that cycle the button landed. Applied here
+        // it is the velocity the position integration uses, the player rises 8 mm on the spot,
+        // and there is nothing left for the floor to push out of.
+        //
+        // PORT: VK_SPACE == 0x20 == b' ' in Input's ASCII key slots. Read as a level and not a
+        // `key_press` edge -- `Input::end_frame` runs inside the engine's fixed-step loop
+        // (Engine.cpp:112), so an edge is clear for every step of a frame but the first.
+        let jump_held = ctx.input.key[b' ' as usize] || ctx.input.pad_jump;
+        if self.jump.step(self.on_ground, jump_held) {
+            // The stub's flat 2.0 becomes the impulse the target apex asks for, scaled by
+            // `p_scale` exactly as the stub scaled its own.
+            self.base.velocity.y += crate::ext::jump::impulse(self.base.base.p_scale);
+            self.jumped.set(true);
         }
 
         //Physics
@@ -139,17 +191,6 @@ impl Player {
         move_f += ctx.input.pad_move_f;
         move_l += ctx.input.pad_move_l;
         self.move_player(move_f, move_l, &sprint);
-
-        // PORT: the `#if 0` jumping block (Player.cpp:61-66) is preserved verbatim as a
-        // never-called private fn, since Rust has no `#if 0`.
-        #[allow(dead_code)]
-        fn _jump_disabled(p: &mut Player, ctx: &UpdateCtx) {
-            //Jumping
-            // PORT: VK_SPACE == 0x20 == b' ' in Input's ASCII key slots.
-            if p.on_ground && ctx.input.key[b' ' as usize] {
-                p.base.velocity.y += 2.0 * p.base.base.p_scale;
-            }
-        }
 
         //Reset ground state after update finishes
         self.on_ground = false;
@@ -211,6 +252,19 @@ impl Player {
         if push.normalized().y > 0.7 {
             new_push.x = 0.0;
             new_push.z = 0.0;
+            // EXT: touchdown, sampled here because this is the last place the fall speed still
+            // exists -- the base call below cancels the velocity into the push. Gated on the time
+            // the jump state says the player has been airborne, not on `on_ground`, which
+            // `update_player` has already cleared by the time the collision pass runs: a player
+            // stood still is "not on the ground" here every single step, and would land five
+            // hundred times a second. The minimum air time is what keeps the seams in the scanned
+            // floor from reading as landings too, and the upward test drops the floor a jump has
+            // not left yet.
+            if self.jump.air_time() >= crate::ext::jump::LANDING_MIN_AIR
+                && self.base.velocity.y < 0.0
+            {
+                self.landed.set(Some(-self.base.velocity.y));
+            }
             self.on_ground = true;
         }
 
@@ -304,6 +358,28 @@ impl Player {
     /// EXT: footfalls taken so far; see the `steps` field.
     pub fn steps(&self) -> u32 {
         self.steps
+    }
+
+    /// EXT: whether a jump fired since this was last asked -- true once, for the rendered frame
+    /// the impulse landed in, and false again to the next reader. See the `jumped` field for why
+    /// this is taken and `steps` is counted.
+    pub fn just_jumped(&self) -> bool {
+        self.jumped.replace(false)
+    }
+
+    /// EXT: the downward speed at the last touchdown, in units per second, taken the same way.
+    /// `None` on every frame the player did not land. A step off a kerb reports a few tenths and
+    /// a full jump about 3.1, which is enough to tell a scuff from a thump.
+    pub fn just_landed(&self) -> Option<f32> {
+        self.landed.replace(None)
+    }
+
+    /// EXT: make the next jump wait for the button to be released first. The engine calls this
+    /// on every menu action that hands control back to the game: Space and Cross confirm a menu
+    /// row and are also the jump, so CONTINUE would otherwise launch the player on the frame the
+    /// menu closed under them.
+    pub fn ignore_jump_until_release(&mut self) {
+        self.jump.ignore_until_release();
     }
 }
 
@@ -430,6 +506,230 @@ mod tests {
         let expect = -2.0 * (1.0 - ground.base.friction);
         assert!((ground.base.velocity.z - expect).abs() < 1e-6, "{:?}", ground.base.velocity);
         assert!(ground.base.friction > 0.0, "the player has friction to lose");
+    }
+
+    /// One fixed step with the collision pass a flat floor at y = 0 would perform: the engine
+    /// updates every object and then pushes each out of whatever it is inside
+    /// (Engine.cpp:146-205), and that push is what grounds the player again.
+    fn step_on_floor(p: &mut Player, input: &Input) {
+        let ctx = UpdateCtx {
+            input,
+            cam_to_world: p.cam_to_world(),
+            player_pos: p.obj().pos,
+            scene: &[],
+        };
+        p.update_player(&ctx);
+        if p.obj().pos.y < 0.0 {
+            p.on_collide(Vector3::new(0.0, -p.obj().pos.y, 0.0));
+        }
+    }
+
+    #[test]
+    fn a_press_lifts_the_player_to_the_apex_and_lands_them_once() {
+        let mut p = Player::new();
+        let mut input = Input::new();
+        let (mut apex, mut launches, mut airborne) = (0.0f32, 0u32, 0u32);
+        let mut landings: Vec<f32> = Vec::new();
+        // One second: long enough for the whole arc with a quarter to spare. The button is let
+        // go after ten steps, because held it would hop again the moment this one lands.
+        for i in 0..500 {
+            input.key[b' ' as usize] = i < 10;
+            step_on_floor(&mut p, &input);
+            apex = apex.max(p.obj().pos.y);
+            if p.just_jumped() {
+                launches += 1;
+            }
+            if let Some(v) = p.just_landed() {
+                landings.push(v);
+            }
+            if p.obj().pos.y > 1e-4 {
+                airborne += 1;
+            }
+        }
+        assert_eq!(launches, 1, "one press, one impulse");
+        assert!((apex - crate::ext::jump::APEX).abs() < 0.01, "apex {apex}");
+        let flight = airborne as f32 * GH_DT;
+        assert!((0.6..0.8).contains(&flight), "airborne {flight} s");
+        // And exactly one touchdown, at a speed the drag has taken the edge off.
+        assert_eq!(landings.len(), 1, "{landings:?}");
+        assert!((landings[0] - 3.1).abs() < 0.2, "landed at {}", landings[0]);
+        assert!(p.obj().pos.y.abs() < 1e-3, "back on the floor: {}", p.obj().pos.y);
+    }
+
+    #[test]
+    fn a_walk_with_nothing_pressed_is_the_ported_walk_bit_for_bit() {
+        // The jump block's only write is `velocity.y +=`, behind `Jump::step`. With the button
+        // never down there is nothing to write, so `update_player` must still be exactly the
+        // physics step and the move the C++ does -- to the bit, not to a tolerance.
+        let mut a = Player::new();
+        let mut b = Player::new();
+        let mut input = Input::new();
+        input.key[b'W' as usize] = true;
+        input.key[b'D' as usize] = true;
+        for _ in 0..200 {
+            let ctx = UpdateCtx {
+                input: &input,
+                cam_to_world: a.cam_to_world(),
+                player_pos: a.obj().pos,
+                scene: &[],
+            };
+            a.update_player(&ctx);
+            // Player.cpp:36-59 without the bob (which moves the camera, not the player) and
+            // without the look (a zero mouse delta leaves both angles at 0.0 exactly).
+            b.base.update();
+            b.move_player(1.0, -1.0, &factors(false));
+        }
+        for (x, y) in [(a.obj().pos, b.obj().pos), (a.base.velocity, b.base.velocity)] {
+            assert_eq!(x.x.to_bits(), y.x.to_bits());
+            assert_eq!(x.y.to_bits(), y.y.to_bits());
+            assert_eq!(x.z.to_bits(), y.z.to_bits());
+        }
+        assert!(!a.just_jumped() && a.just_landed().is_none());
+    }
+
+    #[test]
+    fn a_seam_in_the_floor_is_not_a_landing() {
+        // The Backrooms floor is a scanned triangle mesh, and walking it leaves the player
+        // unsupported for a step or two at a time, over and over. Those contacts must not read
+        // as touchdowns or a walk down the hall sounds like a flight of stairs.
+        let mut p = Player::new();
+        let mut input = Input::new();
+        input.key[b'W' as usize] = true;
+        for i in 0..2000 {
+            let seam = i % 40 < 2;
+            let ctx = UpdateCtx {
+                input: &input,
+                cam_to_world: p.cam_to_world(),
+                player_pos: p.obj().pos,
+                scene: &[],
+            };
+            p.update_player(&ctx);
+            if !seam && p.obj().pos.y < 0.0 {
+                p.on_collide(Vector3::new(0.0, -p.obj().pos.y, 0.0));
+            }
+            assert!(p.just_landed().is_none(), "step {i}");
+        }
+    }
+
+    #[test]
+    fn a_player_stood_on_the_floor_never_reports_a_landing() {
+        // The floor pushes a standing player out of itself every step, and `on_ground` is clear
+        // by the time it does; without the airborne test that would read as 500 landings a
+        // second.
+        let mut p = Player::new();
+        let input = Input::new();
+        for _ in 0..1000 {
+            step_on_floor(&mut p, &input);
+            assert!(p.just_landed().is_none());
+        }
+    }
+
+    /// Jump from a standstill or at a run and return the ground covered between launch and
+    /// touchdown.
+    fn jump_distance(sprinting: bool, forward: bool) -> f32 {
+        let mut p = Player::new();
+        let mut input = Input::new();
+        input.key[b'W' as usize] = forward;
+        input.sprint = factors(sprinting);
+        // Up to speed first: at 75 u/s^2 the sprint cap is reached in a tenth of a second.
+        for _ in 0..500 {
+            step_on_floor(&mut p, &input);
+        }
+        let mut from = p.obj().pos;
+        for i in 0..500 {
+            input.key[b' ' as usize] = i < 10;
+            step_on_floor(&mut p, &input);
+            if p.just_jumped() {
+                from = p.obj().pos;
+            }
+            if p.just_landed().is_some() {
+                let d = p.obj().pos - from;
+                return (d.x * d.x + d.z * d.z).sqrt();
+            }
+        }
+        panic!("never landed");
+    }
+
+    #[test]
+    fn a_running_jump_goes_further_than_a_walking_one_and_a_standing_one_goes_nowhere() {
+        // `Move` clips only the horizontal component of the velocity (Player.cpp:101-107) and
+        // runs in the air as much as on the ground, so the speed the player took off with is
+        // the speed they keep -- the range follows the run for free.
+        let standing = jump_distance(false, false);
+        let walking = jump_distance(false, true);
+        let running = jump_distance(true, true);
+        assert!(standing < 0.01, "standing {standing}");
+        assert!((1.8..2.3).contains(&walking), "walking {walking}");
+        assert!(running > walking * 1.6, "running {running} vs walking {walking}");
+    }
+
+    #[test]
+    fn the_jump_events_are_taken_once_and_a_reset_clears_them() {
+        let mut p = Player::new();
+        let mut input = Input::new();
+        input.key[b' ' as usize] = true;
+        step_on_floor(&mut p, &input);
+        assert!(p.just_jumped());
+        assert!(!p.just_jumped(), "taken once");
+        input.key[b' ' as usize] = false;
+        while p.just_landed().is_none() {
+            step_on_floor(&mut p, &input);
+        }
+        assert!(p.just_landed().is_none(), "taken once");
+        // A scene load resets the player; nothing may survive it.
+        p.jumped.set(true);
+        p.landed.set(Some(3.0));
+        p.reset();
+        assert!(!p.just_jumped() && p.just_landed().is_none());
+    }
+
+    #[test]
+    fn a_menu_confirm_held_into_the_game_does_not_launch_the_player() {
+        // Space and Cross confirm a menu row. `Engine::apply_menu_action` calls this on every
+        // action that closes one, so the button has to come up before it is a jump again.
+        let mut p = Player::new();
+        let mut input = Input::new();
+        input.key[b' ' as usize] = true;
+        p.ignore_jump_until_release();
+        for _ in 0..200 {
+            step_on_floor(&mut p, &input);
+            assert!(!p.just_jumped());
+        }
+        input.key[b' ' as usize] = false;
+        step_on_floor(&mut p, &input);
+        input.key[b' ' as usize] = true;
+        step_on_floor(&mut p, &input);
+        assert!(p.just_jumped(), "released and pressed again: a jump");
+    }
+
+    #[test]
+    fn the_gamepad_button_jumps_too() {
+        let mut p = Player::new();
+        let mut input = Input::new();
+        input.pad_jump = true;
+        step_on_floor(&mut p, &input);
+        assert!(p.just_jumped());
+    }
+
+    #[test]
+    fn head_bob_does_not_run_in_the_air() {
+        // `mag_t` is zeroed while `!on_ground` (Player.cpp:29-31), so the bob damps out over a
+        // flight instead of striding on through it.
+        let mut p = Player::new();
+        let mut input = Input::new();
+        input.key[b'W' as usize] = true;
+        for _ in 0..500 {
+            step_on_floor(&mut p, &input);
+        }
+        let walking = p.steps();
+        assert!(walking > 0, "the walk was bobbing to begin with");
+        for i in 0..400 {
+            input.key[b' ' as usize] = i < 10;
+            step_on_floor(&mut p, &input);
+        }
+        // Two steps' worth at most: the collision pass still grounds the player for the step or
+        // two it takes the feet to clear the floor.
+        assert!(p.steps() - walking <= 2, "{} footfalls in the air", p.steps() - walking);
     }
 
     #[test]
