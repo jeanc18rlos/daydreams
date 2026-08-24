@@ -372,6 +372,20 @@ fn sphere_penetrates(
             continue;
         }
         let Ok(obj) = handle.try_borrow() else { continue };
+
+        // (a) Triangle-mesh scenery (ext/trimesh.rs), which is what every glTF level is made
+        // of -- the Backrooms' walls, the pool's tiles, the overgrown room. It is tested
+        // FIRST and before the bounding-sphere reject below, because such an object carries
+        // its geometry in the trimesh and not in `base.mesh`: with only the mesh path here, a
+        // carried object sank straight into every wall in the game, since there was nothing
+        // for the fit to find. `push_sphere` is parry's, over the same BVH the collision pass
+        // uses, so this costs microseconds however large the level is.
+        if let Some(tm) = obj.trimesh() {
+            if tm.push_sphere(centre, radius).is_some() {
+                return true;
+            }
+        }
+
         let base = obj.base();
         let Some(mesh) = base.mesh.as_ref() else { continue };
 
@@ -383,7 +397,7 @@ fn sphere_penetrates(
             continue;
         }
 
-        // (a) Rectangle colliders, exactly as the ported collision pass tests them.
+        // (b) Rectangle colliders, exactly as the ported collision pass tests them.
         if !mesh.colliders.is_empty() {
             let local_to_unit = world_to_unit * to_world;
             if mesh.colliders.iter().any(|c| c.collide(&local_to_unit).is_some()) {
@@ -391,7 +405,7 @@ fn sphere_penetrates(
             }
         }
 
-        // (b) The visible triangles. Colliders alone are not enough: bunny, teapot, suzanne
+        // (c) The visible triangles. Colliders alone are not enough: bunny, teapot, suzanne
         // and every ceiling in the original rooms carry none, and a held object must not
         // pass through what the player can see. Triangles go to world space per test so
         // non-uniform object scale (room.obj is scaled per axis) stays exact, and the
@@ -925,6 +939,26 @@ mod tests {
         let behind: Vec<Rc<RefCell<dyn ObjectT>>> =
             vec![prop, Rc::new(RefCell::new(Wall::at(2.0)))];
         assert!(pick(&behind, eye, dir, None).is_some(), "a wall behind the eye blocks nothing");
+
+        // And the ray the carry places against still finds that wall, with and without a
+        // skipped object: the placement distance is what sizes a carried object, so a raycast
+        // that quietly stopped hitting would leave it hanging at arm's length through the wall.
+        // ... and the fit sees it too. A level's walls are triangle meshes, not colliders and
+        // not a drawn `Mesh`, so a fit that only knew those two let a carried object sink
+        // into every wall in the game.
+        assert!(
+            sphere_penetrates(&walled, 0, Vector3::new(0.0, 0.0, -2.0), 0.3),
+            "a sphere on the wall penetrates it"
+        );
+        assert!(
+            !sphere_penetrates(&walled, 0, Vector3::new(0.0, 0.0, -1.0), 0.3),
+            "a sphere a metre in front of it does not"
+        );
+
+        let hit = raycast(&walled, eye, dir, MAX_PLACE_DIST, None).expect("the wall is hit");
+        assert!((hit.dist - 2.0).abs() < 1e-3, "hit at {}", hit.dist);
+        let skipped = raycast(&walled, eye, dir, MAX_PLACE_DIST, Some(0)).expect("still hit");
+        assert!((skipped.dist - 2.0).abs() < 1e-3, "hit at {}", skipped.dist);
     }
 
     #[test]
