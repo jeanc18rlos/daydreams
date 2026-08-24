@@ -12,10 +12,13 @@ and writes what the shader and the scene need:
                                       painted ground inpainted from the sheet's own surround
   Textures/portrait_<name>_parts.bmp  the parts with alpha, packed and padded
   src/ext/portrait_atlas.rs           per portrait: sizes, per VARIANT (the seven of
-                                      PART_ORDER) a LIST of pieces -- most variants are one
-                                      piece, the Hals mouths are four -- each with its atlas
-                                      rect and its placement rect on the base, and both eyes'
-                                      ellipses, all in top-origin UV (see below)
+                                      PART_ORDER) a LIST of pieces -- every sheet here cuts
+                                      one piece per variant, so every list holds one; the
+                                      list is the renderer's, and is what would let a sitter
+                                      whose mouth arrives as separate cutouts hang without a
+                                      shader change -- each with its atlas rect and its
+                                      placement rect on the base, and both eyes' ellipses,
+                                      all in top-origin UV (see below)
 
 Nothing is parsed at runtime. Requires numpy and Pillow only.
 
@@ -43,36 +46,33 @@ THE THREE KINDS OF SHEET
   masks cross-fade through the overlap, summing to one there: the shader composites parts
   additively in premultiplied form, so two parts may overlap only where their alphas
   partition.
-* `chain` (the Hals "Laughing Cavalier" sheet): a hybrid. The left column holds two alpha
-  figures on the painted ground -- the ORIGINAL on top, the blanked base below, the same
-  framing give or take a few pixels. The middle column holds rectangular VARIANT CROPS with
-  alpha (soft torn edges, a rounded corner), each showing one variant's pieces IN PLACE on
-  the face. The right column holds the true PNG cutouts -- one piece per eye, and each mouth
-  as FOUR pieces laid out splayed (lips, goatee, left and right moustache), NOT in their
-  on-face arrangement. So a piece cannot register against the base directly (the base has no
-  moustache under a moustache) and registers through a chain: piece -> its variant crop
-  (which shows the arrangement) -> the ORIGINAL (whole-rectangle NCC, the crop's own alpha as
-  the mask) -> the base (the original shifted by the same inset-core NCC the `black` kind
-  uses). The crops are a different RENDERING of the same arrangement -- the hair strokes do
-  not correlate -- so the piece -> crop hop cannot be texture NCC either: an eye piece lands
-  by aligning its opening's ellipse (`eye`, hand-read in piece pixels) onto the crop's
-  (`target`, hand-read in crop pixels) and is then polished by a local NCC; a mouth piece
-  lands by the best silhouette overlap (IoU) of its alpha against the crop-minus-base
-  difference map inside its hand-boxed `window`, over the manifest's scale sweep, then the
-  same local NCC polish. The pieces keep their own alpha edges -- the moustache wisps -- and
-  are NOT feathered (`feather: 0` per piece); colours are matched to the crop under the
-  piece's own alpha. The sheet also carries a fourth, unlabelled mouth set (its lips and
-  goatee are one connected blob, not four pieces); the labels sit BELOW their content
-  everywhere on the sheet, so the three labelled sets are the manifest's and the orphan is
-  ignored.
+* `ground` (the Hals "Laughing Cavalier" sheet): the `black` kind's crops on the `alpha`
+  kind's painted ground. The left column holds two alpha figures -- the ORIGINAL on top, the
+  blanked base below -- cut and composited exactly as the `alpha` kind's figure is. The
+  middle column holds the variant crops: rectangles carrying their own alpha (a soft rim,
+  one chamfered corner), each showing a variant IN PLACE on the face, so each registers as a
+  whole rectangle against the ORIGINAL the way a `black` tile does -- the crop's own alpha
+  joins the NCC mask, so the chamfer weighs nothing -- and is placed on the base through the
+  original's own registration against it. The crops are separate RENDERINGS of the same
+  face, not cuts of one master, so their scores sit near the `alpha` kind's rather than the
+  `black` kind's, and the variants are registered one by one (their tiles are not the same
+  crop region, so none can borrow another's `framing`).
+  The right column of that sheet holds the same variants again as splayed PNG cutouts, each
+  mouth in four pieces (lips, goatee, a moustache each side) laid out in a cross rather than
+  in their facial arrangement. Those are NOT cut: a moustache lifted out of its place has no
+  border ring the base shares and nothing for a correlation to lock onto (scores came out
+  between -0.53 and +0.28 against the 0.48 to 0.98 of the sheets here, and the right
+  moustache landed across the sitter's eye). The middle column's crops carry the same
+  moustache in its place, so a Hals mouth is one piece like everyone else's.
 
 ADDING A SHEET: one more manifest entry, of whichever kind fits its layout. `eye` per eye
 piece is the eye opening's ellipse in the piece's own pixels (centre x, y, radius x, y): the
 lid edge, where the iris warp stops -- hand-read off a gridded crop, like every region here.
-A variant may be a LIST of pieces (the Hals mouths): the runtime composites a variant's
-pieces over one another in manifest order (last on top) and crossfades whole variants. Run
-the tool with `--preview DIR` and look at the composites before trusting any number. Then
-hang the portrait in `level16.rs` (the per-seed map) and add a line to THIRD_PARTY.md.
+The generated table gives every variant a LIST of pieces and the runtime composites the list
+(last on top) before crossfading whole variants; every sheet here cuts one piece per variant,
+and a sheet that needed several would fill more than one. Run the tool with `--preview DIR`
+and look at the composites before trusting any number. Then hang the portrait in `level16.rs`
+(the per-seed map) and add a line to THIRD_PARTY.md.
 
 Run from the repository root:  python3 tools/gen_portraits.py [--preview DIR]
 """
@@ -154,6 +154,47 @@ MANIFEST = [
             "mouth_smile": {"region": (560, 505, 960, 740)},
             "mouth_sad": {"region": (960, 505, 1369, 740), "framing": "mouth_smile"},
             "mouth_angry": {"region": (700, 740, 1200, 1000), "framing": "mouth_smile"},
+        },
+    },
+    {
+        "name": "cavalier",
+        "title": "The Laughing Cavalier (Frans Hals, 1624); the sheet is the user's edit",
+        "sheet": "assets/paintings/src/cavalier_sheet.png",
+        "kind": "ground",
+        # The left column's two figures. Each region stops above the label under its figure:
+        # the labels carry alpha too, and though a label is never the biggest blob in a
+        # region, a region that ends at the figure cannot pick one up at all.
+        "base": {"region": (0, 522, 575, 991)},
+        "reference": {"region": (0, 0, 575, 500)},
+        # The crops are cut at a little over twice the original's zoom.
+        "register": {"scales": (0.30, 0.60, 0.01)},
+        # This sheet's crops are nearly all content -- a moustache reaches both side edges --
+        # so the mask is squarer than the Vermeer's and solid almost to the rim.
+        "mask": {"power": 4.0, "inset": 0.03, "solid": 0.85},
+        "parts": {
+            # Both eyes in one crop, split at the bridge of the nose. The two eye crops are
+            # not the same crop region (354x108 against 364x104), so neither can borrow the
+            # other's `framing` and each is registered and hand-read on its own; the table
+            # ships the CENTRE crop's openings for both, and `register_crops` prints how far
+            # apart the two crops put them.
+            "eyes_center": {
+                "region": (575, 40, 970, 168),
+                # The crop reaches down the nose to where the mouth crop starts, and the
+                # shader SUMS an eye part and a mouth part: drop the rows that would make the
+                # two rects meet. They hold the bridge of the nose, which the base has.
+                "trim_bottom": 14,
+                "split": (152, 20),
+                "eye": [(94, 71, 27, 12), (213, 58, 28, 12)],
+            },
+            "eyes_left": {
+                "region": (575, 190, 970, 312),
+                "trim_bottom": 14,
+                "split": (160, 20),
+                "eye": [(97, 67, 27, 12), (221, 62, 28, 12)],
+            },
+            "mouth_smile": {"region": (600, 375, 945, 545)},
+            "mouth_sad": {"region": (600, 546, 945, 680)},
+            "mouth_angry": {"region": (600, 705, 945, 868)},
         },
     },
 ]
@@ -383,6 +424,27 @@ def tile_rect(sheet_max, region, th=6.0, trim=1):
     return (x0 + c0 + trim, y0 + r0 + rr0 + trim, x0 + c1 - trim, y0 + r0 + rr1 - trim)
 
 
+def coverage_rect(alpha, region, th=0.5, trim=2):
+    """The rectangular core of a variant crop: the tallest run of rows whose mean alpha
+    clears `th`, then the widest run of columns in it, less `trim` px of resampled rim. The
+    crops have soft torn edges and a rounded corner; their own alpha is the NCC mask, so the
+    rectangle only frames the search."""
+    x0, y0, x1, y1 = region
+    a = alpha[y0:y1, x0:x1].astype(np.float64) / 255.0
+    r0, r1 = max(runs(a.mean(axis=1), th), key=lambda r: r[1] - r[0])
+    c0, c1 = max(runs(a[r0:r1].mean(axis=0), th), key=lambda c: c[1] - c[0])
+    return (x0 + c0 + trim, y0 + r0 + trim, x0 + c1 - trim, y0 + r1 - trim)
+
+
+def figure_over_ground(sheet, alpha, ground, region):
+    """A left-column figure composited over the inpainted ground, cropped to its blob."""
+    m = alpha_component(alpha, region)
+    fa = np.where(m, alpha, 0).astype(np.float64)[..., None] / 255.0
+    comp = sheet[..., :3].astype(np.float64) * fa + ground * (1 - fa)
+    x0, y0, x1, y1 = bbox(m)
+    return np.clip(comp[y0:y1, x0:x1], 0, 255).astype(np.uint8)
+
+
 def bbox(mask):
     ys, xs = np.nonzero(mask)
     return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
@@ -429,7 +491,7 @@ def match_colour(piece, base, mask_weights):
     return gain
 
 
-# ── The two sheet kinds ──────────────────────────────────────────────────────────────────────
+# ── The three sheet kinds ────────────────────────────────────────────────────────────────────
 def load_alpha_sheet(entry):
     """An RGBA cutout sheet: the base on its inpainted ground, and the pieces with alpha."""
     sheet = np.array(Image.open(os.path.join(ROOT, entry["sheet"])).convert("RGBA"))
@@ -457,27 +519,57 @@ def load_alpha_sheet(entry):
 
 
 def load_black_sheet(entry):
-    """An RGB tiles-on-black sheet: the base tile, the original tile, and the crops, each
-    given a soft mask; a both-eyes crop split into two parts."""
+    """An RGB tiles-on-black sheet: the base tile, the original tile, and the crops."""
     sheet = np.array(Image.open(os.path.join(ROOT, entry["sheet"])).convert("RGB"))
     mx = sheet.max(axis=2)
     crop = lambda r: sheet[r[1] : r[3], r[0] : r[2]]
     base = crop(tile_rect(mx, entry["base"]["region"]))
     ref = crop(tile_rect(mx, entry["reference"]["region"]))
-    mk = entry["mask"]
-    pieces = {}
     tiles = {}
     for name, spec in entry["parts"].items():
         r = tile_rect(mx, spec["region"])
         rgb = crop(r)
         h, w = rgb.shape[:2]
         print(f"  {name}: tile {w}x{h} at ({r[0]}, {r[1]})")
-        tiles[name] = (rgb, spec)
-    for name, (rgb, spec) in tiles.items():
+        # No alpha of their own: the tiles are cut from the black around them.
+        tiles[name] = (rgb, None, spec)
+    return base, ref, crop_pieces(tiles, entry["mask"])
+
+
+def load_ground_sheet(entry):
+    """An RGBA sheet whose crops sit on the painting's own painted ground: the two figures
+    composited over that ground (the `alpha` kind's move), and the crops with their alpha."""
+    sheet = np.array(Image.open(os.path.join(ROOT, entry["sheet"])).convert("RGBA"))
+    alpha = sheet[..., 3]
+    # The ground: the sheet where nothing has alpha, inpainted under everything else. The
+    # `alpha` kind also keeps the fill away from its pieces' painted glow; here the parts are
+    # opaque crops, which their own alpha already keeps out of the seed, and what is left is
+    # the dark surround the figures' soft edges have to sit on.
+    ground = inpaint(sheet[..., :3], erode(alpha == 0, 3))
+    base = figure_over_ground(sheet, alpha, ground, entry["base"]["region"])
+    ref = figure_over_ground(sheet, alpha, ground, entry["reference"]["region"])
+    tiles = {}
+    for name, spec in entry["parts"].items():
+        x0, y0, x1, y1 = coverage_rect(alpha, spec["region"])
+        y1 -= spec.get("trim_bottom", 0)
+        print(f"  {name}: crop {x1 - x0}x{y1 - y0} at ({x0}, {y0})")
+        tiles[name] = (sheet[y0:y1, x0:x1, :3], alpha[y0:y1, x0:x1] / 255.0, spec)
+    return base, ref, crop_pieces(tiles, entry["mask"])
+
+
+def crop_pieces(tiles, mk):
+    """The crops of a `black` or a `ground` sheet as pieces: each masked by a soft
+    superellipse (times its own alpha, where the sheet gave it one), and a tile holding both
+    eyes split at the nose into a left and a right part whose masks cross-fade through the
+    overlap, summing to one there."""
+    pieces = {}
+    for name, (rgb, own, spec) in tiles.items():
         framing = spec.get("framing")
-        layout = tiles[framing][1] if framing else spec
+        layout = tiles[framing][2] if framing else spec
         h, w = rgb.shape[:2]
         mask = superellipse_mask(w, h, mk["power"], mk["inset"], mk["solid"])
+        if own is not None:
+            mask = mask * own
         if "split" in layout:
             sx, ov = layout["split"]
             ramp = np.clip((np.arange(w) - (sx - ov)) / (2.0 * ov), 0, 1)
@@ -491,6 +583,7 @@ def load_black_sheet(entry):
                 ex, ey, rx, ry = eye
                 p = Piece(f"{name}_{side}", rgba, (ex - x0, ey, rx, ry))
                 p.offset = (x0, 0)
+                p.own = None if own is None else own[:, x0:x1]
                 p.framing = framing
                 p.whole = name
                 pieces[p.name] = p
@@ -498,10 +591,11 @@ def load_black_sheet(entry):
             rgba = np.dstack([rgb, (mask * 255).astype(np.uint8)])
             p = Piece(name, rgba, None)
             p.offset = (0, 0)
+            p.own = own
             p.framing = framing
             p.whole = name
             pieces[name] = p
-    return base, ref, pieces
+    return pieces
 
 
 # ── Registration ─────────────────────────────────────────────────────────────────────────────
@@ -521,7 +615,7 @@ def register_alpha(entry, base, pieces):
         print(f"  {name}: scale {s:.3f} at ({x}, {y}) ncc {score:.3f} gain {np.round(gain, 3)}")
 
 
-def register_black(entry, base, ref, pieces):
+def register_crops(entry, base, ref, pieces):
     lo, hi, step = entry["register"]["scales"]
     scales = np.arange(lo, hi + step / 2, step)
     rg, bg = gray(ref), gray(base)
@@ -539,11 +633,14 @@ def register_black(entry, base, ref, pieces):
         key = p.framing or p.whole
         if key not in placed:
             # Register the whole tile this part came from (or the one it shares a framing
-            # with) against the original, as a rectangle with a little border left out.
-            whole = next(q for q in pieces.values() if q.whole == key)
-            tile_rgb = whole_tile(pieces, key)
+            # with) against the original, as a rectangle with a little border left out, and
+            # with whatever alpha the tile brought of its own (a `ground` sheet's crops have
+            # a chamfered corner, which weighs nothing this way).
+            tile_rgb, tile_own = whole_tile(pieces, key)
             mask = np.zeros(tile_rgb.shape[:2])
             mask[3:-3, 3:-3] = 1
+            if tile_own is not None:
+                mask = mask * tile_own
             placed[key] = register(rg, gray(tile_rgb), mask, scales)
             s, x, y, score = placed[key]
             print(f"  {key}: scale {s:.3f} at ({x}, {y}) on the original, ncc {score:.3f}")
@@ -556,229 +653,36 @@ def register_black(entry, base, ref, pieces):
         a = p.rgba[..., 3] / 255.0
         gain = match_colour(p, base, 4.0 * a * (1 - a))
         print(f"  {name}: at ({p.at[0]}, {p.at[1]}) on the base, gain {np.round(gain, 3)}")
+    # The table ships the CENTRE crop's eye openings and the warp uses them for both eye
+    # variants, so the left crop has to put its own openings on the same base pixels. It does
+    # by construction where it borrows the centre's `framing`; where it is registered on its
+    # own -- a sheet whose crops are separate renderings of the face -- this is the number to
+    # watch, and the opening's own radius is as far as it may drift before the warp starts
+    # sliding a lid instead of an iris.
+    for side in (0, 1):
+        c, left = pieces[f"eyes_center_{'lr'[side]}"], pieces[f"eyes_left_{'lr'[side]}"]
+        opening = lambda p: (p.at[0] + p.eye[0] * p.scale, p.at[1] + p.eye[1] * p.scale)
+        (cx, cy), (lx, ly) = opening(c), opening(left)
+        print(f"  eye {side}: the left crop's opening is ({lx - cx:+.1f}, {ly - cy:+.1f}) px off the centre's")
+        assert abs(lx - cx) < c.eye[2] * c.scale and abs(ly - cy) < c.eye[3] * c.scale, (
+            f"{left.name}: the eye variants disagree about where the opening is"
+        )
 
 
 def whole_tile(pieces, name):
-    """The RGB of a tile split into parts, put back together for registration."""
+    """The RGB of a tile split into parts, put back together for registration, and the tile's
+    own alpha (`None` if the sheet gave it none)."""
     parts = [p for p in pieces.values() if p.whole == name]
     w = max(p.offset[0] + p.size[0] for p in parts)
     h = max(p.offset[1] + p.size[1] for p in parts)
     out = np.zeros((h, w, 3), np.uint8)
+    own = None if parts[0].own is None else np.zeros((h, w))
     for p in parts:
         x0, y0 = p.offset
         out[y0 : y0 + p.size[1], x0 : x0 + p.size[0]] = p.rgba[..., :3]
-    return out
-
-
-# ── The chain kind (docstring, "THE THREE KINDS OF SHEET") ───────────────────────────────────
-# The crop-minus-base difference map: |Δ luminance| over this many grey levels is fully "a
-# piece lives here", and above DIFF_TH of that a pixel counts toward a mouth piece's IoU.
-DIFF_NORM = 60.0
-DIFF_TH = 0.45
-# How far the local NCC polish may move an eye piece off its ellipse-aligned spot, in crop
-# pixels, and how far off the ellipse-implied scale it may go.
-POLISH = 8
-POLISH_SCALES = (0.90, 0.95, 1.00, 1.05, 1.10)
-
-
-def coverage_rect(alpha, region, th=0.5, trim=2):
-    """The rectangular core of a variant crop: the tallest run of rows whose mean alpha
-    clears `th`, then the widest run of columns in it, less `trim` px of resampled rim. The
-    crops have soft torn edges and a rounded corner; their own alpha is the NCC mask, so the
-    rectangle only frames the search."""
-    x0, y0, x1, y1 = region
-    a = alpha[y0:y1, x0:x1].astype(np.float64) / 255.0
-    r0, r1 = max(runs(a.mean(axis=1), th), key=lambda r: r[1] - r[0])
-    c0, c1 = max(runs(a[r0:r1].mean(axis=0), th), key=lambda c: c[1] - c[0])
-    return (x0 + c0 + trim, y0 + r0 + trim, x0 + c1 - trim, y0 + r1 - trim)
-
-
-def figure_over_ground(sheet, alpha, ground, region):
-    """A left-column figure composited over the inpainted ground, cropped to its blob."""
-    m = alpha_component(alpha, region)
-    fa = np.where(m, alpha, 0).astype(np.float64)[..., None] / 255.0
-    comp = sheet[..., :3].astype(np.float64) * fa + ground * (1 - fa)
-    x0, y0, x1, y1 = bbox(m)
-    return np.clip(comp[y0:y1, x0:x1], 0, 255).astype(np.uint8)
-
-
-def load_chain_sheet(entry):
-    """The hybrid sheet: the two figures over their inpainted ground, the variant crops with
-    their alpha, and the cutout pieces."""
-    sheet = np.array(Image.open(os.path.join(ROOT, entry["sheet"])).convert("RGBA"))
-    alpha = sheet[..., 3]
-    masks = {}
-    for vspec in entry["variants"].values():
-        for pname, pspec in vspec["pieces"].items():
-            masks[pname] = alpha_component(alpha, pspec["region"])
-    tile_rects = {v: coverage_rect(alpha, vspec["crop"]) for v, vspec in entry["variants"].items()}
-    # The ground: nothing within GLOW of a piece or a crop seeds the fill (`alpha` kind).
-    near = np.zeros(alpha.shape, bool)
-    for m in masks.values():
-        near |= m
-    for x0, y0, x1, y1 in tile_rects.values():
-        near[y0:y1, x0:x1] = True
-    ground = inpaint(sheet[..., :3], erode(alpha == 0, 3) & ~dilate(near, GLOW))
-    base = figure_over_ground(sheet, alpha, ground, entry["base"]["region"])
-    ref = figure_over_ground(sheet, alpha, ground, entry["reference"]["region"])
-    tiles = {}
-    for vname, (x0, y0, x1, y1) in tile_rects.items():
-        rgb = sheet[y0:y1, x0:x1, :3]
-        a = alpha[y0:y1, x0:x1].astype(np.float64) / 255.0
-        tiles[vname] = (rgb, a, (x0, y0, x1, y1))
-        print(f"  {vname}: crop {x1 - x0}x{y1 - y0} at ({x0}, {y0})")
-    pieces = {}
-    for vspec in entry["variants"].values():
-        for pname, pspec in vspec["pieces"].items():
-            px0, py0, px1, py1 = bbox(masks[pname])
-            rgba = sheet[py0:py1, px0:px1].copy()
-            rgba[..., 3] = np.where(masks[pname][py0:py1, px0:px1], rgba[..., 3], 0)
-            pieces[pname] = Piece(pname, rgba, pspec.get("eye"))
-            print(f"  {pname}: cut {px1 - px0}x{py1 - py0} at ({px0}, {py0})")
-    return base, ref, pieces, tiles
-
-
-def diff_map(bg, cg, scale, bx, by):
-    """|the crop - the base under it| in crop pixels, blurred a touch and clipped 0..1: a
-    variant's pieces are exactly where its crop differs from the blanked base."""
-    ch, cw = cg.shape
-    bh, bw = bg.shape
-    x0, y0 = int(round(bx)), int(round(by))
-    x1, y1 = int(round(bx + cw * scale)), int(round(by + ch * scale))
-    sub = bg[max(y0, 0) : min(y1, bh), max(x0, 0) : min(x1, bw)]
-    pad = ((max(-y0, 0), max(y1 - bh, 0)), (max(-x0, 0), max(x1 - bw, 0)))
-    if any(p for pair in pad for p in pair):
-        sub = np.pad(sub, pad, mode="edge")
-    up = np.array(Image.fromarray(sub.astype(np.float32), mode="F").resize((cw, ch), Image.BILINEAR), dtype=np.float64)
-    d = np.abs(gauss_blur(cg, 1.5) - gauss_blur(up, 1.5))
-    return np.clip(gauss_blur(d, 2.0) / DIFF_NORM, 0, 1)
-
-
-def place_eye(cg, p, pspec):
-    """An eye piece in its crop: the piece's opening ellipse laid on the crop's, then a local
-    NCC polish -- +-POLISH pixels, POLISH_SCALES about the ellipses' scale -- of the piece's
-    grayscale under its own alpha. Returns (scale, x, y, ncc)."""
-    ecx, ecy, erx, ery = pspec["eye"]
-    tcx, tcy, trx, try_ = pspec["target"]
-    s0 = 0.5 * (trx / erx + try_ / ery)
-    tpl = gray(p.rgba)
-    mask = p.rgba[..., 3].astype(np.float64) / 255.0
-    best = None
-    for f in POLISH_SCALES:
-        s = s0 * f
-        t = resize(tpl, s)
-        m = np.clip(resize(mask, s), 0, 1)
-        th, tw = t.shape
-        x0 = int(round(tcx - ecx * s)) - POLISH
-        y0 = int(round(tcy - ecy * s)) - POLISH
-        wx0, wy0 = max(x0, 0), max(y0, 0)
-        wx1 = min(x0 + 2 * POLISH + tw + 1, cg.shape[1])
-        wy1 = min(y0 + 2 * POLISH + th + 1, cg.shape[0])
-        if wy1 - wy0 <= th or wx1 - wx0 <= tw:
-            continue
-        n = masked_ncc(cg[wy0:wy1, wx0:wx1], t, m)
-        y, x = np.unravel_index(np.argmax(n), n.shape)
-        if best is None or n[y, x] > best[3]:
-            best = (float(s), int(x + wx0), int(y + wy0), float(n[y, x]))
-    return best
-
-
-def place_mouth(cg, d, p, pspec, scales):
-    """A mouth piece in its crop: the best silhouette overlap (IoU) of the piece's alpha with
-    the difference map inside the hand-boxed window, over the scale sweep. The recorded score
-    is the NCC of the piece against the crop AT that placement -- a diagnostic, not the
-    optimiser: the crop is another rendering of the same hair and texture NCC cannot place a
-    moustache, but it says how alike the two are where the piece landed."""
-    M = (d > DIFF_TH).astype(np.float64)
-    tpl = (gauss_blur(p.rgba[..., 3].astype(np.float64) / 255.0, 2.0) > 0.5).astype(np.float64)
-    wx0, wy0, wx1, wy1 = pspec["window"]
-    img = M[wy0:wy1, wx0:wx1]
-    best = None
-    for s in scales:
-        t = (np.clip(resize(tpl, s), 0, 1) > 0.5).astype(np.float64)
-        if t.shape[0] >= img.shape[0] or t.shape[1] >= img.shape[1]:
-            continue
-        inter = xcorr(img, t)
-        mbox = xcorr(img, np.ones_like(t))
-        iou = inter / np.maximum(t.sum() + mbox - inter, 1e-9)
-        y, x = np.unravel_index(np.argmax(iou), iou.shape)
-        if best is None or iou[y, x] > best[3]:
-            best = (float(s), int(x + wx0), int(y + wy0), float(iou[y, x]))
-    s, x, y, iou_score = best
-    # The diagnostic NCC at the landing spot.
-    t = resize(gray(p.rgba), s)
-    m = np.clip(resize(p.rgba[..., 3].astype(np.float64) / 255.0, s), 0, 1)
-    th, tw = t.shape
-    sub = cg[y : y + th, x : x + tw]
-    if sub.shape == t.shape:
-        ncc = float(masked_ncc(sub, t, m)[0, 0])
-    else:
-        ncc = 0.0
-    return s, x, y, ncc, iou_score
-
-
-def match_colour_at(piece, img, scale, at, weights):
-    """`match_colour` against any image at an explicit placement (the chain matches a piece
-    to its CROP: the base has no moustache under a moustache)."""
-    s, (x, y) = scale, at
-    w, h = piece.size
-    sw, sh = int(round(w * s)), int(round(h * s))
-    under = img[y : y + sh, x : x + sw, :3].astype(np.float64)
-    small = resize_rgba(piece.rgba, (sw, sh)).astype(np.float64)
-    wts = np.clip(resize(weights, s), 0, 1)[: under.shape[0], : under.shape[1]]
-    small = small[: under.shape[0], : under.shape[1]]
-    wsum = max(wts.sum(), 1e-6)
-    mb = (under * wts[..., None]).sum(axis=(0, 1)) / wsum
-    mp = (small[..., :3] * wts[..., None]).sum(axis=(0, 1)) / wsum
-    gain = np.clip(mb / np.maximum(mp, 1.0), 0.6, 1.7)
-    rgb = np.clip(piece.rgba[..., :3].astype(np.float64) * gain, 0, 255)
-    piece.rgba = np.concatenate([rgb.astype(np.uint8), piece.rgba[..., 3:]], axis=-1)
-    return gain
-
-
-def register_chain(entry, base, ref, pieces, tiles):
-    bg, rg = gray(base), gray(ref)
-    # The base against the original: the same inset-core NCC as the `black` kind.
-    inset = 40
-    core = bg[inset:-inset, inset:-inset]
-    n = masked_ncc(rg, core, np.ones_like(core))
-    oy, ox = np.unravel_index(np.argmax(n), n.shape)
-    dx, dy = inset - int(ox), inset - int(oy)
-    print(f"  base is the original shifted by ({dx}, {dy}), ncc {n[oy, ox]:.3f}")
-    lo, hi, step = entry["register"]["scales"]
-    crop_scales = np.arange(lo, hi + step / 2, step)
-    plo, phi, pstep = entry["piece_scales"]
-    piece_scales = np.arange(plo, phi + pstep / 2, pstep)
-    for vname, vspec in entry["variants"].items():
-        crgb, ca, rect = tiles[vname]
-        cg = gray(crgb)
-        # Crop -> original: the whole rectangle, the crop's own alpha as the mask (the torn
-        # edge and the rounded corner weigh themselves out), a few rim pixels dropped.
-        mask = ca.copy()
-        mask[:3] = 0
-        mask[-3:] = 0
-        mask[:, :3] = 0
-        mask[:, -3:] = 0
-        s2, x2, y2, sc2 = register(rg, cg, mask, crop_scales)
-        print(f"  {vname}: crop scale {s2:.3f} at ({x2}, {y2}) on the original, ncc {sc2:.3f}")
-        d = diff_map(bg, cg, s2, x2 + dx, y2 + dy)
-        for pname, pspec in vspec["pieces"].items():
-            p = pieces[pname]
-            if "eye" in pspec:
-                s1, x1, y1, score = place_eye(cg, p, pspec)
-                extra = ""
-            else:
-                s1, x1, y1, score, iou = place_mouth(cg, d, p, pspec, piece_scales)
-                extra = f" iou {iou:.3f}"
-            p.scale = s1 * s2
-            p.at = (int(round(x2 + x1 * s2 + dx)), int(round(y2 + y1 * s2 + dy)))
-            p.score = score
-            gain = match_colour_at(p, crgb, s1, (x1, y1), p.rgba[..., 3].astype(np.float64) / 255.0)
-            print(
-                f"  {pname}: scale {s1:.3f} at ({x1}, {y1}) in the crop -> "
-                f"{p.scale:.3f} at {p.at} on the base, ncc {score:.3f}{extra} "
-                f"gain {np.round(gain, 3)}"
-            )
+        if own is not None:
+            own[y0 : y0 + p.size[1], x0 : x0 + p.size[0]] = p.own
+    return out, own
 
 
 def side_by_side(a, b):
@@ -869,27 +773,13 @@ def generate(entry, preview):
         register_alpha(entry, base, pieces)
         for p in pieces.values():
             p.rgba[..., 3] = feather(p.rgba[..., 3], entry["feather"] * p.size[1])
-    elif entry["kind"] == "black":
-        base, ref, pieces = load_black_sheet(entry)
-        register_black(entry, base, ref, pieces)
     else:
-        base, ref, pieces, tiles = load_chain_sheet(entry)
-        register_chain(entry, base, ref, pieces, tiles)
-        # The cutouts keep their own edges -- the moustache wisps -- unless a piece says
-        # otherwise: `feather: 0` per mouth piece, the entry's own for the eye skin patches.
-        for vspec in entry["variants"].values():
-            for pname, pspec in vspec["pieces"].items():
-                width = pspec.get("feather", entry["feather"])
-                if width > 0:
-                    p = pieces[pname]
-                    p.rgba[..., 3] = feather(p.rgba[..., 3], width * p.size[1])
-    # Which pieces make up each of PART_ORDER's variants, in paint order (last on top): the
-    # piece named for its variant on the one-piece sheets, the manifest's lists on a `chain`.
-    if entry["kind"] == "chain":
-        variants = {v: tuple(spec["pieces"]) for v, spec in entry["variants"].items()}
-        variants = {n: variants.get(n, (n,)) for n in PART_ORDER}
-    else:
-        variants = {n: (n,) for n in PART_ORDER}
+        loader = load_black_sheet if entry["kind"] == "black" else load_ground_sheet
+        base, ref, pieces = loader(entry)
+        register_crops(entry, base, ref, pieces)
+    # Which pieces make up each of PART_ORDER's variants, in paint order (last on top). Every
+    # sheet cuts one piece per variant; the table's lists are the renderer's (module docs).
+    variants = {n: (n,) for n in PART_ORDER}
     bh, bw = base.shape[:2]
     # The parts, resampled to PART_ZOOM times the base's density, padded inside their rects.
     images = {}
@@ -933,7 +823,7 @@ def generate(entry, preview):
         composite(base, pieces, centre_eyes + list(variants["mouth_angry"]), ell).save(os.path.join(preview, f"{name}_center_angry_ellipses.png"))
         Image.fromarray(base).save(os.path.join(preview, f"{name}_base.png"))
         Image.fromarray(atlas).save(os.path.join(preview, f"{name}_parts.png"))
-        if ref is not None and entry["kind"] == "chain":
+        if ref is not None:
             side_by_side(np.array(composite(base, pieces, centre_eyes + list(variants["mouth_smile"]))), ref).save(
                 os.path.join(preview, f"{name}_composite_vs_original.png")
             )
@@ -965,9 +855,12 @@ def write_rust(results):
         f.write("/// One portrait. `parts` are the variants in `PART_ORDER` -- eyes centre left/right, eyes\n")
         f.write("/// left left/right, mouth smile/sad/angry (\"left\" and \"right\" are the image's, the\n")
         f.write("/// viewer's) -- each a list of pieces the renderer composites over one another in order\n")
-        f.write("/// (last on top): one piece on most sheets, the Hals mouths four. The eye variants are\n")
-        f.write("/// always a single piece, which the iris warp needs. `eyes` are the eye openings'\n")
-        f.write("/// ellipses as (cx, cy, rx, ry) in base UV, left then right, the same for every variant.\n")
+        f.write("/// (last on top). Every sheet cuts one piece per variant, so every list here holds one:\n")
+        f.write("/// the list is the capability, and is what would let a sitter whose mouth arrives as\n")
+        f.write("/// separate cutouts -- a moustache each side, the lips, a goatee -- hang without a shader\n")
+        f.write("/// change. The eye variants are always a single piece, which the iris warp needs. `eyes`\n")
+        f.write("/// are the eye openings' ellipses as (cx, cy, rx, ry) in base UV, left then right, the\n")
+        f.write("/// same for every variant.\n")
         f.write("#[derive(Clone, Copy, Debug)]\n")
         f.write("pub struct Portrait {\n")
         f.write("    pub name: &'static str,\n    pub base: &'static str,\n    pub parts_texture: &'static str,\n")

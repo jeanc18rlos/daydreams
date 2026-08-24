@@ -15,9 +15,12 @@ pub struct Part {
 /// One portrait. `parts` are the variants in `PART_ORDER` -- eyes centre left/right, eyes
 /// left left/right, mouth smile/sad/angry ("left" and "right" are the image's, the
 /// viewer's) -- each a list of pieces the renderer composites over one another in order
-/// (last on top): one piece on most sheets, the Hals mouths four. The eye variants are
-/// always a single piece, which the iris warp needs. `eyes` are the eye openings'
-/// ellipses as (cx, cy, rx, ry) in base UV, left then right, the same for every variant.
+/// (last on top). Every sheet cuts one piece per variant, so every list here holds one:
+/// the list is the capability, and is what would let a sitter whose mouth arrives as
+/// separate cutouts -- a moustache each side, the lips, a goatee -- hang without a shader
+/// change. The eye variants are always a single piece, which the iris warp needs. `eyes`
+/// are the eye openings' ellipses as (cx, cy, rx, ry) in base UV, left then right, the
+/// same for every variant.
 #[derive(Clone, Copy, Debug)]
 pub struct Portrait {
     pub name: &'static str,
@@ -39,7 +42,7 @@ pub const PART_ORDER: [&str; 7] = [
     "mouth_angry",
 ];
 
-pub const PORTRAITS: [Portrait; 2] = [
+pub const PORTRAITS: [Portrait; 3] = [
     // Mona Lisa (Leonardo da Vinci, c. 1503-1506); the sheet is the user's edit
     Portrait {
         name: "mona",
@@ -131,5 +134,51 @@ pub const PORTRAITS: [Portrait; 2] = [
             }],
         ],
         eyes: [[0.36423, 0.34284, 0.02528, 0.01271], [0.47154, 0.35725, 0.03202, 0.01356]],
+    },
+    // The Laughing Cavalier (Frans Hals, 1624); the sheet is the user's edit
+    Portrait {
+        name: "cavalier",
+        base: "portrait_cavalier.bmp",
+        parts_texture: "portrait_cavalier_parts.bmp",
+        base_size: (491, 469),
+        parts_size: (1024, 236),
+        parts: [
+            // eyes_center_l (ncc 0.50)
+            &[Part {
+                atlas: [0.82617, 0.01695, 0.96484, 0.36017],
+                place: [0.22607, 0.34968, 0.37067, 0.43603],
+            }],
+            // eyes_center_r (ncc 0.50)
+            &[Part {
+                atlas: [0.00391, 0.63136, 0.18066, 0.97458],
+                place: [0.32994, 0.34968, 0.51426, 0.43603],
+            }],
+            // eyes_left_l (ncc 0.47)
+            &[Part {
+                atlas: [0.18848, 0.63136, 0.33301, 0.96186],
+                place: [0.22200, 0.35394, 0.37271, 0.43710],
+            }],
+            // eyes_left_r (ncc 0.47)
+            &[Part {
+                atlas: [0.34082, 0.63136, 0.51953, 0.96186],
+                place: [0.33401, 0.35394, 0.52037, 0.43710],
+            }],
+            // mouth_smile (ncc 0.55)
+            &[Part {
+                atlas: [0.28809, 0.01695, 0.54004, 0.51271],
+                place: [0.21181, 0.44136, 0.47454, 0.56610],
+            }],
+            // mouth_sad (ncc 0.58)
+            &[Part {
+                atlas: [0.54785, 0.01695, 0.81836, 0.50424],
+                place: [0.21385, 0.46695, 0.49593, 0.58955],
+            }],
+            // mouth_angry (ncc 0.56)
+            &[Part {
+                atlas: [0.00391, 0.01695, 0.28027, 0.59746],
+                place: [0.20367, 0.44776, 0.49185, 0.59382],
+            }],
+        ],
+        eyes: [[0.30481, 0.41299, 0.02145, 0.00998], [0.39835, 0.40217, 0.02224, 0.00998]],
     },
 ];
