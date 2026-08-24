@@ -141,9 +141,11 @@ const GAZE_MIN_Z: f32 = 0.05;
 
 /// The most pieces a portrait's seven variants may hold between them: the four eye variants
 /// are one piece each (the iris warp needs a single rect to slide), and each of the three
-/// mouths up to four (the Hals mouths are a moustache half each side, the lips and the
-/// goatee; the Mona's and the Vermeer's are one). The shader's uniform arrays are sized to
-/// this (painting.frag `part_atlas`), so the two must move together.
+/// mouths as many as fit. Every sheet that ships cuts one piece per variant -- seven in all,
+/// the Hals moustache arriving inside the mouth's own crop -- and the headroom is what would
+/// let a sitter whose mouth comes as separate cutouts hang without a shader change. The
+/// shader's uniform arrays are sized to this (painting.frag `part_atlas`), so the two must
+/// move together.
 pub const MAX_PIECES: usize = 16;
 
 /// The three faces a portrait cycles through while unobserved ([`Expression`]): the mouth
@@ -1123,6 +1125,11 @@ mod tests {
         };
         let overlap =
             |a: &[f32; 4], b: &[f32; 4]| a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+        // The three sitters the sheets cut, the Mona first: `level16` hangs them by name and
+        // pins the key's frame to her. Named here so a portrait cannot quietly drop out of
+        // the table and leave the rest of this test passing over what is left.
+        let sitters: Vec<&str> = PORTRAITS.iter().map(|p| p.name).collect();
+        assert_eq!(sitters, ["mona", "vermeer", "cavalier"]);
         for p in &PORTRAITS {
             for tex in [p.base, p.parts_texture] {
                 let bytes =
@@ -1187,8 +1194,8 @@ mod tests {
                 assert!(rx > ry, "{}: an eye opening is wider than it is high", p.name);
             }
             // The left eye is left of the right one, and every mouth piece's centre below
-            // both eye centres (the Hals' moustache tips curl up beside the cheeks, so only
-            // the centres are ordered, not the boxes).
+            // both eye centres (only the centres are ordered, not the boxes: a mouth crop
+            // reaches up the nose, and the Hals moustache reaches out past the cheeks).
             assert!(p.eyes[0][0] < p.eyes[1][0]);
             for variant in &p.parts[4..] {
                 for part in variant.iter() {
@@ -1196,9 +1203,6 @@ mod tests {
                     assert!(centre_y > p.eyes[0][1] && centre_y > p.eyes[1][1], "{}", p.name);
                 }
             }
-            // And the Mona Lisa, the key's portrait, is the first: level16 pins the key
-            // seed's frame to it.
-            assert_eq!(PORTRAITS[0].name, "mona");
         }
     }
 

@@ -99,6 +99,21 @@ const WINDOW_SPOT: Vector3 = Vector3 { x: 987.0, y: 1.35, z: 2.07 - crate::ext::
 /// The wall's normal, into the hall.
 const WINDOW_FACING: Vector3 = Vector3 { x: 0.0, y: 0.0, z: -1.0 };
 
+/// Which sitter hangs on which of the hall's eight frames: an index into
+/// `portrait_atlas::PORTRAITS` (0 the Mona Lisa, 1 the Girl with a Pearl Earring, 2 the
+/// Laughing Cavalier) per seed. Seeds 0..5 run west to east along the north wall and 5..8
+/// along the south. Written out rather than taken modulo the number of sitters, which put a
+/// different face on every frame each time a sheet was added -- the key's among them. No two
+/// neighbours on a wall repeat, and nothing faces its own likeness across the hall
+/// (`the_hanging_covers_the_hall_and_pins_the_key_to_the_mona`).
+const HANGING: [usize; 8] = [0, 1, 2, 1, 0, 2, 0, 2];
+/// Where the frames hang along each wall, west to east, in world x.
+const NORTH_X: [f32; 5] = [981.0, 985.0, 989.0, 993.0, 997.0];
+const SOUTH_X: [f32; 3] = [983.0, 991.0, 999.0];
+/// The seed whose sitter wears the key: the last frame on the north wall, the one by the
+/// bare end wall. [`HANGING`] must keep a Mona Lisa there.
+const KEY_SEED: u32 = 4;
+
 impl Scene for Level16 {
     fn load(
         &self,
@@ -168,11 +183,12 @@ impl Scene for Level16 {
 
         // ── Portraits along the hall, watching (`ext/painting.rs`). Five on the north wall,
         // three on the south, each a hair off its wall face so nothing is coplanar with the
-        // scan, the Mona Lisa and the Girl with a Pearl Earring turn and turn about
-        // (`ext/portrait_atlas.rs`). The watch is taken now, after both doors exist, so a
-        // painting knows it is being looked at through the meadow door as well as from the
-        // carpet -- and only while the doors stand: once they have gone, so have their
-        // portals.
+        // scan, the three sitters hung where [`HANGING`] says (`ext/portrait_atlas.rs`). Every
+        // frame is the same width and takes its height from its own sitter's aspect, so the
+        // row is a row of pictures and not of boxes. The watch is taken now, after both doors
+        // exist, so a painting knows it is being looked at through the meadow door as well as
+        // from the carpet -- and only while the doors stand: once they have gone, so have
+        // their portals.
         {
             use crate::ext::painting::{KeySpec, Painting, Watch};
             use crate::ext::portrait_atlas::PORTRAITS;
@@ -193,7 +209,6 @@ impl Scene for Level16 {
             /// bodice the gold reads -- and is seen from 2.6 m west of it along the wall and
             /// half a metre out -- a grazing look along the wall, at eye height: the spot,
             /// how near to it the eye must be, and how near to the canvas centre the look.
-            const KEY_SEED: u32 = 4;
             const KEY_SPEC: KeySpec = KeySpec {
                 view: Vector3 { x: 994.4, y: GH_PLAYER_HEIGHT, z: 1.55 },
                 radius: 0.45,
@@ -205,19 +220,18 @@ impl Scene for Level16 {
                 let centre = Vector3::new(x, HEIGHT, wall_z + facing_z * WALL_GAP);
                 let facing = Vector3::new(0.0, 0.0, facing_z);
                 let key = (seed == KEY_SEED).then_some(KEY_SPEC);
-                let portrait = &PORTRAITS[seed as usize % PORTRAITS.len()];
+                let portrait = &PORTRAITS[HANGING[seed as usize]];
                 // EXT: the anamorphic key's KEY_ON_PLANE spot was tuned for the Mona's dark
-                // bodice; a third portrait in the rotation would silently re-seat the key on
-                // whichever sitter lands on this seed. Pin it so the sheet that adds one
-                // fails here instead of shipping a key on the wrong painting.
+                // bodice; an edit to the hanging would silently re-seat the key on whichever
+                // sitter lands on this seed. Pin it so such an edit fails here instead of
+                // shipping a key on the wrong painting.
                 if key.is_some() {
                     assert_eq!(portrait.name, "mona", "KEY_SEED must land on the Mona");
                 }
                 Painting::new(gl, res, centre, facing, WIDTH, portrait, seed, watch.clone(), key)
             };
-            let north =
-                [981.0, 985.0, 989.0, 993.0, 997.0].into_iter().map(|x| (x, HALL_NORTH_Z, -1.0));
-            let south = [983.0, 991.0, 999.0].into_iter().map(|x| (x, HALL_SOUTH_Z, 1.0));
+            let north = NORTH_X.into_iter().map(|x| (x, HALL_NORTH_Z, -1.0));
+            let south = SOUTH_X.into_iter().map(|x| (x, HALL_SOUTH_Z, 1.0));
             for (seed, (x, wall_z, facing_z)) in north.chain(south).enumerate() {
                 objs.push(Rc::new(RefCell::new(hang(x, wall_z, facing_z, seed as u32)))
                     as Rc<RefCell<dyn ObjectT>>);
@@ -442,6 +456,35 @@ mod tests {
         assert!(threshold.z > end.wall_z && threshold.z - end.wall_z < 0.05);
         assert_eq!(threshold.y, FLOOR_Y, "the cabin floor meets the carpet");
         assert!((ELEVATOR_FACING.mag() - 1.0).abs() < 1e-6 && ELEVATOR_FACING.z > 0.0);
+    }
+
+    /// The hanging: a sitter the atlas has on each of the eight frames, all three hung, the
+    /// key's frame a Mona Lisa (so `load`'s assert cannot fire), no two neighbours along a
+    /// wall alike, and nothing facing its own likeness across the hall -- the hall is 3.6 m
+    /// wide, so a south frame faces the north ones within a couple of metres of its x.
+    #[test]
+    fn the_hanging_covers_the_hall_and_pins_the_key_to_the_mona() {
+        use crate::ext::portrait_atlas::PORTRAITS;
+        assert_eq!(HANGING.len(), NORTH_X.len() + SOUTH_X.len());
+        assert!(HANGING.iter().all(|&i| i < PORTRAITS.len()));
+        for name in ["mona", "vermeer", "cavalier"] {
+            assert!(HANGING.iter().any(|&i| PORTRAITS[i].name == name), "{name} is not hung");
+        }
+        assert_eq!(PORTRAITS[HANGING[KEY_SEED as usize]].name, "mona");
+        for wall in [&HANGING[..NORTH_X.len()], &HANGING[NORTH_X.len()..]] {
+            assert!(wall.windows(2).all(|w| w[0] != w[1]), "two of a kind side by side");
+        }
+        for (s, &sx) in SOUTH_X.iter().enumerate() {
+            for (n, &nx) in NORTH_X.iter().enumerate() {
+                if (sx - nx).abs() < 2.5 {
+                    assert_ne!(
+                        HANGING[NORTH_X.len() + s],
+                        HANGING[n],
+                        "seed {n} is faced by its own"
+                    );
+                }
+            }
+        }
     }
 
     /// The carpet must be at world y = 0 where the door stands: the door's foot is at FAR.y
