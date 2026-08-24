@@ -143,6 +143,13 @@ pub struct Args {
     #[arg(long, hide = true, requires = "scene", value_name = "FRAMES", value_delimiter = ',')]
     pub drop_at: Vec<u32>,
 
+    /// With `--scene`: on each of these rendered frames, roll the mouse wheel one notch toward
+    /// you -- one slot along the inventory row, the way a hotbar reads (src/ext/inventory.rs).
+    /// The only way to drive the selection headlessly, and the only evidence the whole path from
+    /// the window event to the gold ring is connected. Hidden: dev tooling.
+    #[arg(long, hide = true, requires = "scene", value_name = "FRAMES", value_delimiter = ',')]
+    pub wheel_at: Vec<u32>,
+
     /// Panic after the first frame, to exercise the crash dialog. Hidden: it is a test of the
     /// platform layer, not a feature.
     #[arg(long, hide = true)]
@@ -206,6 +213,8 @@ pub struct DirectRun {
     pub stow_at: Vec<i32>,
     /// The rendered frames on which G is pressed once each, as key presses (`--drop-at`).
     pub drop_at: Vec<i32>,
+    /// The rendered frames on which the wheel turns one notch toward the player (`--wheel-at`).
+    pub wheel_at: Vec<i32>,
 }
 
 /// `--window-scale`'s parser: a scale the grab itself could produce.
@@ -328,6 +337,7 @@ impl Args {
             jump_at: self.jump_at.map(count),
             stow_at: self.stow_at.iter().copied().map(count).collect(),
             drop_at: self.drop_at.iter().copied().map(count).collect(),
+            wheel_at: self.wheel_at.iter().copied().map(count).collect(),
         })
     }
 
@@ -390,7 +400,7 @@ mod tests {
         assert_eq!((run.frames, run.yaw, run.pitch), (120, Some(30.0), Some(-5.0)));
         assert!(run.hold.is_empty() && !run.arrive && run.ride_at.is_none());
         assert!(!run.hold_key && run.e_at.is_none() && run.jump_at.is_none());
-        assert!(run.stow_at.is_empty() && run.drop_at.is_empty());
+        assert!(run.stow_at.is_empty() && run.drop_at.is_empty() && run.wheel_at.is_empty());
         // `--shot` alone is a run too: the title screen's photograph.
         let a = Args::try_from_tokens(&["--shot", "title.bmp"]).unwrap();
         let run = a.direct_run().expect("a dev run");
@@ -544,6 +554,14 @@ mod tests {
             .unwrap();
         assert_eq!(a.direct_run().unwrap().stow_at, [60, 120]);
         assert!(Args::try_from_tokens(&["--scene", "16", "--stow-at", "-1"]).is_err());
+    }
+
+    #[test]
+    fn wheel_at_needs_a_scene_and_takes_a_list() {
+        assert!(Args::try_from_tokens(&["--wheel-at", "60"]).is_err());
+        let a = Args::try_from_tokens(&["--scene", "16", "--wheel-at", "60,90,120"]).unwrap();
+        assert_eq!(a.direct_run().unwrap().wheel_at, [60, 90, 120]);
+        assert!(Args::try_from_tokens(&["--scene", "16", "--wheel-at", "-1"]).is_err());
     }
 
     #[test]

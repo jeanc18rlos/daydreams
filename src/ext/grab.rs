@@ -866,6 +866,17 @@ pub fn hold_retrieved(
 
 /// Recover the bounding radius of an object if it is grabbable.
 ///
+/// Whether this scene holds anything at all that could be picked up.
+///
+/// Asked once per load, by `Engine::load_scene_from`: the HUD's inventory row is drawn only where
+/// one of the two keys could ever do something, so the fifteen ported NonEuclidean scenes -- which
+/// contain nothing grabbable -- do not gain permanently empty chrome for a mechanic they have not
+/// got. A scene that spawned its first grabbable later would be missed; none does, and the row
+/// comes back anyway as soon as anything is in a slot.
+pub fn any_grabbable(objects: &[std::rc::Rc<std::cell::RefCell<dyn ObjectT>>]) -> bool {
+    objects.iter().any(|o| o.try_borrow().ok().is_some_and(|o| as_grabbable(&*o).is_some()))
+}
+
 /// `dyn ObjectT` gives no downcast without `Any`, so grabbables advertise themselves through
 /// the physical hit-sphere the engine already understands: `Grabbable::new` seeds exactly one
 /// hit sphere whose radius is the bounding radius. Anything else -- including the player, which

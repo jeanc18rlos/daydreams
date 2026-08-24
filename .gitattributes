@@ -7,7 +7,7 @@
 *.ttf binary
 *.png binary
 *.bmp binary
-# The generated audio (tools/gen_sfx.py). Binary, but deliberately NOT LFS below: 6.4 MB
+# The generated audio (tools/gen_sfx.py). Binary, but deliberately NOT LFS below: 5.8 MB
 # across 47 files, the largest 1.4 MB, and a clone can rebuild every byte from the tool.
 *.flac binary
 

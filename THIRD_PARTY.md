@@ -154,7 +154,12 @@ or a Sketchfab Standard licence, the model cannot ship in a commercial build.
 
 The soundtrack that used to sit here (`assets/music/ost.mp3`) was a *Demon's Souls* track
 re-uploaded by a third party — its own ID3 tags said so — and was not licensable for
-distribution in any form. It is **deleted**, and the generated loops replace it.
+distribution in any form. It is **deleted** from the tree, and the generated loops replace it.
+
+**ACTION REQUIRED:** deleting a file does not remove it from the repository. The 20 MB blob is
+still reachable in git history, so any clone or push carries it. Run the history rewrite in
+README "Shipping" (`git lfs migrate` / `git filter-repo`) before the first push, and only then is
+this resolved.
 
 ## Grass shading — `Shaders/grassblade.frag`
 
@@ -251,3 +256,5 @@ cargo tree --format "{p} {l}" --prefix none | sort -u
    recorded. Confirm original (and drop the unreferenced texture, or say what it is).
 5. **`LICENSE`** — the copyright holder reads "DayDreams contributors", a placeholder.
    Confirm the name (and the year) before a build leaves this machine.
+6. **`assets/music/ost.mp3`** — deleted from the tree, still in history. Rewrite it out before
+   the repository is pushed anywhere.

@@ -110,6 +110,26 @@ const HANGING: [usize; 8] = [0, 1, 2, 1, 0, 2, 0, 2];
 /// Where the frames hang along each wall, west to east, in world x.
 const NORTH_X: [f32; 5] = [981.0, 985.0, 989.0, 993.0, 997.0];
 const SOUTH_X: [f32; 3] = [983.0, 991.0, 999.0];
+/// The hall's wall faces in world z: `backrooms::DOOR_SPOT` puts model z = 3.48 and 7.07 here
+/// (the scan's walls are planes; a ray probe along the hall finds them at -1.5214 and 2.0721 at
+/// every x).
+const HALL_SOUTH_Z: f32 = -1.52;
+const HALL_NORTH_Z: f32 = 2.07;
+
+/// Every frame in the hall in SEED order: `(x, the wall's z, the way it faces)`. North wall
+/// west to east, then south wall west to east.
+///
+/// One definition, because `load` hangs from it and the tests read it: a seed is a position in
+/// this sequence and nothing else, so `KEY_SEED` means "the fifth thing this yields". Two
+/// independent copies of the order let someone swap the two walls round here and move the
+/// anamorphic key onto a different frame without a single assertion firing -- the sitter at the
+/// key's seed would still be a Mona, and the neighbour checks would still pass over the old
+/// slicing.
+fn frames() -> impl Iterator<Item = (f32, f32, f32)> {
+    let north = NORTH_X.into_iter().map(|x| (x, HALL_NORTH_Z, -1.0));
+    let south = SOUTH_X.into_iter().map(|x| (x, HALL_SOUTH_Z, 1.0));
+    north.chain(south)
+}
 /// EXT: what the footsteps land on (`ext/audio.rs`). Two worlds in one scene, so the surface is
 /// resolved where the player's feet are rather than fixed for the load: the scene opens in the
 /// meadow, four hundred metres west of the carpet, and NEW GAME's first steps are taken there.
@@ -202,11 +222,6 @@ impl Scene for Level16 {
         {
             use crate::ext::painting::{KeySpec, Painting, Watch};
             use crate::ext::portrait_atlas::PORTRAITS;
-            /// The hall's wall faces in world z: `backrooms::DOOR_SPOT` puts model z = 3.48 and
-            /// 7.07 here (the scan's walls are planes; a ray probe along the hall finds them
-            /// at -1.5214 and 2.0721 at every x).
-            const HALL_SOUTH_Z: f32 = -1.52;
-            const HALL_NORTH_Z: f32 = 2.07;
             /// Clearance a painting's back keeps from the wall, so the two never z-fight.
             const WALL_GAP: f32 = 0.02;
             /// Centre height, and width: the height follows each portrait's own aspect. Eye
@@ -240,9 +255,7 @@ impl Scene for Level16 {
                 }
                 Painting::new(gl, res, centre, facing, WIDTH, portrait, seed, watch.clone(), key)
             };
-            let north = NORTH_X.into_iter().map(|x| (x, HALL_NORTH_Z, -1.0));
-            let south = SOUTH_X.into_iter().map(|x| (x, HALL_SOUTH_Z, 1.0));
-            for (seed, (x, wall_z, facing_z)) in north.chain(south).enumerate() {
+            for (seed, (x, wall_z, facing_z)) in frames().enumerate() {
                 objs.push(Rc::new(RefCell::new(hang(x, wall_z, facing_z, seed as u32)))
                     as Rc<RefCell<dyn ObjectT>>);
             }
@@ -475,23 +488,34 @@ mod tests {
     #[test]
     fn the_hanging_covers_the_hall_and_pins_the_key_to_the_mona() {
         use crate::ext::portrait_atlas::PORTRAITS;
-        assert_eq!(HANGING.len(), NORTH_X.len() + SOUTH_X.len());
+        // Read the walls the way `load` does, from the one sequence both share -- not by
+        // re-slicing HANGING, which would pass over a reordering of that sequence.
+        let hall: Vec<(f32, f32, f32)> = frames().collect();
+        assert_eq!(HANGING.len(), hall.len());
         assert!(HANGING.iter().all(|&i| i < PORTRAITS.len()));
         for name in ["mona", "vermeer", "cavalier"] {
             assert!(HANGING.iter().any(|&i| PORTRAITS[i].name == name), "{name} is not hung");
         }
+        // The key's seed is one particular frame -- the last on the north wall, by the bare end
+        // wall -- and it carries a Mona. Both halves, so a reordering cannot move it quietly.
+        let key_frame = hall[KEY_SEED as usize];
+        assert_eq!((key_frame.0, key_frame.1), (997.0, HALL_NORTH_Z), "the key's frame moved");
         assert_eq!(PORTRAITS[HANGING[KEY_SEED as usize]].name, "mona");
-        for wall in [&HANGING[..NORTH_X.len()], &HANGING[NORTH_X.len()..]] {
-            assert!(wall.windows(2).all(|w| w[0] != w[1]), "two of a kind side by side");
+        // Along each wall, west to east: no two neighbours alike.
+        for wall_z in [HALL_NORTH_Z, HALL_SOUTH_Z] {
+            let seeds: Vec<usize> =
+                hall.iter().enumerate().filter(|(_, f)| f.1 == wall_z).map(|(i, _)| i).collect();
+            assert!(seeds.len() >= 3, "wall at {wall_z} has {} frames", seeds.len());
+            assert!(
+                seeds.windows(2).all(|w| HANGING[w[0]] != HANGING[w[1]]),
+                "two of a kind side by side on the wall at {wall_z}"
+            );
         }
-        for (s, &sx) in SOUTH_X.iter().enumerate() {
-            for (n, &nx) in NORTH_X.iter().enumerate() {
-                if (sx - nx).abs() < 2.5 {
-                    assert_ne!(
-                        HANGING[NORTH_X.len() + s],
-                        HANGING[n],
-                        "seed {n} is faced by its own"
-                    );
+        // And across the hall: nothing faces its own likeness.
+        for (a, fa) in hall.iter().enumerate() {
+            for (b, fb) in hall.iter().enumerate() {
+                if fa.1 != fb.1 && (fa.0 - fb.0).abs() < 2.5 {
+                    assert_ne!(HANGING[a], HANGING[b], "seed {a} is faced by its own");
                 }
             }
         }

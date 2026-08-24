@@ -70,7 +70,7 @@ dev profile to keep it real-time, and builds dependencies at `opt-level = 3` so 
 once and cached. Release is still recommended.
 
 ```sh
-cargo test --release   # 407 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, the portal warps and the teleport, the collision push, the camera, the platform layer and the extensions' pure logic
+cargo test --release   # 419 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, the portal warps and the teleport, the collision push, the camera, the platform layer and the extensions' pure logic
 ```
 
 The mesh tests read `Meshes/`, so a checkout without the assets fails them.
@@ -183,11 +183,13 @@ logs are to name source lines, keep `debug = 1` in `dist` (and drop the strip), 
 ### Git LFS
 
 The files the LFS patterns below match come to about 70 MB across 26 files (the 47 MB Escher
-mesh, the 20 MB Backrooms GLB, the door GLB, the other meshes, the font; `git ls-files -z | xargs -0 du -ch` filtered by the patterns), and the history holds
-more: the door GLB was committed at 79 MB before its textures were shrunk. `.gitattributes` already routes `*.glb`,
-`*.mp3`, `*.ttf` and `Meshes/*.obj` through Git LFS for files added from now on, but the files
-already in history are ordinary blobs until they are rewritten. There is no remote yet, so the
-rewrite is cheap; run it once, before the first push:
+mesh, the 20 MB Backrooms GLB, the door GLB, the other meshes, the font; `git ls-files -z |
+xargs -0 du -ch` filtered by the patterns), and the history holds more: the door GLB was
+committed at 79 MB before its textures were shrunk, and the deleted `assets/music/ost.mp3` is
+20 MB more (THIRD_PARTY.md). `.gitattributes` already routes `*.glb`, `*.mp3`, `*.ttf` and
+`Meshes/*.obj` through Git LFS for files added from now on, but the files already in history are
+ordinary blobs until they are rewritten. There is no remote yet, so the rewrite is cheap; run it
+once, before the first push:
 
 ```sh
 git lfs install
@@ -761,7 +763,7 @@ binary already has stdout) and the entire Win32 half of `Engine.cpp`: `CreateGLW
 ## Status
 
 `cargo build --release` — 0 errors, 0 warnings; `cargo build --profile dist` — clean.
-`cargo test --release` — 407 passed, 0 failed.
+`cargo test --release` — 419 passed, 0 failed.
 `cargo clippy --release --all-targets -- -D warnings` — clean, with an empty `[lints.clippy]` table.
 `cargo fmt --check` — clean.
 `cargo deny check` — advisories, bans, licences, sources ok.
@@ -832,11 +834,33 @@ by does not exist yet when the key is pressed. A retrieve therefore places the o
 frame finds it in the vector by identity and pins the carry. The slot holds the item for that one
 frame, so a retrieve that never landed would leave it in the inventory rather than nowhere.
 
+**The two queues cancel each other by identity**, and that is the inventory's doing. A remove and
+a spawn of the *same* object can both be pending — `F` then `G` inside one rendered frame, or two
+`F`s, and a rendered frame shorter than one 2 ms step runs no step at all, so nothing is applied
+in between. Queued side by side they destroyed the item: `apply_spawns` runs first and appends a
+second handle, then `apply_removes` matches by `Rc::ptr_eq` across the whole vector and takes
+*both* copies out, and the last `Rc` dies. So `room::request_spawn` drops a pending remove of the
+same object instead of joining it, and `room::request_remove` does the mirror image. Both orders
+end where the pair means — in the world, or in a slot — and neither can end in neither.
+
+**A fresh game starts empty.** `load_scene` deliberately leaves the inventory alone, because an
+elevator ride and a window crossing are scene loads too and carrying things across them is the
+whole point. The menu is the other thing entirely, so `Engine::apply_menu_action` clears the
+slots on every action that `MenuAction::starts_fresh` — NEW GAME, RESTART LEVEL, SWITCH LEVEL and
+MAIN MENU. Without it a new game began carrying the last game's loot, and a restart put a
+pocketed apple in the hall beside the one the level rebuilt.
+
 | Input | Action |
 | --- | --- |
 | `F` | Stow what is in hand — or, with an empty hand, take the selected slot's item into it, at the size it was stowed at |
 | `G` | Put the selected slot's item down in front of you, without going through the hand |
 | Mouse wheel | Pick the slot |
+
+Away from you is the previous slot, the way a hotbar reads; fractional notches accumulate, so a
+trackpad's dozen fractions per notch still step exactly once. `MouseScrollDelta::PixelDelta`
+carries *physical* pixels, so the window's scale factor is divided out before the notch
+conversion — otherwise the same flick of the same fingers spends two slots on a retina panel and
+one on an external 1x monitor.
 
 The keys were chosen against a crowded keyboard: the number row and the punctuation keys are the
 [scene registry's](#scene-registry), `E` is grab/use, `M` mute, `R` rotate, `Shift` sprint. The
@@ -869,9 +893,21 @@ vector, and it is the way out. A seventh stow is refused the same way, with `POC
 The row of slots is drawn on every gameplay frame rather than fading in and out, because `F` and
 `G` act on the *selected* slot and the row has to be readable at the moment the player decides to
 press one — which is exactly the moment a fade would have hidden it. It sits below the hint line
-and outside the crosshair, and costs one draw per slot. `ext::inventory::take_event()` reports
-`Stowed` / `Retrieved` / `Dropped` / `Refused` once per rendered frame, on the same shape of
-channel as the elevator's ride-start edge, for the sound layer.
+and outside the crosshair, and costs one draw per slot. It is drawn only where one of the two
+keys could ever do something, though: the scene has to hold at least one grabbable object
+(`grab::any_grabbable`, asked once per load) or the inventory has to be holding something, so the
+fifteen ported NonEuclidean scenes — which contain nothing that can be picked up — do not gain
+permanently empty chrome for a mechanic they have not got.
+
+A refusal (`POCKETS FULL`, `IT WILL NOT FIT`, `THAT SLOT IS EMPTY`) stays on the hint line for
+1.6 s, because a key press is over in a frame. It goes through `hint::notice`, a rank between
+`set` and `insist`: it beats a description of whatever the crosshair is on, and loses to the
+prompt for the thing in your hand — a refusal that blanked `E  USE THE KEY` for a second and a
+half would read as the key having stopped working.
+
+`ext::inventory::take_event()` reports `Stowed` / `Retrieved` / `Dropped` / `Refused` once per
+rendered frame, on the same shape of channel as the elevator's ride-start edge; the engine turns
+it into `stow` / `retrieve` / `drop` / `refuse` (`inventory::sfx`).
 
 **The runs.** All from the Backrooms (scene 16), `--windowed --mute --no-gamepad --no-vsync`:
 
@@ -969,9 +1005,13 @@ CodeParade wrote a jump and then switched it off. `Player::Update` carries it in
 and `onGround` is set. It is on now, on **`Space`** and on the pad's **Cross**, and the two lines
 grew three things before they worked.
 
-**The apex is 0.62 m and the impulse is solved from it**, not tuned. High enough to step onto the
-Backrooms' low furniture and over the pool room's kerbs, and a quarter of the 2.43 m ceilings, so
-no jump in the game puts the player's head through one. `v = sqrt(2 g h)` is the schoolbook answer
+**The apex is 0.62 m and the impulse is solved from it**, not tuned. Sized to step onto low
+furniture and over a kerb, and a quarter of the 2.43 m ceilings, so no jump in the game puts the
+player's head through one. That first half is design intent, not a demonstration: **no surface in
+the shipped scenes has been hopped onto**. Scene 16's only step-height seat is an armchair at
+0.59 m guarded by 0.82 m arms and back, and four approach timings all stopped against the arm at
+floor level; scene 17's floor is flat at every point probed, its one feature being the pool basin,
+a 1.19 m drop the apex cannot climb back out of. `v = sqrt(2 g h)` is the schoolbook answer
 and it is wrong here by 12 cm: the ported player carries `drag = 0.002` per 2 ms step
 (`Player.cpp:20`), a one-second time constant against a third of a second of climb, and it eats a
 fifth of the height. So the vacuum answer is only the first guess, and thirty bisections against
@@ -999,7 +1039,10 @@ in that cycle the button landed. (A unit test caught it on the first run; a play
 have called it "sticky controls".) Applied before the physics step, the player rises 8 mm on the
 spot and there is nothing left for the floor to push out of. A 0.05 s launch lockout backs that up
 for the case where they cannot rise — a jump under a low enough ceiling — by refusing to read a
-ground contact as ground until the flight is under way.
+ground contact as ground until the flight is under way. One press cannot chain through a bonk; a
+button *held* through one hops again every 25 steps, which is the same rule as a button held
+through a landing, and is unreachable in the shipped scenes anyway (the lowest ceiling is 2.43 m
+against an eye at 1.5, the apex and the player's 0.2 m radius).
 
 The button is read as a **level**, not a press edge: `Input::EndFrame` runs inside the fixed-step
 loop, so an edge slot is clear for every step of a rendered frame but the first. Held, it hops
@@ -1016,10 +1059,12 @@ frame the menu closed under them.
 
 Two events are published for sound and for headless measurement, both taken once per rendered
 frame: `Player::just_jumped()` and `Player::just_landed()`, the second carrying the downward speed
-at touchdown (about 3.1 u/s off a full jump, a few tenths off a kerb) so a landing can be soft or
-heavy. They are taken rather than counted like the footfall counter beside them, because two
-footfalls fit inside one rendered frame at 500 Hz and two jumps cannot. `--log-level debug` prints
-them, with the position, as `[jump] launched at (…)` and `[jump] landed at (…), 3.05 u/s down`.
+at touchdown. They are taken rather than counted like the footfall counter beside them, because
+two footfalls fit inside one rendered frame at 500 Hz and two jumps cannot. `--log-level debug`
+prints them, with the position, as `[jump] launched at (…)` and `[jump] landed at (…), 3.05 u/s
+down`. Sound reads the same two: `jump` on the launch, and `land_soft` or `land_hard` chosen at
+`jump::HARD_LANDING` = 4.0 u/s — a hop off the 0.62 m apex touches down at 3.05–3.08, and 4.0 is
+reached by falling about 0.85 m, so an ordinary jump is a scuff and a storey's drop is a thump.
 
 A landing needs **0.08 s of air** behind it before it counts, which is the fall out of a 3 cm
 drop. That is not a nicety: the Backrooms floor is a scanned triangle mesh, and walking its seams
@@ -1046,8 +1091,10 @@ the ported `Physical`, which is a different project.
 
 `--jump-at N` presses Space on rendered frame N — held for thirty frames, because a headless frame
 is well under the 2 ms step and a shorter press can fall entirely between two of them, and still
-far short of the flight, so it is always exactly one jump — which is how the arc is photographed
-and measured without a human:
+short of the flight at 60 fps or faster, so it is one jump and not two — which is how the arc is
+photographed and measured without a human. (Below about 42 fps the hold outlasts the 0.71 s
+flight, and the jump is a level with a buffer, so it would hop again on touchdown. It is a
+headless tool, where a frame is a millisecond.)
 
 ```bash
 cargo run --release -- --scene 16 --pos 990,1.5,0 --yaw 90 --jump-at 30 --frames 60 \
@@ -1147,7 +1194,19 @@ a mipmap never rings them. It all lands in `Textures/portrait_<name>.bmp` (the b
 BGRA), `Textures/portrait_<name>_parts.bmp` (the seven parts, packed with alpha) and
 `src/ext/portrait_atlas.rs`: every part's atlas rect, its placement rect on the base in base
 UV, and the two eye openings' ellipses -- hand-read off gridded crops, checked on the tool's
-own composite. **Adding a sheet** is one more manifest entry of whichever kind fits its layout,
+own composite.
+
+The table ships **the centre crop's** eye openings, and the shader warps both eye variants with
+them, so a sheet whose panels are separate renderings of the face rather than cuts of one master
+can put its left-looking iris somewhere the shipped ellipse is not. `check_eye_drift` measures
+that on every run and reports it as a fraction of the opening's own radius: a whole radius is a
+hard failure (the warp would be sliding a lid), and anything past `IRIS_CORE` prints a WARNING.
+**The Cavalier trips that warning and it is left as it is:** his right eye's left-looking opening
+sits 3.6 px below the centre's against a vertical radius of 4.68 base px -- 76 % -- so at the
+far-left viewing stations that one iris follows at roughly a quarter of the intended offset. It
+is 2.6 base px of slide on a 469 px base, photographed at 50 degrees off-normal with no visible
+artefact, and correcting it properly means per-variant openings in the atlas and a second `eye`
+uniform. **Adding a sheet** is one more manifest entry of whichever kind fits its layout,
 a line in `THIRD_PARTY.md`, and a seat in `level16.rs`'s per-seed hanging. Run the tool with
 `--preview DIR` and look at the composites before trusting a number.
 
@@ -1247,11 +1306,13 @@ elevator's), so the puzzle is driven in steps, each headless, windowed and muted
 `DAYDREAMS_NO_DIALOG=1`; every number below is what the runs print.
 
 ```sh
-# 1. From the sweet spot, aimed at the painted key (the collar, not the canvas centre):
-#    by frame 60 the key floats in front of the canvas; E at 60 takes it. Expect
-#    `[grab] picked up object #30 at 2.27 units, p_scale 1.00` (--log-level debug) and
-#    the key in hand at (996.76, 1.35, 1.98), in front of the picture at scale 1.06.
-daydreams --windowed --mute --scene 16 --pos 994.4,1.5,1.55 --yaw -100.4 --pitch -3.7 --e-at 60 --frames 90 --shot take.bmp
+# 1. From the sweet spot, aimed at the painted key (the collar, not the canvas centre): the
+#    key takes EMERGE = 0.5 s to float out of the canvas, so E has to be pressed well past
+#    that. --e-at counts RENDERED frames, and with --no-vsync a frame is under a millisecond,
+#    so 60 of them is 20 ms -- inside the emergence, and whether the crosshair meets a
+#    still-emerging key is then a race (3 hits in 5 at --e-at 60; 5 in 5 at 3000). Expect
+#    `[grab] picked up object #30 at 2.26 units, p_scale 1.00` (--log-level debug).
+daydreams --windowed --mute --scene 16 --pos 994.4,1.5,1.55 --yaw=-100.4 --pitch=-1.3 --e-at 3000 --frames 3200 --shot take.bmp
 # 2. Key in hand at the window, E at 30: `[key] used on the window: unlock requested`; by
 #    frame 60 the glass is clear, the key gone, and the hover says TOO SMALL - GRAB IT AND
 #    STEP BACK.
@@ -1457,7 +1518,7 @@ room impulse, so the shipped audio carries no third-party rights of any kind (TH
 The tool is seeded: regenerating writes byte-identical files, and
 
 ```bash
-python3 tools/gen_sfx.py                    # 47 files, ~6.4 MB, and two contact sheets
+python3 tools/gen_sfx.py                    # 47 files, 5.8 MB, and two contact sheets
 python3 tools/gen_sfx.py --only footstep    # just the sounds whose stem contains that
 ```
 
@@ -1556,6 +1617,14 @@ Everything degrades to a no-op. No audio device, no `assets/` directory, or no f
 engine still starts and runs silently — a demo should not refuse to launch over a missing sound
 file, and the ported engine has no error path to surface one through. `--mute` goes further
 and never opens the device at all.
+
+**What a muted run does not prove.** Under `--mute` there is no `AudioManager`, so `start_music`,
+`stop_music` and everything in `play_set` below the `[sfx]` line return immediately: no crossfade,
+no set-picking, no gain or rate wobble, no kira call. Every run this project makes is muted, so
+those paths have never executed in a run — what a run proves is which track was selected, which
+call sites fired and which set each footfall resolved to. The pure halves (`pick`, `jitter`,
+`next_rand`, `Surface::footsteps`, `load_sets`) are covered by tests instead, and every shipped
+file is decoded by one of them, with no output device involved.
 
 ## Settings — `ext/settings.rs`
 
@@ -1893,10 +1962,10 @@ for a clip time of `openness x T_OPEN`, where `T_OPEN` is the clip's widest mome
 at load by sampling it, so closing is the opening curve played backwards. Collision is two
 triangle meshes: the cabin (floor, sill, walls, ceiling, slab) always; the shut leaves on a
 helper object (`ElevatorDoors`) offered only while the doors are less than half open. The
-fade, the E press, the four sounds of a ride (queued through `audio::request`) and the
-arrival are ambient channels (thread-locals, as `ext::view`'s uniforms are), because nothing in the object vector
-survives the load and nothing in it can reach the engine's HUD or input; the hint goes through
-the shared line every prompt uses (`ext/hint.rs`), set each step the offer stands.
+fade, the E press, the four sounds of a ride (queued through `audio::request`) and the arrival
+are ambient channels (thread-locals, as `ext::view`'s uniforms are), because nothing in the
+object vector survives the load and nothing in it can reach the engine's HUD or input; the hint
+goes through the shared line every prompt uses (`ext/hint.rs`), set each step the offer stands.
 
 **Floors.** `elevator::FLOORS` lists the levels an elevator stops at, in riding order, by their
 registry name (`scenes::index_of`); a floor whose scene is not registered is skipped with one
@@ -2269,7 +2338,8 @@ player walked — or, with `--forward --sprint`, ran — in the frames before th
 shot itself shows the sprint's 68° projection. `--strafe --sprint` covers the same ground as
 `--strafe` alone: a sidestep never sprints. `--jump-at N` presses Space on rendered frame N — held
 for thirty frames, which is one jump however few fixed steps a headless frame turns out to run,
-and far short of the 0.71 s a jump is in the air, so it can never be two — and at `--log-level debug`
+and short of the 0.71 s a jump is in the air at 60 fps or faster, so it is one hop rather than
+two — and at `--log-level debug`
 the `[jump] launched at` / `[jump] landed at` pair prints both ends of the arc, which is how a
 running jump's range is measured (a screenshot can only show one point of it). `[load] scene N in
 M ms` is printed on every scene load. The numbers in [Load time and frame cost](#load-time-and-frame-cost) are
@@ -2284,7 +2354,7 @@ parsing, so a double-clicked bundle starts clean.
 `daydreams gen-terrain` is the one subcommand: it rewrites `Meshes/meadow_tile.obj` under the
 asset root from `ext::terrain::height` and exits (see [Meadow](#meadow-grass-and-clouds-scene-)).
 
-Thirteen flags are hidden from `--help` because they are tools rather than features: `--panic-test`
+Fourteen flags are hidden from `--help` because they are tools rather than features: `--panic-test`
 (the crash dialog, below), `--view-glb PATH` with `--view-translucent NAMES` (a scene of one
 model, see [glTF loader](#gltf-loader)), `--arrive` and `--ride-at FRAME` (with `--scene`:
 load it as an elevator ride would, and press E once on that frame; see
@@ -2297,10 +2367,10 @@ keyboard would -- the press slot, seen by the frame's first fixed step and latch
 grab; see
 [The key in the painting](#the-key-in-the-painting--extkeyrs-extpaintingrs-shaderspaintingfrag)),
 `--jump-at FRAME` (with `--scene`: hold Space from that frame; see
-[Jumping](#jumping--extjumprs)), and `--stow-at FRAMES` / `--drop-at FRAMES` (with `--scene`:
-press F and G on each frame they name -- `--stow-at 60,120` -- the same way, so a stow, the
-retrieve after it and a put-down can be driven headlessly; see
-[Inventory](#inventory--extinventoryrs)).
+[Jumping](#jumping--extjumprs)), and `--stow-at FRAMES` / `--drop-at FRAMES` / `--wheel-at
+FRAMES` (with `--scene`: press F and G, and roll the wheel one notch toward you, on each frame
+they name -- `--stow-at 60,120` -- the same way, so a stow, the retrieve after it, a put-down and
+a change of slot can be driven headlessly; see [Inventory](#inventory--extinventoryrs)).
 `--view-glb` excludes `--scene`; its path is taken under the working directory when a file is
 there, under the asset root otherwise.
 

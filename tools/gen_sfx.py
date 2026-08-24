@@ -1097,10 +1097,13 @@ def check(stem: str, m: dict, dur: tuple[float, float], centroid: tuple[float, f
     if rms_db is not None:
         band("RMS dBFS", m["rms_db"], *rms_db)
     if seam is not None:
-        # Either the wrap is inaudibly small outright, or it is no bigger than the steps the
-        # signal takes between adjacent samples everywhere else -- in which case there is
-        # nothing at the wrap to hear.
-        band("wrap step", m["seam"], 0.0, max(seam, m["step_p99"]))
+        # The wrap has to be inaudible outright AND no bigger than the steps the signal takes
+        # between adjacent samples everywhere else. The looser of the two was the gate here at
+        # first, which for a noisy loop degenerates: 19-overgrown's p99 step is -13.3 dBFS, so
+        # max() would have passed a 21%-of-full-scale discontinuity at the join -- an
+        # unmistakable click. Both bounds are reported so a failure says which one bit.
+        band("wrap step vs limit", m["seam"], 0.0, seam)
+        band("wrap step vs p99", m["seam"], 0.0, max(m["step_p99"], 1e-6))
     return faults
 
 

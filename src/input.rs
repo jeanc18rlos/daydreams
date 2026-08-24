@@ -102,12 +102,19 @@ impl Input {
     // a trackpad's two-finger scroll in pixels; both arrive here as notches, so nothing
     // downstream has to know which device it was. Horizontal scroll is dropped: nothing reads
     // it, and a trackpad's diagonal flick would otherwise change the selected slot sideways.
-    pub fn add_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
-        /// Trackpad pixels per notch, at winit's logical-pixel scale.
+    //
+    // `scale` is the window's scale factor. `PixelDelta` carries PHYSICAL pixels, so on a retina
+    // panel the same flick of the same fingers arrives twice as large as it does on an external
+    // 1x monitor; dividing by the scale is what makes the gesture, rather than the display, decide
+    // how many slots go by.
+    pub fn add_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta, scale: f32) {
+        /// Trackpad pixels per notch, at the window's logical-pixel scale.
         const PIXELS_PER_NOTCH: f32 = 40.0;
         self.wheel += match delta {
             winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-            winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32 / PIXELS_PER_NOTCH,
+            winit::event::MouseScrollDelta::PixelDelta(p) => {
+                p.y as f32 / (PIXELS_PER_NOTCH * scale.max(0.1))
+            }
         };
     }
 
@@ -310,13 +317,17 @@ mod tests {
         use winit::event::MouseScrollDelta;
         let mut i = Input::new();
         assert_eq!(i.wheel, 0.0);
-        i.add_mouse_wheel(MouseScrollDelta::LineDelta(0.0, 1.0));
-        i.add_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
-        assert!((i.wheel + 2.0).abs() < 1e-6);
-        // A trackpad's pixels: 40 of them are one notch, and its horizontal half is dropped.
+        i.add_mouse_wheel(MouseScrollDelta::LineDelta(0.0, 1.0), 1.0);
+        i.add_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0), 1.0);
+        assert!((i.wheel + 2.0).abs() < 1e-6, "a mouse's lines are notches, whatever the display");
+        // A trackpad's pixels: 40 logical ones are one notch, and its horizontal half is dropped.
         i.wheel = 0.0;
-        i.add_mouse_wheel(MouseScrollDelta::PixelDelta(PhysicalPosition::new(500.0, 20.0)));
+        i.add_mouse_wheel(MouseScrollDelta::PixelDelta(PhysicalPosition::new(500.0, 20.0)), 1.0);
         assert!((i.wheel - 0.5).abs() < 1e-6);
+        // The same gesture on a retina panel arrives twice as large and must spend the same.
+        i.wheel = 0.0;
+        i.add_mouse_wheel(MouseScrollDelta::PixelDelta(PhysicalPosition::new(500.0, 40.0)), 2.0);
+        assert!((i.wheel - 0.5).abs() < 1e-6, "physical pixels, divided by the scale factor");
         i.end_frame();
         assert_eq!(i.wheel, 0.0, "an edge, not a level");
     }

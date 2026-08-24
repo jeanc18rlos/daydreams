@@ -191,6 +191,12 @@ impl Inventory {
         self.selected
     }
 
+    /// Whether every slot is empty. The HUD asks: an empty row is worth drawing only where one
+    /// of the keys could do something (`grab::any_grabbable`).
+    pub fn is_empty(&self) -> bool {
+        self.slots.iter().all(Option::is_none)
+    }
+
     /// What the HUD prints, in slot order.
     pub fn labels(&self) -> [Option<&'static str>; CAPACITY] {
         std::array::from_fn(|i| self.slots[i].as_ref().map(|s| s.label))
@@ -248,8 +254,10 @@ impl Inventory {
         log::debug!("[inv] refused: {text}");
     }
 
-    /// Keep a live refusal on the hint line. `insist` rather than `set`: it is about what the
-    /// player just tried to do, which outranks whatever the crosshair happens to be on
+    /// Keep a live refusal on the hint line. `notice` rather than `set`: it is about what the
+    /// player just tried to do, which outranks whatever the crosshair happens to be on. And not
+    /// `insist`, which is reserved for what the thing in the hand can do -- a refusal there would
+    /// blank "E  USE THE KEY" for [`NOTICE_SECS`] and read as the key having stopped working
     /// (`ext/hint.rs`).
     fn show_notice(&mut self) {
         let Some((text, at)) = self.notice else { return };
@@ -257,7 +265,7 @@ impl Inventory {
             self.notice = None;
             return;
         }
-        hint::insist(text);
+        hint::notice(text);
     }
 
     /// Put the object in hand into the first free slot.

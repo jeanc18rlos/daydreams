@@ -528,10 +528,13 @@ impl ApplicationHandler for App {
 
             // EXT: no C++ counterpart -- the original reads no wheel at all. It picks the
             // inventory's slot (src/ext/inventory.rs); `Input::add_mouse_wheel` turns either of
-            // winit's two shapes into notches.
+            // winit's two shapes into notches. The window's scale factor goes with it because
+            // winit's `PixelDelta` is in PHYSICAL pixels: without it a trackpad flick spends
+            // twice as many notches on a retina panel as on an external 1x monitor.
             WindowEvent::MouseWheel { delta, .. } => {
+                let scale = self.state.as_ref().map_or(1.0, |s| s.window.scale_factor() as f32);
                 if let Some(engine) = self.engine.as_ref() {
-                    engine.input().borrow_mut().add_mouse_wheel(delta);
+                    engine.input().borrow_mut().add_mouse_wheel(delta, scale);
                 }
             }
 

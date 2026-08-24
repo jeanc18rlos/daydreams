@@ -653,20 +653,59 @@ def register_crops(entry, base, ref, pieces):
         a = p.rgba[..., 3] / 255.0
         gain = match_colour(p, base, 4.0 * a * (1 - a))
         print(f"  {name}: at ({p.at[0]}, {p.at[1]}) on the base, gain {np.round(gain, 3)}")
-    # The table ships the CENTRE crop's eye openings and the warp uses them for both eye
-    # variants, so the left crop has to put its own openings on the same base pixels. It does
-    # by construction where it borrows the centre's `framing`; where it is registered on its
-    # own -- a sheet whose crops are separate renderings of the face -- this is the number to
-    # watch, and the opening's own radius is as far as it may drift before the warp starts
-    # sliding a lid instead of an iris.
+    check_eye_drift(pieces)
+
+
+# The shader's iris warp carries a pixel at radius r of the opening by
+# `1 - smoothstep(IRIS_CORE, 1, r)`, so a pixel inside IRIS_CORE follows the gaze in full and
+# one at the rim does not move at all. This is that constant, kept in step with painting.frag.
+IRIS_CORE = 0.35
+
+
+def check_eye_drift(pieces):
+    """How far the left-looking crop puts each eye opening from where the centre crop puts it.
+
+    The table ships the CENTRE crop's openings and `painting.frag` warps BOTH eye variants with
+    them, so a left crop registered on its own -- a sheet whose panels are separate renderings of
+    the face rather than cuts of one master -- can put its iris somewhere the shipped ellipse is
+    not. Beyond the opening's own radius the warp would be sliding a lid; well before that it is
+    already sliding less of the iris than intended, which is what a drift past `IRIS_CORE` means
+    and what the WARNING below says out loud.
+
+    THE SHIPPED CAVALIER IS IN THAT BAND, and this is where it is recorded rather than hidden:
+    his right eye's left-looking opening sits 3.6 px below the centre's against a vertical radius
+    of 4.68 base px, 77 % of it, so at the far-left viewing stations that iris follows at roughly
+    a quarter of the intended offset. It is 2.6 base px of slide on a 469 px base -- not visible
+    at play distance, photographed at 50 degrees off-normal and clean -- and correcting it
+    properly means per-variant openings in the atlas and a second `eye` uniform, which is a
+    shader change this sheet does not justify. The hard failure stays at the full radius, where
+    the warp would start moving the wrong thing altogether.
+    """
     for side in (0, 1):
-        c, left = pieces[f"eyes_center_{'lr'[side]}"], pieces[f"eyes_left_{'lr'[side]}"]
+        names = [f"eyes_{v}_{'lr'[side]}" for v in ("center", "left")]
+        if not all(n in pieces for n in names):
+            # A sheet that did not split its eye crops at the nose names them without the
+            # suffix; there is then one opening per variant and nothing to compare.
+            continue
+        c, left = pieces[names[0]], pieces[names[1]]
         opening = lambda p: (p.at[0] + p.eye[0] * p.scale, p.at[1] + p.eye[1] * p.scale)
         (cx, cy), (lx, ly) = opening(c), opening(left)
-        print(f"  eye {side}: the left crop's opening is ({lx - cx:+.1f}, {ly - cy:+.1f}) px off the centre's")
-        assert abs(lx - cx) < c.eye[2] * c.scale and abs(ly - cy) < c.eye[3] * c.scale, (
-            f"{left.name}: the eye variants disagree about where the opening is"
+        rx, ry = c.eye[2] * c.scale, c.eye[3] * c.scale
+        fx, fy = abs(lx - cx) / max(rx, 1e-6), abs(ly - cy) / max(ry, 1e-6)
+        print(
+            f"  eye {side}: the left crop's opening is ({lx - cx:+.1f}, {ly - cy:+.1f}) px off "
+            f"the centre's -- {fx:.0%} and {fy:.0%} of the opening's own radii"
         )
+        if max(fx, fy) >= 1.0:
+            raise SystemExit(
+                f"{left.name}: the eye variants disagree about where the opening is by a whole "
+                f"radius ({fx:.0%}, {fy:.0%}); the warp would slide a lid, not an iris"
+            )
+        if max(fx, fy) > IRIS_CORE:
+            print(
+                f"  WARNING  {left.name}: that drift is past IRIS_CORE ({IRIS_CORE:.0%}), so the "
+                f"left-looking variant's iris follows the gaze only partly. See check_eye_drift."
+            )
 
 
 def whole_tile(pieces, name):

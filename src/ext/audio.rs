@@ -660,11 +660,6 @@ impl Audio {
     pub fn set_sfx_volume(&mut self, v: f32) {
         self.sfx_volume = v.clamp(0.0, 1.0);
     }
-
-    /// How many assets were actually found -- used for the startup banner.
-    pub fn inventory(&self) -> (usize, usize) {
-        (self.music_files.len() + usize::from(self.fallback_music.is_some()), self.sets.len())
-    }
 }
 
 /// Convert a 0..1 linear fader position to decibels, with 0 mapping to silence.

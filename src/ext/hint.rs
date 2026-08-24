@@ -25,14 +25,23 @@
 //! -- but the grab sets the window's line once per rendered frame, AFTER the fixed steps in
 //! which the key set its. So a second slot, [`insist`], outranks [`set`] whatever the order:
 //! what the thing in your hand can do beats what the thing under the crosshair is.
+//!
+//! A third slot sits between them. [`notice`] is for a line about what the player just *tried*
+//! -- the inventory's "POCKETS FULL" and its two siblings, which stay up for a second and a half
+//! because a key press is over in a frame. It beats a description of whatever the crosshair is
+//! on, and loses to the prompt for the thing in the hand: an action still available outranks an
+//! explanation of one that was not, and a refusal that blanked "E  USE THE KEY" for 1.6 s would
+//! read as the key having stopped working.
 
 use std::cell::RefCell;
 
 thread_local! {
     /// The hint set since the last take, if any.
     static HINT: RefCell<Option<String>> = const { RefCell::new(None) };
-    /// The insisted hint since the last take, if any; shown in preference to `HINT`.
+    /// The insisted hint since the last take, if any; shown in preference to `NOTICE` and `HINT`.
     static INSISTED: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// The noticed hint since the last take, if any; between the two.
+    static NOTICE: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// Offer a hint line for this frame. A later call before the frame's [`take`] replaces it.
@@ -46,12 +55,20 @@ pub fn insist(text: impl Into<String>) {
     INSISTED.with(|h| *h.borrow_mut() = Some(text.into()));
 }
 
-/// The hint for this frame, consumed -- the insisted one if there is one, else the set one;
-/// both slots are emptied. Called by the engine's overlay block once per rendered frame; a
-/// second call in the same frame gets `None`.
+/// Offer a hint line that outranks a plain [`set`] but yields to an [`insist`]: a line about what
+/// the player just tried and could not do (see the module docs). A later `notice` replaces an
+/// earlier one.
+pub fn notice(text: impl Into<String>) {
+    NOTICE.with(|h| *h.borrow_mut() = Some(text.into()));
+}
+
+/// The hint for this frame, consumed -- the insisted one if there is one, then a notice, then the
+/// set one; all three slots are emptied. Called by the engine's overlay block once per rendered
+/// frame; a second call in the same frame gets `None`.
 pub fn take() -> Option<String> {
     let plain = HINT.with(|h| h.borrow_mut().take());
-    INSISTED.with(|h| h.borrow_mut().take()).or(plain)
+    let notice = NOTICE.with(|h| h.borrow_mut().take());
+    INSISTED.with(|h| h.borrow_mut().take()).or(notice).or(plain)
 }
 
 #[cfg(test)]
@@ -80,5 +97,25 @@ mod tests {
         // With nothing insisted, a set line shows as before.
         set("LOCKED");
         assert_eq!(take().as_deref(), Some("LOCKED"));
+    }
+
+    /// A notice sits between the two, in either order, and every slot is emptied by one take.
+    #[test]
+    fn a_notice_beats_a_set_line_and_loses_to_an_insisted_one() {
+        set("LOCKED");
+        notice("POCKETS FULL");
+        assert_eq!(take().as_deref(), Some("POCKETS FULL"));
+        assert_eq!(take(), None);
+
+        notice("POCKETS FULL");
+        insist("E  USE THE KEY");
+        assert_eq!(take().as_deref(), Some("E  USE THE KEY"), "the key must not go dark");
+        assert_eq!(take(), None, "and the outranked notice does not show a frame later");
+
+        insist("E  USE THE KEY");
+        notice("POCKETS FULL");
+        set("LOCKED");
+        assert_eq!(take().as_deref(), Some("E  USE THE KEY"), "whichever order they came in");
+        assert_eq!(take(), None);
     }
 }

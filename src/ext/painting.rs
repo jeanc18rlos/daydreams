@@ -148,6 +148,40 @@ const GAZE_MIN_Z: f32 = 0.05;
 /// move together.
 pub const MAX_PIECES: usize = 16;
 
+/// Pack a portrait's seven variants into the flat uniform arrays `painting.frag` reads: the four
+/// eye rects at indices 0..4, then each mouth variant's pieces end to end, with `mouth_bounds`
+/// fencing them (`mouth_bounds[v]..mouth_bounds[v+1]` is variant `v`'s run).
+///
+/// Pulled out of `Painting::new` so it can be run without a GL context. Every shipped sitter cuts
+/// exactly one piece per variant, so without a test the multi-piece path -- the reason
+/// [`MAX_PIECES`] is 16 and the reason the shader loops over a fence rather than reading one
+/// rect -- would never execute with more than one piece anywhere, in production or in the suite.
+fn pack_parts(
+    portrait: &crate::ext::portrait_atlas::Portrait,
+) -> ([f32; 4 * MAX_PIECES], [f32; 4 * MAX_PIECES], [f32; 4]) {
+    let mut part_atlas = [0.0; 4 * MAX_PIECES];
+    let mut part_place = [0.0; 4 * MAX_PIECES];
+    let mut fill = |i: usize, part: &crate::ext::portrait_atlas::Part| {
+        part_atlas[4 * i..4 * i + 4].copy_from_slice(&part.atlas);
+        part_place[4 * i..4 * i + 4].copy_from_slice(&part.place);
+    };
+    for (i, variant) in portrait.parts[..4].iter().enumerate() {
+        assert_eq!(variant.len(), 1, "{}: an eye variant is one piece", portrait.name);
+        fill(i, &variant[0]);
+    }
+    let mut mouth_bounds = [4.0; 4];
+    let mut idx = 4;
+    for (v, variant) in portrait.parts[4..].iter().enumerate() {
+        for part in variant.iter() {
+            assert!(idx < MAX_PIECES, "{}: too many pieces", portrait.name);
+            fill(idx, part);
+            idx += 1;
+        }
+        mouth_bounds[v + 1] = idx as f32;
+    }
+    (part_atlas, part_place, mouth_bounds)
+}
+
 /// The three faces a portrait cycles through while unobserved ([`Expression`]): the mouth
 /// each one wears and whether the eyes have turned to the left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -793,26 +827,7 @@ impl Painting {
             bar(Vector3::new(0.0, -0.5 * h, z), rail, roll, 0.0),
         ];
 
-        let mut part_atlas = [0.0; 4 * MAX_PIECES];
-        let mut part_place = [0.0; 4 * MAX_PIECES];
-        let mut fill = |i: usize, part: &crate::ext::portrait_atlas::Part| {
-            part_atlas[4 * i..4 * i + 4].copy_from_slice(&part.atlas);
-            part_place[4 * i..4 * i + 4].copy_from_slice(&part.place);
-        };
-        for (i, variant) in portrait.parts[..4].iter().enumerate() {
-            assert_eq!(variant.len(), 1, "{}: an eye variant is one piece", portrait.name);
-            fill(i, &variant[0]);
-        }
-        let mut mouth_bounds = [4.0; 4];
-        let mut idx = 4;
-        for (v, variant) in portrait.parts[4..].iter().enumerate() {
-            for part in variant.iter() {
-                assert!(idx < MAX_PIECES, "{}: too many pieces", portrait.name);
-                fill(idx, part);
-                idx += 1;
-            }
-            mouth_bounds[v + 1] = idx as f32;
-        }
+        let (part_atlas, part_place, mouth_bounds) = pack_parts(portrait);
         let mut eyes = [0.0; 8];
         eyes[..4].copy_from_slice(&portrait.eyes[0]);
         eyes[4..].copy_from_slice(&portrait.eyes[1]);
@@ -1116,6 +1131,47 @@ mod tests {
     /// piece with its eye's opening inside it, the pieces fit the shader's arrays, and on
     /// the base an eye piece never overlaps a mouth piece (an eye and a mouth really are
     /// summed; everything else crossfades, partitions or composites over).
+    /// The multi-piece mouth path, which no shipped sitter uses: a two-piece variant has to be
+    /// packed end to end and fenced by `mouth_bounds`, and the fences have to say where each
+    /// variant's run starts and stops. Without this the packing loop and the shader's fence run
+    /// with exactly one iteration everywhere, and a regression in either would ship unseen.
+    #[test]
+    fn a_mouth_of_several_pieces_is_packed_and_fenced() {
+        use crate::ext::portrait_atlas::{Part, Portrait};
+        const EYE: &[Part] = &[Part { atlas: [0.0, 0.0, 0.1, 0.1], place: [0.1, 0.1, 0.1, 0.1] }];
+        // A moustache each side of a mouth: two pieces in one variant, one in the others.
+        const PAIR: &[Part] = &[
+            Part { atlas: [0.2, 0.0, 0.1, 0.1], place: [0.3, 0.5, 0.1, 0.1] },
+            Part { atlas: [0.3, 0.0, 0.1, 0.1], place: [0.5, 0.5, 0.1, 0.1] },
+        ];
+        const ONE: &[Part] = &[Part { atlas: [0.4, 0.0, 0.1, 0.1], place: [0.4, 0.5, 0.2, 0.1] }];
+        let sitter = Portrait {
+            name: "test",
+            base: "",
+            parts_texture: "",
+            base_size: (1, 1),
+            parts_size: (1, 1),
+            parts: [EYE, EYE, EYE, EYE, PAIR, ONE, ONE],
+            eyes: [[0.3, 0.4, 0.02, 0.01], [0.4, 0.4, 0.02, 0.01]],
+        };
+        let (atlas, place, bounds) = pack_parts(&sitter);
+        // Four eyes, then two smile pieces, then one sad, then one angry: eight in all.
+        assert_eq!(bounds, [4.0, 6.0, 7.0, 8.0], "each variant's run, end to end");
+        for (v, expected) in [PAIR, ONE, ONE].iter().enumerate() {
+            let (from, to) = (bounds[v] as usize, bounds[v + 1] as usize);
+            assert_eq!(to - from, expected.len(), "variant {v} lost or gained a piece");
+            for (k, part) in expected.iter().enumerate() {
+                let i = 4 * (from + k);
+                assert_eq!(&atlas[i..i + 4], &part.atlas, "variant {v} piece {k} atlas rect");
+                assert_eq!(&place[i..i + 4], &part.place, "variant {v} piece {k} placement");
+            }
+        }
+        // The eye slots are untouched by the mouths, and everything past the last piece is zero.
+        assert_eq!(&atlas[..4], &EYE[0].atlas);
+        assert!(atlas[4 * 8..].iter().all(|&f| f == 0.0), "unused slots stay clear");
+        assert!(*bounds.last().unwrap() as usize <= MAX_PIECES);
+    }
+
     #[test]
     fn the_portrait_atlas_is_consistent() {
         use crate::ext::portrait_atlas::{PART_ORDER, PORTRAITS};

@@ -38,8 +38,10 @@ use crate::timer::Timer;
 /// A headless frame is well under the 2 ms step, so most of them run no fixed steps at all and a
 /// one-frame press can fall entirely between two steps -- ten frames was not always enough, and a
 /// jump that silently did not happen is a worse dev tool than none. Thirty is 24 ms at headless
-/// speed and half a second at 60 Hz, either way short of the 0.71 s a jump is in the air, so the
-/// hold can never become a second hop.
+/// speed and half a second at 60 Hz, short of the 0.71 s a jump is in the air at 60 fps or faster,
+/// so the hold is one hop and not two. Below about 42 fps thirty frames outlast the flight and the
+/// jump is a level with a buffer, so it would hop again on touchdown -- the flag is dev tooling
+/// for headless runs, where a frame is a millisecond.
 const DEV_JUMP_FRAMES: i32 = 30;
 
 pub struct Engine {
@@ -120,10 +122,17 @@ pub struct Engine {
     // show -- stow it, take it out, put it down -- is more than one press of each.
     dev_stow_at: RefCell<Vec<i32>>,
     dev_drop_at: RefCell<Vec<i32>>,
+    // EXT: dev tooling -- `--wheel-at N,M`: the same list, one wheel notch toward the player on
+    // each frame it names. The wheel is not a key, so it is added to `Input::wheel` rather than
+    // to a `key_press` slot; everything downstream of that is the real path.
+    dev_wheel_at: RefCell<Vec<i32>>,
     // EXT: this frame's inventory input (F, G, the wheel), latched at the top of run_frame
     // before the fixed-step loop's `Input::end_frame` clears the edges, and consumed by
     // `ext_update` (src/ext/inventory.rs).
     inv_edges: Cell<crate::ext::inventory::Edges>,
+    // EXT: whether this scene holds anything the grab could pick up, asked once per load. The
+    // HUD's inventory row is drawn on that (src/ext/grab.rs, `any_grabbable`).
+    scene_has_grabbable: Cell<bool>,
     // EXT: this frame's gamepad edges, handed in by main.rs before run_frame.
     pad_events: Cell<crate::ext::gamepad::PadEvents>,
     // EXT: dev tooling -- wall time per rendered frame, reported on the `[shot]` line.
@@ -249,7 +258,9 @@ impl Engine {
             dev_jump_hold: Cell::new(-1),
             dev_stow_at: RefCell::new(Vec::new()),
             dev_drop_at: RefCell::new(Vec::new()),
+            dev_wheel_at: RefCell::new(Vec::new()),
             inv_edges: Cell::new(crate::ext::inventory::Edges::default()),
+            scene_has_grabbable: Cell::new(false),
             pad_events: Cell::new(crate::ext::gamepad::PadEvents::default()),
             frame_clock: RefCell::new(crate::ext::frametime::FrameClock::new()),
             occlusion: RefCell::new(crate::ext::occlusion::Occlusion::new(gl)),
@@ -350,6 +361,10 @@ impl Engine {
             if dev_press_due(left) {
                 self.input.borrow_mut().key_press[slot] = true;
             }
+        }
+        // EXT: and `--wheel-at` is one notch toward the player -- the next slot along the row.
+        if dev_press_due(&self.dev_wheel_at) {
+            self.input.borrow_mut().wheel -= 1.0;
         }
         // EXT: and the dev frame-time record. Ticked here, at the top, so one interval spans a
         // whole frame including the swap main.rs does after run_frame returns.
@@ -587,12 +602,17 @@ impl Engine {
             ext.ui.begin(i_width, i_height);
             crate::ext::hud::draw(&ext.ui, cursor);
             // The inventory's slots, along the bottom (src/ext/inventory.rs). Only here, so it
-            // is never drawn over a menu.
-            crate::ext::hud::draw_inventory(
-                &ext.ui,
-                &ext.inventory.labels(),
-                ext.inventory.selected(),
-            );
+            // is never drawn over a menu -- and only where one of its keys could ever do
+            // something: the fifteen ported NonEuclidean scenes hold nothing grabbable, and they
+            // are not given permanently empty chrome for a mechanic they have not got. The row
+            // comes back the moment anything is in a slot, however the player arrived there.
+            if self.scene_has_grabbable.get() || !ext.inventory.is_empty() {
+                crate::ext::hud::draw_inventory(
+                    &ext.ui,
+                    &ext.inventory.labels(),
+                    ext.inventory.selected(),
+                );
+            }
             // This frame's prompt, whoever offered it (src/ext/hint.rs), and the elevator's
             // black-out between floors (src/ext/elevator.rs); the black goes over the cursor
             // too.
@@ -648,6 +668,7 @@ impl Engine {
             jump_at,
             stow_at,
             drop_at,
+            wheel_at,
         } = run;
         *self.dev_hold.borrow_mut() = hold;
         self.dev_ride_at.set(ride_at);
@@ -655,6 +676,7 @@ impl Engine {
         self.dev_jump_at.set(jump_at);
         *self.dev_stow_at.borrow_mut() = stow_at;
         *self.dev_drop_at.borrow_mut() = drop_at;
+        *self.dev_wheel_at.borrow_mut() = wheel_at;
         if let Some(scene) = scene {
             self.ext.borrow_mut().menu.close();
             if arrive {
@@ -957,6 +979,9 @@ impl Engine {
         // (src/ext/physics.rs): the object list is complete now, and the old scene's props,
         // still alive below, unregister themselves when it is dropped.
         crate::ext::physics::rebuild_static(&self.v_objects.borrow());
+        // EXT: and whether anything here can be picked up at all, which is what decides if the
+        // inventory row is drawn (src/ext/grab.rs).
+        self.scene_has_grabbable.set(crate::ext::grab::any_grabbable(&self.v_objects.borrow()));
 
         // EXT: drop anything being carried (the object vector was just replaced, so a held
         // index would dangle) and cross-fade to this scene's music.

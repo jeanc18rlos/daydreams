@@ -13,10 +13,14 @@
 //!
 //! # The numbers, and where they come from
 //!
-//! **Apex [`APEX`] = 0.62 m.** High enough to step up onto the Backrooms' low furniture and over
-//! the pool room's kerbs, and less than a third of the 2.43 m ceilings, so no jump anywhere in
-//! the game can put the player's head through one. The impulse is *derived* from it (see
-//! [`impulse`]) rather than tuned by hand, so moving the apex moves the jump and nothing else.
+//! **Apex [`APEX`] = 0.62 m.** Sized to step onto low furniture and over a kerb, and less than a
+//! third of the 2.43 m ceilings, so no jump anywhere in the game can put the player's head
+//! through one. Design intent, not a demonstration: **no surface in the shipped scenes has been
+//! hopped onto**. Scene 16's one step-height seat is an armchair at 0.59 m whose arms and back
+//! stand at 0.82 m, above the apex, so it cannot be entered from the carpet; scene 17's floor is
+//! flat everywhere probed, its one feature being the pool basin, a 1.19 m drop the jump cannot
+//! climb back out of. The impulse is *derived* from the apex (see [`impulse`]) rather than tuned
+//! by hand, so moving the apex moves the jump and nothing else.
 //!
 //! **Coyote time [`COYOTE_TIME`] = 0.12 s.** A jump pressed within that long after walking off an
 //! edge still fires. Players press jump when they see the edge arrive, not when their feet leave
@@ -34,8 +38,11 @@
 //! floor they were four hundredths of a millimetre inside, and the collision pass finds nothing.
 //! It earns its keep where the player cannot rise: a jump taken under something low enough to
 //! bonk a head on. 25 steps is short enough that no real landing can hide inside it -- the
-//! shortest flight is 0.71 s -- and long enough that a bonk cannot chain into a second impulse on
-//! the way back down.
+//! shortest flight is 0.71 s -- and long enough that a bonk cannot chain into a second impulse
+//! from the same press. A button *held* through a bonk does chain, at 25-step intervals, which is
+//! the same rule as a button held through a landing (below) and is not reachable in the shipped
+//! scenes anyway: the lowest ceiling is 2.43 m against an eye at 1.5, the 0.62 m apex and the
+//! player's 0.2 m radius.
 //!
 //! # Why the button is a level and not an edge
 //!
@@ -157,8 +164,6 @@ pub struct Jump {
     lockout: f32,
     /// The button must be seen released before it counts again. See [`Jump::ignore_until_release`].
     blocked: bool,
-    /// Whether the player was off the ground going into this step; see [`Jump::airborne`].
-    airborne: bool,
 }
 
 impl Jump {
@@ -166,13 +171,7 @@ impl Jump {
     /// rather than zero: a fresh zero reads as "pressed this instant" and would launch the
     /// player on the first step of the level.
     pub fn new() -> Jump {
-        Jump {
-            since_ground: 0.0,
-            since_press: STALE,
-            lockout: 0.0,
-            blocked: false,
-            airborne: false,
-        }
+        Jump { since_ground: 0.0, since_press: STALE, lockout: 0.0, blocked: false }
     }
 
     /// One fixed step. `on_ground` is the player's flag as the step begins -- which is to say the
@@ -180,8 +179,9 @@ impl Jump {
     /// level from either instrument. Returns true on the step the impulse should be applied.
     pub fn step(&mut self, on_ground: bool, pressed: bool) -> bool {
         self.lockout = (self.lockout - GH_DT).max(0.0);
-        self.airborne = !on_ground || self.lockout > 0.0;
-        self.since_ground = if self.airborne { stale(self.since_ground + GH_DT) } else { 0.0 };
+        // Off the ground, or inside the lockout, which is the floor they have not left yet.
+        let airborne = !on_ground || self.lockout > 0.0;
+        self.since_ground = if airborne { stale(self.since_ground + GH_DT) } else { 0.0 };
 
         // A blocked button is not "not pressed": it has to go up before it can come down again.
         if !pressed {
@@ -197,7 +197,6 @@ impl Jump {
             self.since_press = STALE;
             self.since_ground = STALE;
             self.lockout = LAUNCH_LOCKOUT;
-            self.airborne = true;
             return true;
         }
         false

@@ -303,8 +303,10 @@ impl Menu {
         }
         // EXT: the menu's three sounds. This whole function is skipped on the frame a menu
         // opens (`Engine::run_frame`), so opening one is silent and the first tick a player
-        // hears is a row they moved to themselves.
-        if nav.up || nav.down {
+        // hears is a row they moved to themselves. Fired on a selection that actually moved, the
+        // same rule the left/right branch below keeps: a one-row screen has nowhere to go, and
+        // the modulo above would leave it where it was.
+        if (nav.up || nav.down) && n > 1 {
             audio::request(Sfx::UiMove);
         }
         // Left/right belong to whichever value row the selection is on; everywhere else they
