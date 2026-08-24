@@ -555,8 +555,19 @@ impl ApplicationHandler for App {
         // EXT: poll the gamepad before the frame runs, so its axes are visible to this frame's
         // fixed-step updates. Polled here rather than in device_event because gilrs keeps its
         // own event queue, independent of winit's.
-        let pad = match self.engine.as_ref() {
-            Some(engine) if !self.args.no_gamepad => {
+        let Some(engine) = self.engine.as_ref() else { return };
+        // EXT: the exit is checked before the pad, not inside it. It used to sit at the end of
+        // the polling block, which `--no-gamepad` skips -- so a headless `--shot` run took its
+        // screenshot, set `quit_requested`, and then ran forever with nobody reading it.
+        if engine.quit_requested() {
+            event_loop.exit();
+            return;
+        }
+        let pad = if self.args.no_gamepad {
+            // EXT: `--no-gamepad` -- the pad is never polled, so no drift, no edges.
+            ext::gamepad::PadEvents::default()
+        } else {
+            {
                 let pad = {
                     let pads = &mut self.gamepads;
                     engine.with_input(|input| pads.poll(input))
@@ -580,15 +591,8 @@ impl ApplicationHandler for App {
                     }
                 }
                 engine.set_pad_events(pad);
-                if engine.quit_requested() {
-                    event_loop.exit();
-                    return;
-                }
                 pad
             }
-            // EXT: `--no-gamepad` -- the pad is never polled, so no drift, no edges.
-            Some(_) => ext::gamepad::PadEvents::default(),
-            None => return,
         };
         // EXT: the pad no longer carries a quit of its own -- it reaches EXIT through the pause
         // menu now (see the binding notes in ext/gamepad.rs). `quit_requested` above is still
@@ -609,8 +613,16 @@ impl ApplicationHandler for App {
         engine.run_frame(self.i_width, self.i_height);
 
         // SwapBuffers(hDC);   (Engine.cpp:125)
-        if let Err(err) = state.gl_surface.swap_buffers(gl_context) {
-            log::error!("swap_buffers failed: {err}");
+        // EXT: except on a `--shot` run, which never presents. The screenshot is read back
+        // out of the back buffer, so nothing has to reach the display -- and not presenting
+        // keeps macOS out of the loop: it throttles an occluded window's flushes to about a
+        // frame a second, which is enough to make an automated run behind another window
+        // look like a hang (every swap parked in NSWaitUntilHostTime). Rendering, physics
+        // and the read-back are untouched; only the presentation is skipped.
+        if self.args.shot.is_none() {
+            if let Err(err) = state.gl_surface.swap_buffers(gl_context) {
+                log::error!("swap_buffers failed: {err}");
+            }
         }
 
         // EXT: `--panic-test` exercises the crash path (src/app/crash.rs) from exactly where
