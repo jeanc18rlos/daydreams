@@ -120,6 +120,20 @@ pub struct Args {
     #[arg(long, hide = true, requires = "scene", value_name = "FRAME")]
     pub e_at: Option<u32>,
 
+    /// With `--scene`: on each of these rendered frames, press F once as the keyboard would --
+    /// stow what is in hand, or take the selected slot's item into it (src/ext/inventory.rs).
+    /// The inventory's `--e-at`, but a list (`--stow-at 60,120`), because the round trip a run
+    /// has to show -- stow it, take it out again -- is two presses. Hidden: dev tooling.
+    #[arg(long, hide = true, requires = "scene", value_name = "FRAMES", value_delimiter = ',')]
+    pub stow_at: Vec<u32>,
+
+    /// With `--scene`: on each of these rendered frames, press G once as the keyboard would --
+    /// put the selected slot's item down in front of the player (src/ext/inventory.rs). The
+    /// only way to drive that binding headlessly, and what shows a retrieved prop's rapier body
+    /// is live again: it lands and rolls. Hidden: dev tooling.
+    #[arg(long, hide = true, requires = "scene", value_name = "FRAMES", value_delimiter = ',')]
+    pub drop_at: Vec<u32>,
+
     /// Panic after the first frame, to exercise the crash dialog. Hidden: it is a test of the
     /// platform layer, not a feature.
     #[arg(long, hide = true)]
@@ -177,6 +191,10 @@ pub struct DirectRun {
     pub hold_key: bool,
     /// The rendered frame on which E is pressed once, as a key press (`--e-at`).
     pub e_at: Option<i32>,
+    /// The rendered frames on which F is pressed once each, as key presses (`--stow-at`).
+    pub stow_at: Vec<i32>,
+    /// The rendered frames on which G is pressed once each, as key presses (`--drop-at`).
+    pub drop_at: Vec<i32>,
 }
 
 /// `--window-scale`'s parser: a scale the grab itself could produce.
@@ -296,6 +314,8 @@ impl Args {
             drop_props: self.drop_props,
             hold_key: self.hold_key,
             e_at: self.e_at.map(count),
+            stow_at: self.stow_at.iter().copied().map(count).collect(),
+            drop_at: self.drop_at.iter().copied().map(count).collect(),
         })
     }
 
@@ -358,6 +378,7 @@ mod tests {
         assert_eq!((run.frames, run.yaw, run.pitch), (120, Some(30.0), Some(-5.0)));
         assert!(run.hold.is_empty() && !run.arrive && run.ride_at.is_none());
         assert!(!run.hold_key && run.e_at.is_none());
+        assert!(run.stow_at.is_empty() && run.drop_at.is_empty());
         // `--shot` alone is a run too: the title screen's photograph.
         let a = Args::try_from_tokens(&["--shot", "title.bmp"]).unwrap();
         let run = a.direct_run().expect("a dev run");
@@ -482,6 +503,24 @@ mod tests {
         let run = a.direct_run().unwrap();
         assert!(run.hold_key && run.e_at == Some(30));
         assert!(Args::try_from_tokens(&["--scene", "16", "--e-at", "-1"]).is_err());
+    }
+
+    #[test]
+    fn stow_at_needs_a_scene_and_takes_a_list() {
+        assert!(Args::try_from_tokens(&["--stow-at", "60"]).is_err());
+        assert!(Args::try_from_tokens(&["--drop-at", "60"]).is_err());
+        let a = Args::try_from_tokens(&["--scene", "16", "--drop-at", "40,80"]).unwrap();
+        assert_eq!(a.direct_run().unwrap().drop_at, [40, 80]);
+        let a = Args::try_from_tokens(&["--scene", "16", "--stow-at", "60"]).unwrap();
+        assert_eq!(a.stow_at, [60]);
+        assert_eq!(a.direct_run().unwrap().stow_at, [60]);
+        // Both spellings of "twice": one flag with a comma, or the flag twice.
+        let a = Args::try_from_tokens(&["--scene", "16", "--stow-at", "60,120"]).unwrap();
+        assert_eq!(a.direct_run().unwrap().stow_at, [60, 120]);
+        let a = Args::try_from_tokens(&["--scene", "16", "--stow-at", "60", "--stow-at", "120"])
+            .unwrap();
+        assert_eq!(a.direct_run().unwrap().stow_at, [60, 120]);
+        assert!(Args::try_from_tokens(&["--scene", "16", "--stow-at", "-1"]).is_err());
     }
 
     #[test]

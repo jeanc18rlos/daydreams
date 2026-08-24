@@ -178,12 +178,14 @@ const CREDITS_BACK_Y: f32 = SUB_LIST_Y + (CREDITS_TEXT.len() as f32 + 1.0) * SMA
 /// `Nav::read`, `Player::update_player` and `Gamepads::poll`, and inventing a binding table
 /// just so this screen could read it would be a large refactor in service of one list. The
 /// cost is that this table is documentation, and goes stale if a binding moves without it.
-const KEYMAP: [(&str, &str, &str); 10] = [
+const KEYMAP: [(&str, &str, &str); 12] = [
     ("MOVE", "W A S D", "LEFT STICK"),
     ("SPRINT", "HOLD SHIFT", "L3 (STICK CLICK) TOGGLES"),
     ("LOOK", "MOUSE", "RIGHT STICK"),
     ("GRAB / RELEASE", "E", "CROSS / SQUARE / R2"),
     ("ROTATE HELD", "HOLD R + MOUSE", "HOLD R1 + RIGHT STICK"),
+    ("STOW / TAKE OUT", "F", "-"),
+    ("PUT DOWN / PICK SLOT", "G / MOUSE WHEEL", "-"),
     ("PAUSE MENU", "ESC", "OPTIONS"),
     ("MENU: MOVE", "ARROWS / W A S D", "D-PAD"),
     ("MENU: CONFIRM", "ENTER / SPACE", "CROSS"),

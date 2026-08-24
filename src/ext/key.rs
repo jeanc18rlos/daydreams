@@ -15,6 +15,11 @@
 //!   painting's to set each step ([`Key::float_at`]), the key runs no physics and
 //!   `engine_collision` is false, so the collision pass never pushes it and the portal pass
 //!   never warps it. The grab can still take it, at any point of the animation.
+//! * **Stowed.** The inventory (`ext/key.rs`'s side of `ext/inventory.rs`) can pocket the key
+//!   and hand it back later, in the same level or another one. What the key has to give up
+//!   for that is its offer on the press channel below -- see `on_stow`; everything else it
+//!   carries (the painting's `taken` flag, its own `me` handle) is its own, not the scene's,
+//!   and comes back with it.
 //! * **In hand and loose.** `on_grab` ends the floating life for good: the shared `taken`
 //!   flag tells the painting its key is gone, physics is on, and the grab carries it. While
 //!   held the key looks down the crosshair, once per rendered frame, for something that
@@ -323,6 +328,23 @@ impl ObjectT for Key {
 
     fn on_release(&mut self, _velocity: Vector3) {
         self.held = false;
+    }
+
+    /// Into a pocket (`ext/inventory.rs`). A stowed key is not in the hand and must not act
+    /// like one: the standing "a lock is in reach" offer and any press already handed over are
+    /// dropped, so the frame's E cannot be claimed by a key that is no longer pointing at
+    /// anything, and the next scan starts from nothing. Coming back out needs no counterpart:
+    /// the retrieve hands the key to the grab, whose `on_grab` restores every one of these.
+    fn on_stow(&mut self) {
+        self.held = false;
+        self.lock_near = false;
+        self.scanned_at = f32::NAN;
+        take_wants_use();
+        take_press();
+    }
+
+    fn stow_label(&self) -> &'static str {
+        "KEY"
     }
 
     fn engine_collision(&self) -> bool {
