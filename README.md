@@ -70,7 +70,7 @@ dev profile to keep it real-time, and builds dependencies at `opt-level = 3` so 
 once and cached. Release is still recommended.
 
 ```sh
-cargo test --release   # 372 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, the portal warps and the teleport, the collision push, the camera, the platform layer and the extensions' pure logic
+cargo test --release   # 407 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, the portal warps and the teleport, the collision push, the camera, the platform layer and the extensions' pure logic
 ```
 
 The mesh tests read `Meshes/`, so a checkout without the assets fails them.
@@ -182,9 +182,8 @@ logs are to name source lines, keep `debug = 1` in `dist` (and drop the strip), 
 
 ### Git LFS
 
-The files the LFS patterns below match come to about 90 MB across 27 files (the 47 MB Escher
-mesh, the 20 MB Backrooms GLB, the 20 MB soundtrack, the door GLB, the other meshes, the
-font; `git ls-files -z | xargs -0 du -ch` filtered by the patterns), and the history holds
+The files the LFS patterns below match come to about 70 MB across 26 files (the 47 MB Escher
+mesh, the 20 MB Backrooms GLB, the door GLB, the other meshes, the font; `git ls-files -z | xargs -0 du -ch` filtered by the patterns), and the history holds
 more: the door GLB was committed at 79 MB before its textures were shrunk. `.gitattributes` already routes `*.glb`,
 `*.mp3`, `*.ttf` and `Meshes/*.obj` through Git LFS for files added from now on, but the files
 already in history are ordinary blobs until they are rewritten. There is no remote yet, so the
@@ -300,8 +299,8 @@ with one exception noted below.
 | Path | What |
 |------|------|
 | `assets/fonts/RobotoCondensed[wght].ttf` | The UI face, Roboto Condensed (SIL OFL — the licence sits beside it). Vendored rather than taken from the system, because `tools/gen_ui.py` bakes it into `Textures/ui_font.bmp` and that atlas has to be reproducible. |
-| `assets/music/` | Soundtrack. Streamed, not decoded up front — see Audio below. |
-| `assets/sfx/` | One-shot effects, by name. |
+| `assets/music/` | Five 30 s ambience loops, one per room. Streamed, not decoded up front — see Audio below. |
+| `assets/sfx/` | 42 one-shot effects, by name. Both directories are written by `tools/gen_sfx.py` and contain nothing recorded. |
 | `assets/paintings/src/` | The portrait variation sheets — the user's edits of public-domain paintings; `tools/gen_portraits.py` cuts them into `Textures/portrait_*.bmp` (see the README beside them and THIRD_PARTY.md). |
 | `assets/ui/` | Source art for the cursor atlas. |
 
@@ -762,7 +761,7 @@ binary already has stdout) and the entire Win32 half of `Engine.cpp`: `CreateGLW
 ## Status
 
 `cargo build --release` — 0 errors, 0 warnings; `cargo build --profile dist` — clean.
-`cargo test --release` — 394 passed, 0 failed.
+`cargo test --release` — 407 passed, 0 failed.
 `cargo clippy --release --all-targets -- -D warnings` — clean, with an empty `[lints.clippy]` table.
 `cargo fmt --check` — clean.
 `cargo deny check` — advisories, bans, licences, sources ok.
@@ -955,7 +954,10 @@ Running widens the vertical field of view by 8°, eased with a frame-rate-indepe
 (150 ms time constant) through the same `view::set_fov` the dolly zoom was built for. The pause
 menu leaves the kick wherever it was — the world is frozen — and it resumes its ease on the
 next played frame; a scene load resets it with the rest of the FOV. Footfalls are counted off
-the bob phase (two per cycle) and fire `Sfx::Footstep`, at most once per rendered frame.
+the bob phase (two per cycle) and fire a footstep, at most once per rendered frame — walking,
+`GH_BOB_FREQ` of 8 rad/s puts one every 0.39 s (153 a minute, a 1.14 m stride at the 2.9 m/s
+walk cap); running, `SPRINT_BOB_FREQ` shortens it to 0.29 s (206 a minute, 1.52 m at 5.2 m/s).
+Which sound that is, the level decides — see Audio below.
 
 A key held across an alt-tab never sees its release, so every key level is dropped when the
 window loses focus — a stuck `Shift` would otherwise run the player until it was pressed again.
@@ -1444,30 +1446,83 @@ right there. `examples/pad_probe.rs` dumps the raw sequence, the SDL mapping and
 cargo run --release --example pad_probe
 ```
 
-## Audio — `ext/audio.rs`
+## Audio — `ext/audio.rs`, `tools/gen_sfx.py`
 
 The original engine is completely silent. Built on `kira`, chosen over `rodio` because scene
 switching wants real crossfades.
 
-**Music** — drop `ogg`/`mp3`/`wav`/`flac` into `assets/music/`. A numeric filename prefix binds
-a track to a scene (`03-pillars.ogg` → scene 3); anything else becomes the fallback for scenes
-without their own track. Scene changes crossfade.
+**Nothing here is a recording.** All 47 files are synthesised by `tools/gen_sfx.py` (numpy +
+Pillow, ffmpeg for the encode) out of filtered noise, sine partials, envelopes and a synthetic
+room impulse, so the shipped audio carries no third-party rights of any kind (THIRD_PARTY.md).
+The tool is seeded: regenerating writes byte-identical files, and
 
-Music is **streamed**; effects are decoded up front. `StaticSoundData` holds a whole track as f32
-samples, which for the eight-minute soundtrack is ~275 MB resident and a third of a second of stall
-at the scene load that starts it. A streaming sound decodes ahead on kira's thread instead, so a
-track costs about the same whether it runs one minute or twenty. The trade is that a stream can fail
-*during* playback where a static sound cannot, so `Audio::tick` drains the handle's error queue every
-frame rather than letting the music stop with no explanation.
+```bash
+python3 tools/gen_sfx.py                    # 47 files, ~6.4 MB, and two contact sheets
+python3 tools/gen_sfx.py --only footstep    # just the sounds whose stem contains that
+```
 
-**Sound effects** — drop files into `assets/sfx/` named `grab`, `release`, `portal`, `land`,
-`footstep` or `elevator`. `grab`, `release`, `footstep` and `elevator` (the doors closing on a
-ride) have call sites; `portal` and `land` are loadable but nothing fires them yet. None of the
-files ship.
+is a no-op in `git status`. Every file is measured *after* it has been encoded and decoded
+again — duration, peak, RMS, DC offset, spectral centroid, and for a loop the step across its
+wrap — and asserted against a per-sound band; a sound outside its band stops the run and
+`assets/` is left untouched. FLAC rather than the Ogg Vorbis originally intended: this
+machine's ffmpeg has no `libvorbis` and its built-in Vorbis encoder refuses to write mono.
+Lossless suits the loops anyway — they wrap on the samples they were built to wrap on.
+
+**The loops** — five, 30 s each, mono 32 kHz, about −20 dBFS RMS: the meadow's wind and
+distant thunder, the Backrooms' 100 Hz fluorescent buzz over dead air, the pool's drips in a
+3.4 s tiled reverb, the overgrown room's insects and leaves under that same buzz, and a
+neutral drone as the fallback for everything else. They are wallpaper, not songs. Each is
+built to be *exactly periodic* in its own length — sines snapped to a whole number of cycles,
+noise made from a random-phase spectrum, reverb applied circularly, sparse events wrapped
+round the end — so the head is the continuation of the tail and there is no seam to fade. The
+measured step across the wrap is 12 to 27 dB **smaller** than the 99th-percentile step the
+signal takes between adjacent samples everywhere else.
+
+**Binding a track to a scene** — a numeric filename prefix, counting scenes from **one**, the
+same numbering as the keys `1`..`7`: `assets/music/17-backrooms.flac` is `SCENES[16]`, which
+is `src/level16.rs`. That off-by-one is easy to get wrong from the filename alone, so
+`music_names_bind_to_their_scenes` asserts every shipped name against the registry. A name
+that starts with anything else is the fallback. Scene changes crossfade.
+
+Music is **streamed**; effects are decoded up front. `StaticSoundData` holds a whole track as
+f32 samples; a streaming sound decodes ahead on kira's thread instead, so a track costs about
+the same whether it runs thirty seconds or twenty minutes, and the effects — which have to
+fire without a decode — are the ones held in memory. The trade is that a stream can fail
+*during* playback where a static sound cannot, so `Audio::tick` drains the handle's error
+queue every frame rather than letting the music stop with no explanation.
+
+**The effects** — 42 files, mono 44.1 kHz, 90–900 ms, peak-normalised to −3 dBFS. A `Sfx`
+names a file stem in `assets/sfx/`; a stem may be a **set** of numbered files, and playing one
+picks at random from the set *excluding the file that played last*, so a sound never repeats
+itself immediately. Every play also gets a wobble: ±2 dB of gain and ±4 % of playback rate
+(two thirds of a semitone — it reads as a different footfall, not as a tuning error). Four
+files and a wobble is the difference between a corridor that sounds walked down and one that
+sounds like a loop of one sample.
+
+**Surfaces.** Footfalls come in five sets — carpet, tile, water, moss, grass — and each level
+declares which ground it has in one line of its `load`: `audio::set_surface(Surface::Carpet)`
+in the Backrooms, `Grass` in the meadow, `Moss` in the overgrown room. The Pool Rooms pass
+`Surface::Tile(&[0.78, 4.54])`, the heights of their two water sheets: a footfall less than
+1.2 m below one of them splashes, and the spiral stair climbing between the storeys is the one
+dry ground in the level. The engine clears the surface before every scene load, so a level
+that declares nothing is silent underfoot rather than walking on the last one's carpet.
+
+**Where each sound fires.** `grab`/`release` from the grab's edges; the footfall from the bob
+counter; `portal` from the engine's portal pass, on any object that warps; `key_take` when the
+key leaves the painting and `key_use` on the press that turns it in the lock; `window_grow`
+the step the window first becomes passable; `elevator_button` + `elevator_doors` on the press,
+`elevator_ride` over the black screen the load happens behind, and `elevator_ding` +
+`elevator_doors` when the screen clears on the far side; `ui_move`/`ui_confirm`/`ui_back` from
+the menu's navigation (silent on the frame a menu opens, and silent while muted). An object
+in the scene vector cannot reach the engine's `Audio` — the engine is holding it — so those
+callers use `audio::request`, which queues a one-shot for the next frame's `tick`; a sound
+already queued that frame is not queued twice, so three props through one portal are one
+whoosh.
 
 Everything degrades to a no-op. No audio device, no `assets/` directory, or no files, and the
 engine still starts and runs silently — a demo should not refuse to launch over a missing sound
-file, and the ported engine has no error path to surface one through.
+file, and the ported engine has no error path to surface one through. `--mute` goes further
+and never opens the device at all.
 
 ## Settings — `ext/settings.rs`
 
@@ -1805,8 +1860,8 @@ for a clip time of `openness x T_OPEN`, where `T_OPEN` is the clip's widest mome
 at load by sampling it, so closing is the opening curve played backwards. Collision is two
 triangle meshes: the cabin (floor, sill, walls, ceiling, slab) always; the shut leaves on a
 helper object (`ElevatorDoors`) offered only while the doors are less than half open. The
-fade, the E press, the ride-start cue for `Sfx::Elevator` and the arrival are ambient
-channels (thread-locals, as `ext::view`'s uniforms are), because nothing in the object vector
+fade, the E press, the four sounds of a ride (queued through `audio::request`) and the
+arrival are ambient channels (thread-locals, as `ext::view`'s uniforms are), because nothing in the object vector
 survives the load and nothing in it can reach the engine's HUD or input; the hint goes through
 the shared line every prompt uses (`ext/hint.rs`), set each step the offer stands.
 

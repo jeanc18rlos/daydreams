@@ -32,6 +32,8 @@ impl Scene for Level15 {
         player: &mut Player,
     ) {
         let meadow = load_meadow(gl, res, objs, portals, player);
+        // EXT: what the footsteps land on (src/ext/audio.rs).
+        crate::ext::audio::set_surface(crate::ext::audio::Surface::Grass);
 
         // ── The sea world: nothing of the meadow here, only water to every horizon ─────────
         // The sea quad carries the ground collider, set just below the surface so the player

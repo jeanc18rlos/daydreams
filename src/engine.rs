@@ -21,7 +21,7 @@ use glow::HasContext;
 use crate::camera::Camera;
 use crate::game_header::{
     gh_clamp, gh_min, GH_DT, GH_FAR, GH_FBO_SIZE, GH_MAX_PORTALS, GH_MAX_RECURSION, GH_MAX_STEPS,
-    GH_NEAR_MAX, GH_NEAR_MIN, GH_USE_SKY,
+    GH_NEAR_MAX, GH_NEAR_MIN, GH_PLAYER_HEIGHT, GH_USE_SKY,
 };
 // EXT: the scene registry -- every scene's key, name and constructor, in key order.
 use crate::ext::scenes::{INTRO, SCENES};
@@ -907,6 +907,9 @@ impl Engine {
         crate::ext::view::clear_scene_mood();
         crate::ext::view::set_glow(crate::vector::Vector3::zero(), 0.0);
         crate::ext::view::set_wrap(0.0);
+        // EXT: and what the footsteps land on -- a level that declares no surface is silent
+        // underfoot rather than walking on the last one's carpet (src/ext/audio.rs).
+        crate::ext::audio::set_surface(crate::ext::audio::Surface::None);
         // EXT: and so does the title screen's hold on the doors -- `run_frame` sets it again
         // every frame the title is up, so clearing it here cannot strand a door open.
         crate::ext::door::set_hold_open(false);
@@ -1095,6 +1098,8 @@ impl Engine {
                 if let Some(physical) = obj.as_physical_mut() {
                     for j in 0..v_portals.len() {
                         if physical.try_portal(&v_portals[j].borrow()) {
+                            // EXT: a crossing is the one moment a portal is audible.
+                            crate::ext::audio::request(crate::ext::audio::Sfx::Portal);
                             break;
                         }
                     }
@@ -1407,9 +1412,10 @@ impl Engine {
             grab_pressed = false;
         }
 
-        let (cam_to_world, steps) = {
+        let (cam_to_world, steps, feet_y) = {
             let p = self.player.borrow();
-            (p.cam_to_world(), p.steps())
+            // EXT: the player's position is the eye; the footstep sounds want the soles.
+            (p.cam_to_world(), p.steps(), p.obj().pos.y - GH_PLAYER_HEIGHT)
         };
 
         // EXT: this frame's jump events (src/ext/jump.rs), taken here beside the footsteps
@@ -1459,8 +1465,7 @@ impl Engine {
         }
         crate::ext::grab::update(&objects, &cam_to_world, grab_pressed, &mut ext.grab);
         ext.fire_grab_sfx();
-        ext.fire_footstep_sfx(steps);
-        ext.fire_elevator_sfx();
+        ext.fire_footstep_sfx(steps, feet_y);
         crate::ext::view::set_fov(ext.sprint.ease_fov(crate::ext::view::time()));
     }
 

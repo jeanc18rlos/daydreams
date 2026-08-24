@@ -169,21 +169,17 @@ impl ExtState {
         crate::ext::elevator::on_scene_loaded(scene);
     }
 
-    /// The elevator's doors starting to close: one sound per ride.
-    pub fn fire_elevator_sfx(&mut self) {
-        if crate::ext::elevator::take_ride_started() {
-            self.audio.play(Sfx::Elevator);
-        }
-    }
-
     /// One footstep sound per footfall the player has taken since the last call -- at most
     /// one per rendered frame, which is the cadence this is called at. Two footfalls in one
     /// frame would need a frame longer than a bob half-period (~200 ms), where a second
     /// identical sample a few milliseconds later would be noise rather than information.
-    pub fn fire_footstep_sfx(&mut self, steps: u32) {
+    ///
+    /// `feet_y` is the world height of the player's soles: which footstep set plays is the
+    /// level's declared surface, and a flooded one splashes or slaps depending on it.
+    pub fn fire_footstep_sfx(&mut self, steps: u32, feet_y: f32) {
         if steps != self.footsteps_heard {
             self.footsteps_heard = steps;
-            self.audio.play(Sfx::Footstep);
+            self.audio.footstep(feet_y);
         }
     }
 

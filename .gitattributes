@@ -7,8 +7,11 @@
 *.ttf binary
 *.png binary
 *.bmp binary
+# The generated audio (tools/gen_sfx.py). Binary, but deliberately NOT LFS below: 6.4 MB
+# across 47 files, the largest 1.4 MB, and a clone can rebuild every byte from the tool.
+*.flac binary
 
-# Git LFS for the large assets. The two GLBs, the soundtrack, the font and the larger
+# Git LFS for the large assets. The two GLBs, the font and the larger
 # OBJ meshes (escher_relativity.obj alone is 47 MB) are 150 MB of binary that should not
 # live in the packfile. These lines only govern files added from now on: the files
 # already in history stay ordinary blobs until `git lfs migrate import` rewrites them --
