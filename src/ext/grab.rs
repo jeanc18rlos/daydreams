@@ -101,7 +101,7 @@
 //! the crosshair, other than the held one, may offer a line for the HUD (`pick_hint`).
 
 use crate::collider::Collider;
-use crate::ext::raycast::{ray_collider, ray_sphere, raycast};
+use crate::ext::raycast::{ray_collider, ray_sphere, raycast, raycast_ignoring};
 use crate::object::{Object, ObjectT, RenderCtx, UpdateCtx};
 use crate::physical::Physical;
 use crate::sphere::Sphere;
@@ -115,6 +115,16 @@ use std::rc::Rc;
 /// scenes require it outright: the cube in scene `[` is only "there" from a station point several
 /// metres away from it, so a short reach would make the illusion unusable.
 pub const GRAB_REACH: f32 = 15.0;
+
+/// EXT: how much closer than the object a solid surface has to be before it counts as being
+/// in the way ([`pick`]).
+///
+/// The candidate's hit is on its bounding sphere or its face, and the surface it rests on can
+/// pass within centimetres of that at a grazing angle -- a die on the carpet is hit by the
+/// same ray a hand's breadth after the carpet is. Requiring the blocker to be clearly in
+/// front keeps those grabs while still refusing anything with a wall across it. The cost is
+/// that a partition thinner than this, pressed against the object, does not block.
+pub const LOS_SLACK: f32 = 0.05;
 /// How far a held object may be pushed before the ray stops mattering.
 pub const MAX_PLACE_DIST: f32 = 60.0;
 /// Clamps so an object can never become microscopic or swallow the level.
@@ -635,10 +645,10 @@ pub fn face_rect(base: &Object) -> Collider {
     Collider::rect(Vector3::zero(), Vector3::unit_x() * half, Vector3::unit_y() * half)
 }
 
-/// Nearest grabbable under the crosshair, as (index, hit distance, bounding radius).
-/// Shared by the hover test and the actual pick so the crosshair can never disagree with what
-/// pressing E will do. A flat-placed object is hit on its face, anything else on its sphere.
-fn pick(
+/// Nearest grabbable under the crosshair, as (index, hit distance, bounding radius), whether
+/// or not anything stands in the way. [`pick`] is this plus the line-of-sight gate; the two
+/// are separate so a refused grab can say which of the two reasons it was.
+fn aim(
     objects: &[Rc<RefCell<dyn ObjectT>>],
     origin: Vector3,
     dir: Vector3,
@@ -666,7 +676,46 @@ fn pick(
             best = Some((i, t, g));
         }
     }
+
     best
+}
+
+/// Nearest grabbable under the crosshair that the player can actually see.
+///
+/// Shared by the hover test and the actual pick so the crosshair can never disagree with what
+/// pressing E will do. [`aim`] asks each grabbable's own sphere or face whether the crosshair
+/// crosses it, which a wall between the two does not change -- so on its own it reached
+/// through walls, and the hover hint with it. Only the nearest grabbable needs the test:
+/// anything solid in front of it is in front of the ones behind it too.
+fn pick(
+    objects: &[Rc<RefCell<dyn ObjectT>>],
+    origin: Vector3,
+    dir: Vector3,
+    skip: Option<usize>,
+) -> Option<(usize, f32, f32)> {
+    let best = aim(objects, origin, dir, skip)?;
+    if blocker(objects, origin, dir, best.0, best.1, skip).is_some() {
+        return None;
+    }
+    Some(best)
+}
+
+/// What stands between the eye and the grabbable at `idx`, `dist` away, if anything.
+///
+/// Neither the candidate nor whatever is already in hand may block the view of it.
+fn blocker(
+    objects: &[Rc<RefCell<dyn ObjectT>>],
+    origin: Vector3,
+    dir: Vector3,
+    idx: usize,
+    dist: f32,
+    skip: Option<usize>,
+) -> Option<usize> {
+    let mut ignore = [idx; 2];
+    if let Some(held) = skip {
+        ignore[1] = held;
+    }
+    raycast_ignoring(objects, origin, dir, dist - LOS_SLACK, &ignore).map(|h| h.object)
 }
 
 /// Pick the grabbable nearest along the crosshair, within `GRAB_REACH`.
@@ -680,12 +729,24 @@ fn try_grab(
     // colliders at all (bunny/teapot/suzanne all have zero).
     let Some((idx, dist, radius)) = pick(objects, origin, dir, None) else {
         // EXT: tell the player why nothing happened -- otherwise a missed grab is
-        // indistinguishable from a broken key binding.
-        let n = objects
-            .iter()
-            .filter(|o| o.try_borrow().ok().is_some_and(|o| as_grabbable(&*o).is_some()))
-            .count();
-        log::debug!("[grab] nothing in reach (crosshair missed; {n} grabbable object(s) in scene, reach {GRAB_REACH})");
+        // indistinguishable from a broken key binding, and something in the way looks
+        // identical to bad aim.
+        match aim(objects, origin, dir, None) {
+            Some((i, d, _)) => {
+                let by = blocker(objects, origin, dir, i, d, None);
+                log::debug!(
+                    "[grab] object #{i} is {d:.2} units away but object #{} stands in the way",
+                    by.map_or(usize::MAX, |b| b)
+                );
+            }
+            None => {
+                let n = objects
+                    .iter()
+                    .filter(|o| o.try_borrow().ok().is_some_and(|o| as_grabbable(&*o).is_some()))
+                    .count();
+                log::debug!("[grab] nothing in reach (crosshair missed; {n} grabbable object(s) in scene, reach {GRAB_REACH})");
+            }
+        }
         return;
     };
     let Ok(mut obj) = objects[idx].try_borrow_mut() else { return };
@@ -812,6 +873,59 @@ pub fn draw_ghost(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A wall between the eye and a grabbable puts it out of reach: the sphere test alone
+    /// said yes through anything, which let the player pick props up through the hall's walls.
+    #[test]
+    fn a_wall_between_hides_a_grabbable() {
+        use crate::ext::trimesh::TriMeshCollider;
+        use crate::object::UpdateCtx;
+
+        /// Scenery: one quad, as `ext/interior.rs` hands the engine its levels.
+        struct Wall {
+            base: Object,
+            solid: Rc<TriMeshCollider>,
+        }
+        impl Wall {
+            fn at(z: f32) -> Wall {
+                let pos = [[-2.0, -2.0, z], [2.0, -2.0, z], [2.0, 2.0, z], [-2.0, 2.0, z]];
+                let idx = [0, 1, 2, 0, 2, 3];
+                let solid = TriMeshCollider::new(&pos, &idx, &Matrix4::identity());
+                Wall { base: Object::new(), solid: Rc::new(solid) }
+            }
+        }
+        impl ObjectT for Wall {
+            fn base(&self) -> &Object {
+                &self.base
+            }
+            fn base_mut(&mut self) -> &mut Object {
+                &mut self.base
+            }
+            fn update(&mut self, _ctx: &UpdateCtx) {}
+            fn trimesh(&self) -> Option<Rc<TriMeshCollider>> {
+                Some(self.solid.clone())
+            }
+        }
+
+        // Eye at the origin looking down -Z, a grabbable four metres along it.
+        let eye = Vector3::zero();
+        let dir = Vector3::new(0.0, 0.0, -1.0);
+        let mut prop = Grabbable::new(0.2);
+        prop.obj_mut().pos = Vector3::new(0.0, 0.0, -4.0);
+        let prop: Rc<RefCell<dyn ObjectT>> = Rc::new(RefCell::new(prop));
+
+        let clear: Vec<Rc<RefCell<dyn ObjectT>>> = vec![prop.clone()];
+        assert!(pick(&clear, eye, dir, None).is_some(), "nothing in the way, so it is pickable");
+
+        let walled: Vec<Rc<RefCell<dyn ObjectT>>> =
+            vec![prop.clone(), Rc::new(RefCell::new(Wall::at(-2.0)))];
+        assert!(pick(&walled, eye, dir, None).is_none(), "the wall stands between them");
+
+        // Behind the player is not in the way.
+        let behind: Vec<Rc<RefCell<dyn ObjectT>>> =
+            vec![prop, Rc::new(RefCell::new(Wall::at(2.0)))];
+        assert!(pick(&behind, eye, dir, None).is_some(), "a wall behind the eye blocks nothing");
+    }
 
     #[test]
     fn point_triangle_distance_regions() {

@@ -3,3 +3,4 @@ settings.cfg
 .DS_Store
 *.log
 /out*.bmp
+__pycache__/

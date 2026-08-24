@@ -46,7 +46,7 @@
 
 use crate::camera::Camera;
 use crate::ext::grab::{bound_radius, GrabState};
-use crate::ext::raycast::ray_sphere;
+use crate::ext::raycast::{ray_sphere, raycast_ignoring};
 use crate::ext::{hint, room};
 use crate::object::{Object, ObjectT, RenderCtx, UpdateCtx};
 use crate::physical::Physical;
@@ -185,7 +185,14 @@ pub fn lock_under_crosshair(
             best = Some((i, t));
         }
     }
-    best.map(|(i, _)| i)
+    // EXT: and the lock has to be in sight, or the key would open a window through the wall
+    // it hangs on. The key's own cell is borrowed by the caller, so `raycast`'s `try_borrow`
+    // already skips it; the lock itself is exempt because its own pane is what the ray ends on.
+    let (i, t) = best?;
+    if raycast_ignoring(scene, origin, dir, t - crate::ext::grab::LOS_SLACK, &[i]).is_some() {
+        return None;
+    }
+    Some(i)
 }
 
 /// A stand-in lock for `--hold-key` in a scene that has none: an invisible, collisionless

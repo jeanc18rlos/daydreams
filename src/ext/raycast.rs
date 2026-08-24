@@ -95,10 +95,24 @@ pub fn raycast(
     max_dist: f32,
     skip: Option<usize>,
 ) -> Option<RayHit> {
+    raycast_ignoring(objects, origin, dir, max_dist, skip.as_slice())
+}
+
+/// EXT: [`raycast`] ignoring several objects at once.
+///
+/// The line-of-sight tests need two exemptions rather than one -- the thing being looked at
+/// and whatever is already in hand -- and neither may block the view of the other.
+pub fn raycast_ignoring(
+    objects: &[Rc<RefCell<dyn ObjectT>>],
+    origin: Vector3,
+    dir: Vector3,
+    max_dist: f32,
+    ignore: &[usize],
+) -> Option<RayHit> {
     let mut best: Option<RayHit> = None;
 
     for (i, obj) in objects.iter().enumerate() {
-        if Some(i) == skip {
+        if ignore.contains(&i) {
             continue;
         }
         // `try_borrow` rather than `borrow`: this can run while the engine holds a borrow on
