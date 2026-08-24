@@ -865,9 +865,9 @@ window loses focus — a stuck `Shift` would otherwise run the player until it w
 
 ### Paintings that watch you — `ext/painting.rs`, `tools/gen_portraits.py`
 
-The Backrooms' entry hall hangs eight portraits whose eyes follow you -- the Mona Lisa and
-the Girl with a Pearl Earring, turn and turn about -- built on two things the engine already
-did. Every draw receives the eye of the **pass** camera (`RenderCtx.eye`), so the gaze is
+The Backrooms' entry hall hangs eight portraits whose eyes follow you -- the Mona Lisa, the
+Girl with a Pearl Earring and the Laughing Cavalier, three sitters over eight frames -- built
+on two things the engine already did. Every draw receives the eye of the **pass** camera (`RenderCtx.eye`), so the gaze is
 computed per render pass: the painting turns that eye into its own canvas metres and the
 shader slides each iris toward it, and a portrait seen through the door looks at the portal
 camera -- at the person in the doorway -- rather than at some point on the meadow a thousand
@@ -880,6 +880,28 @@ and it is different; you never catch it moving (each change crossfades over 0.25
 well inside the 0.4 s grace). The eyes remember, too: while nobody looks they stay aimed at
 where you were last seen from -- the last sighting, however brief -- and when you look again
 they slide from there to you over 0.6 s.
+
+**Photographing a changed face** takes a walk-in, because a screenshot run cannot turn its
+head. The watching cone is 60 degrees from the view axis on purpose -- wider than the corner
+of the 60-degree-FOV frustum, which is about 50 at 16:9 -- so anything on screen is being
+watched and can never change while it is. Instead, start out of the cone and *walk into it*:
+face the wall a painting hangs on, stand far enough along it that the painting is more than
+60 degrees off the axis, and hold a sidestep. It changes while it is off the axis and comes
+into view already changed:
+
+```bash
+# Face the north wall four metres west of the Cavalier and sidestep east into him: he arrives
+# with the sad mouth, his eyes turned away to the left, where the smile was
+daydreams --windowed --mute --no-gamepad --no-vsync --scene 16 --pos 984.5,1.5,0.6 --yaw 180 --pitch 2 --strafe --shot walkin.bmp --frames 2380
+# The same frame without the walk: the smile
+daydreams --windowed --mute --no-gamepad --no-vsync --scene 16 --pos 989,1.5,0.3 --yaw 180 --pitch 3 --shot smile.bmp --frames 60
+```
+
+One walk-in is worth one step round the cycle. The next face -- the angry one -- needs a
+second unobserved stretch with a look in between, and along a straight walk with a fixed head
+the bearing to a painting only sweeps one way: it goes out of the cone once and comes back
+once. Catching the angry mouth means turning round, which is a thing for hands and not for
+`--shot`.
 
 The test had to learn to see through a door. From the meadow the hall is a thousand units away
 and the plain cone test says "not looking" for every painting in it, which would let them change
@@ -896,22 +918,47 @@ Backrooms' triangle mesh like any other blocker, so a wall is cover.
 
 **The pictures are real paintings.** Each portrait is two textures cut by
 `tools/gen_portraits.py` (numpy + Pillow) from a variation sheet under `assets/paintings/src/`
--- the user's own edits of two public-domain paintings, each sheet a BASE (the sitter with
-blank eye sockets and no mouth) beside cutouts of both eyes looking at the viewer, both eyes
-looking to the viewer's left, and a smiling, a sad and an angry mouth. The tool segments the
-sheet (alpha components on the Mona sheet; non-black tiles on the Vermeer's, which get soft
-superellipse feather masks cut from its rectangular crops), then **registers** each piece onto
-the base by normalised cross-correlation over a range of scales -- for the Mona pieces the
-NCC runs on the cutout's opaque border ring (the lids, brows and skin round the socket, which
-the base has; the socket interior, which it does not, is left out), against the base itself;
-the Vermeer crops match as whole rectangles against the sheet's ORIGINAL tile, whose framing
-the base shares. Each piece is colour-matched to the base under its rim (a per-channel gain)
-and its edge feathered, and everything lands in `Textures/portrait_<name>.bmp` (the base,
-32-bit BGRA), `Textures/portrait_<name>_parts.bmp` (the seven parts, packed with alpha) and
-`src/ext/portrait_atlas.rs`: every part's atlas rect, its placement rect on the base in
-base UV, and the two eye openings' ellipses. Run the tool with `--preview DIR` and look at
-the composites before trusting a number; its docstring says how to add the next sheet (a
-Frans Hals "Laughing Cavalier" is expected: one more manifest entry).
+-- the user's own edits of three public-domain paintings, each sheet a BASE (the sitter with
+blank eye sockets and no mouth) beside both eyes looking at the viewer, both eyes looking to
+the viewer's left, and a smiling, a sad and an angry mouth. What differs between the sheets is
+how those variants are drawn, and that decides how the tool cuts and **registers** them; all
+three paths end in a normalised cross-correlation over a range of scales:
+
+* **cutouts on a painted ground** (the Mona sheet, kind `alpha`): each variant is a piece with
+  its own alpha, segmented as the biggest connected blob of alpha inside its manifest region
+  (so the label under it is never part of it). The NCC runs on the piece's opaque BORDER RING
+  -- the lids, brows and skin round the socket, which the base has; the socket interior, which
+  it does not, is left out -- against the base itself. Scores 0.48 to 0.63.
+* **tiles on black** (the Vermeer sheet, kind `black`): each variant is a rectangular crop of
+  the face showing it IN PLACE, found as the widest, tallest run of non-black rows and columns
+  in its region. A crop matches as a whole rectangle against the sheet's ORIGINAL tile, whose
+  framing the base shares, and is placed on the base through that. Because the sheet's tiles
+  are cuts of one master the scores are high (0.81 to 0.98) and the variants that share a crop
+  region simply reuse the first one's placement.
+* **crops on a painted ground** (the Hals sheet, kind `ground`): the second kind's crops on the
+  first kind's ground. The two figures are alpha cutouts composited over the inpainted surround
+  as the Mona's is; the variant crops carry their own alpha (a soft rim, a chamfered corner),
+  which joins the NCC mask, and register whole against the ORIGINAL exactly as the Vermeer's
+  tiles do. Its panels are separate renderings of the same face rather than cuts of one master,
+  so the scores land with the Mona's (0.47 to 0.58) and no crop can borrow another's framing --
+  each is registered on its own. **The sheet's splayed PNG cutouts are not used**: its right
+  column offers each mouth as four pieces (lips, goatee, a moustache each side) laid out in a
+  cross, and a moustache lifted out of its place has no border ring the base shares and nothing
+  for a correlation to lock onto (an attempt scored between -0.53 and +0.28 and put the right
+  moustache across the sitter's eye). The middle column's crops carry the same moustache where
+  it belongs, so a Hals mouth is one piece like everyone else's.
+
+A rectangular crop gets a soft superellipse mask so it composites over the base rather than
+sitting on it as a rectangle. Every piece is colour-matched to the base under its rim (a
+per-channel gain) -- a hard-edged tone step is what gives a pasted-on piece away -- a cutout's
+alpha edge is feathered, and the atlas's clear texels are filled with the pieces' own colour so
+a mipmap never rings them. It all lands in `Textures/portrait_<name>.bmp` (the base, 32-bit
+BGRA), `Textures/portrait_<name>_parts.bmp` (the seven parts, packed with alpha) and
+`src/ext/portrait_atlas.rs`: every part's atlas rect, its placement rect on the base in base
+UV, and the two eye openings' ellipses -- hand-read off gridded crops, checked on the tool's
+own composite. **Adding a sheet** is one more manifest entry of whichever kind fits its layout,
+a line in `THIRD_PARTY.md`, and a seat in `level16.rs`'s per-seed hanging. Run the tool with
+`--preview DIR` and look at the composites before trusting a number.
 
 `Shaders/painting.frag` composites at draw time: the base, then the parts, premultiplied --
 the two eye parts crossfaded between the centre-looking and left-looking variants, the three
@@ -935,7 +982,7 @@ through the ported `texture` shader, each rolled 45 degrees about its length so 
 room is a ridge between two bevels: a moulding that the shader's fixed light models on either
 wall, where a flat slat facing away from that light was near black. Its width is 0.8 m and its
 height follows each base's aspect (`Painting::size_for`): the Mona hangs 0.94 m tall, the
-Vermeer 0.80. The canvas is also a
+Vermeer 0.80, the Cavalier 0.76. The canvas is also a
 rectangle collider (`Mesh::colliders_only`, `Collider::rect`, nothing drawn from it -- the
 quad is drawn through the portrait shader): a ray down the crosshair stops at the picture,
 not at the wall behind it, which is what puts a held thing in front of the portrait rather
@@ -1494,14 +1541,20 @@ ground cap under the whole footprint (`backrooms::GroundCap`, colliding with not
 void below the horizon the same darkness.
 
 Along the hall's walls hang eight portraits (`ext/painting.rs`, [above](#paintings-that-watch-you--extpaintingrs-toolsgen_portraitspy)):
-five on the north wall, three on the south, the Mona Lisa on the even seeds and the Girl with
-a Pearl Earring on the odd, each 0.8 m wide (the height follows the picture) with its centre
-at 1.6 m and its
-back two centimetres off the scan's wall face so the two never z-fight. Their eyes follow
-whichever camera is drawing them, door included, and their faces change only while nobody is
-looking. Eight of them add nothing measurable to the frame, image pipeline included: with
-vsync off the hall row is 1.22 ms against 1.19 with the old procedural shader in the same
-window -- noise -- and the meadow spawn (the door drawing the hall) does not move. Between
+five on the north wall, three on the south, each 0.8 m wide (the height follows the picture)
+with its centre at 1.6 m and its
+back two centimetres off the scan's wall face so the two never z-fight. Who hangs where is a
+written-out table, `level16.rs`'s `HANGING`, one sitter per seed: west to east along the north
+wall the Mona Lisa, the Girl with a Pearl Earring, the Laughing Cavalier, the Girl again and
+the Mona who wears the key, then the south wall's Cavalier, Mona, Cavalier. No two neighbours
+along a wall repeat and nothing faces its own likeness across the hall. It is written out
+rather than taken modulo the number of sitters because the modulo re-seated every frame --
+the key's among them -- each time a sheet was added. Their eyes follow whichever camera is
+drawing them, door included, and their faces change only while nobody is looking. Eight of
+them add nothing measurable to the frame, image pipeline included: with vsync off the hall row
+is 1.22 ms against 1.19 with the old procedural shader in the same window -- noise -- and
+adding the third sitter did not move it either (0.75-0.78 ms over three 300-frame runs before,
+0.76-0.82 after, same window, same p95). Between
 the second and third of the north wall's portraits hangs [the window](#the-window). The last
 one on the north wall wears [the key](#the-key-in-the-painting--extkeyrs-extpaintingrs-shaderspaintingfrag).
 
