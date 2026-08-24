@@ -137,7 +137,7 @@ pub struct ExtState {
 
 impl ExtState {
     pub fn new(gl: &std::rc::Rc<glow::Context>, res: &crate::resources::Resources) -> ExtState {
-        ExtState {
+        let mut state = ExtState {
             grab: GrabState::default(),
             inventory: Inventory::default(),
             audio: Audio::new(),
@@ -150,7 +150,13 @@ impl ExtState {
             grass: grassfield::GrassMesh::acquire(gl),
             sprint: Sprint::new(crate::ext::view::time()),
             footsteps_heard: 0,
-        }
+        };
+        // EXT: the game opens on the title screen, which has a track of its own (`Audio`). Said
+        // here rather than left to the first frame so that the startup load of the backdrop scene
+        // does not briefly bind the backdrop's track and cross-fade off it a frame later.
+        let on_title = state.menu.is_open() && state.menu.is_title();
+        state.audio.set_on_title(on_title);
+        state
     }
 
     /// Called when the engine loads a scene, so carried objects do not survive the transition
@@ -174,12 +180,13 @@ impl ExtState {
     /// frame would need a frame longer than a bob half-period (~200 ms), where a second
     /// identical sample a few milliseconds later would be noise rather than information.
     ///
-    /// `feet_y` is the world height of the player's soles: which footstep set plays is the
-    /// level's declared surface, and a flooded one splashes or slaps depending on it.
-    pub fn fire_footstep_sfx(&mut self, steps: u32, feet_y: f32) {
+    /// `feet` is where the player's soles are, in world space: which footstep set plays is the
+    /// level's declared surface resolved at that point, so a scene with a meadow at one end and
+    /// a carpeted hall at the other sounds like whichever the player is standing in.
+    pub fn fire_footstep_sfx(&mut self, steps: u32, feet: crate::vector::Vector3) {
         if steps != self.footsteps_heard {
             self.footsteps_heard = steps;
-            self.audio.footstep(feet_y);
+            self.audio.footstep(feet);
         }
     }
 

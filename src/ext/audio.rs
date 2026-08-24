@@ -44,7 +44,10 @@
 //!
 //! Which footstep set plays is the level's business: each declares a [`Surface`] in its `load`
 //! ([`set_surface`]), and the engine clears it before every load so a level that declares
-//! nothing is silent underfoot rather than inheriting the last one's carpet.
+//! nothing is silent underfoot rather than inheriting the last one's carpet. A declaration is
+//! resolved against where the player's feet are, not fixed for the scene: two of the shipped
+//! levels hold two worlds at once (the meadow at the origin and a far room at x 1000) and one
+//! of them stands under water in places.
 //!
 //! # Asking for a sound from inside the world
 //!
@@ -53,6 +56,7 @@
 //! which queues a one-shot for [`Audio::tick`] to play on the next frame: one frame late, and
 //! the alternative is a second `RefCell` on the hot path.
 
+use crate::vector::Vector3;
 use kira::sound::static_sound::StaticSoundData;
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
 use kira::sound::{FromFileError, PlaybackState};
@@ -84,6 +88,10 @@ fn forced() -> bool {
 const MUSIC_DIR: &str = "assets/music";
 const SFX_DIR: &str = "assets/sfx";
 
+/// The registry name of the scene whose track the title screen borrows. The title's backdrop is
+/// a night meadow, and "Intro" is the meadow level (`src/level15.rs`).
+const TITLE_TRACK_SCENE: &str = "Intro";
+
 /// Extensions tried for a stem, in the order the shipped set uses them.
 const EXTS: [&str; 4] = ["flac", "ogg", "wav", "mp3"];
 
@@ -98,30 +106,49 @@ const JITTER_DB: f32 = 2.0;
 /// semitone: it reads as a different footfall, not as a sample played at the wrong speed.
 const JITTER_RATE: f64 = 0.04;
 
-/// How far below a water line a footfall still splashes. Deeper than this and the water is
-/// over the player's head, which no level allows; shallower is where the wading happens.
-const WADE_DEPTH: f32 = 1.2;
+/// How far below its own floor a footfall still counts as standing on that floor. The colliders
+/// let the feet sit a centimetre or two either side of the surface they rest on, and a scaling
+/// portal moves them further; a fifth of a metre covers both without reaching the next storey.
+const FLOOR_TOL: f32 = 0.2;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // What is underfoot.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// The ground a level's footsteps are taken on. Each level names one in its `load`.
+/// The ground the player's footsteps are taken on, declared by the level in its `load`.
+///
+/// Where a level walks on one thing this is that thing. Where it walks on two, the variant says
+/// which is where -- [`Surface::SplitX`] for a scene that holds two worlds side by side (the
+/// meadow at the origin and the far room at x 1000, the pair `view::MOOD_SPLIT_X` divides), and
+/// [`Surface::Tile`] for standing water, which divides by height rather than by ground. A single
+/// value per scene was wrong for the two that matter most: NEW GAME opens in the Backrooms and
+/// its first steps are on the meadow's grass, not on carpet.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Surface {
     /// Nothing declared: no footstep sound at all. Every ported level is this.
     None,
     /// The Backrooms' carpet.
     Carpet,
-    /// Hard tile, with the heights of any standing water over it. A footfall less than
-    /// [`WADE_DEPTH`] below one of those lines is a splash; above them all it is the dry
-    /// slap. The Pool Rooms are two flooded storeys (0.78 m and 4.54 m) with a dry spiral
-    /// stair climbing between them, which is the whole reason this is a list and not a bool.
-    Tile(&'static [f32]),
+    /// Hard tile, with the storeys standing under water given as `(floor, water surface)`. A
+    /// footfall on one of those floors and under its water splashes; anywhere else on the tiles
+    /// is the dry slap. The Pool Rooms are two flooded storeys -- the hall's floor at 0 under
+    /// water at 0.78, the upper floor at 4.2 under water at 4.54 -- with a dry spiral stair
+    /// climbing between them, which is why this is a list of pairs rather than a bool. Pairs
+    /// rather than water lines alone because the stair's top passes within a third of a metre of
+    /// the upper water line without ever standing in it.
+    Tile(&'static [(f32, f32)]),
+    /// Standing water with no floor worth hearing under it: the sea the meadow's door opens on.
+    Water,
     /// The Overgrown room's moss.
     Moss,
     /// The meadow.
     Grass,
+    /// Two grounds in one scene, divided at a world x: `west` below it, `east` at or above it.
+    ///
+    /// One level of nesting is all the shipped scenes need and all that is meant -- the halves
+    /// are `Grass`/`Carpet` and `Grass`/`Water` -- but the recursion is not artificially stopped,
+    /// so a half may itself be flooded tile.
+    SplitX { at: f32, west: &'static Surface, east: &'static Surface },
 }
 
 impl Surface {
@@ -129,20 +156,31 @@ impl Surface {
     const SETS: [&'static str; 5] =
         ["footstep_carpet", "footstep_tile", "footstep_water", "footstep_moss", "footstep_grass"];
 
-    /// The set a footfall with the feet at `feet_y` belongs to.
-    fn footsteps(self, feet_y: f32) -> Option<&'static str> {
+    /// The set a footfall taken with the soles at `feet` belongs to.
+    fn footsteps(self, feet: Vector3) -> Option<&'static str> {
         match self {
             Surface::None => None,
             Surface::Carpet => Some("footstep_carpet"),
-            Surface::Tile(water) => {
-                Some(if water.iter().any(|&line| feet_y < line && line - feet_y < WADE_DEPTH) {
+            Surface::Tile(storeys) => Some(
+                if storeys
+                    .iter()
+                    .any(|&(floor, water)| feet.y >= floor - FLOOR_TOL && feet.y < water)
+                {
                     "footstep_water"
                 } else {
                     "footstep_tile"
-                })
-            }
+                },
+            ),
+            Surface::Water => Some("footstep_water"),
             Surface::Moss => Some("footstep_moss"),
             Surface::Grass => Some("footstep_grass"),
+            Surface::SplitX { at, west, east } => {
+                if feet.x < at {
+                    west.footsteps(feet)
+                } else {
+                    east.footsteps(feet)
+                }
+            }
         }
     }
 }
@@ -158,6 +196,17 @@ thread_local! {
 /// before each load, so forgetting means silence rather than the last level's floor.
 pub fn set_surface(surface: Surface) {
     SURFACE.with(|s| s.set(surface));
+}
+
+/// Whether a portal crossing should be heard in the level now playing.
+///
+/// The level's own surface answers, and that is not a coincidence being exploited: the fifteen
+/// ported NonEuclidean scenes declare no ground, and a portal in one of them is an ordinary
+/// doorway the demo exists to hide -- announcing every crossing with an 850 ms whoosh would
+/// change what those scenes are. Every level this port added declares its ground, and in those a
+/// portal is a thing you can see and mean to step through.
+pub fn portal_audible() -> bool {
+    SURFACE.with(Cell::get) != Surface::None
 }
 
 /// Ask for `sfx` on the next frame, from code that cannot reach `Audio` (see the module docs).
@@ -336,6 +385,9 @@ pub struct Audio {
     /// Path of the track currently playing, so re-selecting the same track does not restart it.
     playing_path: Option<PathBuf>,
     current_scene: Option<usize>,
+    /// Whether the title screen is up, which overrides the scene's track -- see
+    /// [`Audio::set_on_title`].
+    on_title: bool,
     music_volume: f32,
     sfx_volume: f32,
     muted: bool,
@@ -397,6 +449,7 @@ impl Audio {
             current_music: None,
             playing_path: None,
             current_scene: None,
+            on_title: false,
             music_volume: 0.7,
             sfx_volume: 0.9,
             // A forced mute starts muted and stays so; `toggle_mute` honours it.
@@ -415,20 +468,61 @@ impl Audio {
             return;
         }
         self.current_scene = Some(scene);
+        // The title screen's track outranks the scene's, and `set_on_title` binds this scene's
+        // the moment the title closes -- so a load behind the title is recorded and not acted on,
+        // rather than announcing a track it is not going to play.
+        if !self.on_title {
+            self.bind_track();
+        }
+    }
 
-        let path = self.music_files.get(&scene).or(self.fallback_music.as_ref()).cloned();
+    /// Say whether the title screen is up. It OVERRIDES the scene's track.
+    ///
+    /// The title's backdrop is the INTRO scene, so the scene binding alone played the Backrooms'
+    /// fluorescent hum -- an interior 100 Hz buzz -- over what the title actually shows, which is
+    /// a night meadow with a white door in the middle distance (`ext::meadow::title_view`). The
+    /// title takes the meadow scene's own track instead, and the fallback when that file is not
+    /// installed. Called every frame by `Engine::run_frame`; a call that changes nothing does
+    /// nothing.
+    pub fn set_on_title(&mut self, on_title: bool) {
+        if self.on_title == on_title {
+            return;
+        }
+        self.on_title = on_title;
+        self.bind_track();
+    }
 
-        // Same track already playing for the previous scene? Let it run rather than restarting.
+    /// The file the title screen plays: the meadow scene's track, or the fallback.
+    fn title_track(&self) -> Option<&PathBuf> {
+        crate::ext::scenes::index_of(TITLE_TRACK_SCENE)
+            .and_then(|ix| self.music_files.get(&ix))
+            .or(self.fallback_music.as_ref())
+    }
+
+    /// Start whatever the title screen or the current scene calls for, crossfading out what is
+    /// playing. The one place a track is chosen, so the two callers cannot disagree.
+    fn bind_track(&mut self) {
+        let (what, path) = if self.on_title {
+            ("title".to_string(), self.title_track().cloned())
+        } else {
+            let Some(scene) = self.current_scene else { return };
+            (
+                format!("scene {scene}"),
+                self.music_files.get(&scene).or(self.fallback_music.as_ref()).cloned(),
+            )
+        };
+
         let Some(path) = path else {
-            log::info!("[audio] scene {scene}: no track");
+            log::info!("[audio] {what}: no track");
             self.stop_music(1.0);
             return;
         };
         // Named, not counted: which track a scene got is the one thing about this that can be
         // silently wrong (the prefix counts scenes from one -- see the module docs), and the
         // line is written even under `--mute`, where nothing is decoded and nothing plays.
-        log::info!("[audio] scene {scene}: {}", path.display());
+        log::info!("[audio] {what}: {}", path.display());
 
+        // Same track already playing? Let it run rather than restarting.
         if let Some(handle) = self.current_music.as_ref() {
             if handle.state() == PlaybackState::Playing
                 && self.playing_path.as_deref() == Some(path.as_path())
@@ -504,10 +598,11 @@ impl Audio {
         self.play_set(sfx.file_stem());
     }
 
-    /// Fire a footfall: the set the level's [`Surface`] names, with the player's feet at
-    /// `feet_y` (only the flooded Pool Rooms read it).
-    pub fn footstep(&mut self, feet_y: f32) {
-        if let Some(set) = SURFACE.with(Cell::get).footsteps(feet_y) {
+    /// Fire a footfall: the set the level's [`Surface`] names for where the soles are. `feet` is
+    /// a world position, not just a height, because a scene can hold two grounds side by side --
+    /// see [`Surface::SplitX`].
+    pub fn footstep(&mut self, feet: Vector3) {
+        if let Some(set) = SURFACE.with(Cell::get).footsteps(feet) {
             self.play_set(set);
         }
     }
@@ -515,6 +610,11 @@ impl Audio {
     /// One play from a named set: a file that is not the one played last, at a gain and rate
     /// nudged off centre.
     fn play_set(&mut self, name: &str) {
+        // Written BEFORE the mute check, and it is the only reason this line exists: every run
+        // this project makes is `--mute`, where nothing is played and nothing can be heard, so
+        // the log is the only evidence that a call site fires at all -- and, for the footsteps,
+        // the only evidence of which surface resolved under the player.
+        log::debug!("[sfx] {name}");
         if self.muted {
             return;
         }
@@ -541,9 +641,10 @@ impl Audio {
         self.muted = !self.muted;
         if self.muted {
             self.stop_music(0.3);
-        } else if let Some(scene) = self.current_scene.take() {
-            // Force a reselect so the track restarts.
-            self.set_scene(scene);
+        } else {
+            // Force a reselect so the track restarts -- through `bind_track`, so unmuting on the
+            // title screen brings the title's track back and not the backdrop scene's.
+            self.bind_track();
         }
         self.muted
     }
@@ -749,20 +850,53 @@ mod tests {
         assert_ne!(state, 0);
     }
 
+    /// Feet at a height, on the x the shipped splits put the near world on.
+    fn at(y: f32) -> Vector3 {
+        Vector3::new(0.0, y, 0.0)
+    }
+
     /// The Pool Rooms' two storeys: wading on either floor, dry on the stair between them.
     #[test]
     fn surfaces_map_to_their_sets() {
-        assert_eq!(Surface::None.footsteps(0.0), None);
-        assert_eq!(Surface::Carpet.footsteps(0.0), Some("footstep_carpet"));
-        assert_eq!(Surface::Moss.footsteps(0.0), Some("footstep_moss"));
-        assert_eq!(Surface::Grass.footsteps(8.0), Some("footstep_grass"));
+        assert_eq!(Surface::None.footsteps(at(0.0)), None);
+        assert_eq!(Surface::Carpet.footsteps(at(0.0)), Some("footstep_carpet"));
+        assert_eq!(Surface::Moss.footsteps(at(0.0)), Some("footstep_moss"));
+        assert_eq!(Surface::Grass.footsteps(at(8.0)), Some("footstep_grass"));
+        assert_eq!(Surface::Water.footsteps(at(-0.3)), Some("footstep_water"));
 
-        let pool = Surface::Tile(&[0.78, 4.54]);
-        assert_eq!(pool.footsteps(0.0), Some("footstep_water"), "the lower hall is flooded");
-        assert_eq!(pool.footsteps(4.2), Some("footstep_water"), "so is the upper storey");
-        assert_eq!(pool.footsteps(2.0), Some("footstep_tile"), "the stair between is dry");
-        assert_eq!(pool.footsteps(5.0), Some("footstep_tile"), "and so is anything above");
-        assert_eq!(Surface::Tile(&[]).footsteps(0.0), Some("footstep_tile"), "dry tile is tile");
+        let pool = crate::level17::SURFACE;
+        assert_eq!(pool.footsteps(at(0.0)), Some("footstep_water"), "the lower hall is flooded");
+        assert_eq!(pool.footsteps(at(4.2)), Some("footstep_water"), "so is the upper storey");
+        assert_eq!(pool.footsteps(at(2.0)), Some("footstep_tile"), "the stair between is dry");
+        // The upper water line is only 0.34 m over its own floor, so a step-height band under it
+        // belongs to the stair, not to the storey: with water lines alone this splashed.
+        assert_eq!(pool.footsteps(at(3.8)), Some("footstep_tile"), "and the top of the stair");
+        assert_eq!(pool.footsteps(at(5.0)), Some("footstep_tile"), "and so is anything above");
+        assert_eq!(
+            Surface::Tile(&[]).footsteps(at(0.0)),
+            Some("footstep_tile"),
+            "dry tile is tile"
+        );
+    }
+
+    /// A scene with two worlds in it sounds like whichever one the player is standing in. The
+    /// Backrooms are the case that matters: NEW GAME opens on the meadow, four hundred metres
+    /// west of the carpet, and used to walk on it in carpet.
+    #[test]
+    fn a_split_scene_follows_the_player_across_it() {
+        let hall = crate::level16::SURFACE;
+        let split = crate::ext::view::MOOD_SPLIT_X;
+        // The arrival in the meadow, and one step either side of the divide.
+        assert_eq!(hall.footsteps(Vector3::new(0.0, 8.0, -2.1)), Some("footstep_grass"));
+        assert_eq!(hall.footsteps(Vector3::new(split - 1.0, 0.0, 0.0)), Some("footstep_grass"));
+        assert_eq!(hall.footsteps(Vector3::new(split, 0.0, 0.0)), Some("footstep_carpet"));
+        // And the hall itself, where the eight portraits hang.
+        assert_eq!(hall.footsteps(Vector3::new(996.0, 0.0, 0.0)), Some("footstep_carpet"));
+
+        // The Intro is the mirror image: meadow this side, open sea the other.
+        let intro = crate::level15::SURFACE;
+        assert_eq!(intro.footsteps(Vector3::new(0.0, 0.0, 0.0)), Some("footstep_grass"));
+        assert_eq!(intro.footsteps(Vector3::new(1000.0, -0.3, 0.0)), Some("footstep_water"));
     }
 
     #[test]
@@ -853,5 +987,23 @@ mod tests {
         assert_eq!(SURFACE.with(Cell::get), Surface::Carpet);
         set_surface(Surface::None);
         assert_eq!(SURFACE.with(Cell::get), Surface::None);
+    }
+
+    /// A portal is audible in the levels that own their ground and silent in the ported scenes,
+    /// where the whole point is that the seam cannot be found.
+    #[test]
+    fn a_portal_is_only_audible_where_a_level_declares_its_ground() {
+        set_surface(Surface::None);
+        assert!(!portal_audible(), "the ported NonEuclidean scenes stay seamless");
+        for ground in [
+            crate::level15::SURFACE,
+            crate::level16::SURFACE,
+            crate::level17::SURFACE,
+            Surface::Moss,
+        ] {
+            set_surface(ground);
+            assert!(portal_audible(), "{ground:?} is a level of this port's own");
+        }
+        set_surface(Surface::None);
     }
 }

@@ -1484,6 +1484,14 @@ is `src/level16.rs`. That off-by-one is easy to get wrong from the filename alon
 `music_names_bind_to_their_scenes` asserts every shipped name against the registry. A name
 that starts with anything else is the fallback. Scene changes crossfade.
 
+**The title screen overrides the scene's track.** Its backdrop *is* the INTRO scene, so binding
+by scene alone played the Backrooms' 100 Hz fluorescent buzz over what the title actually shows:
+a night meadow with a white door in the middle distance. `Audio::set_on_title`, which
+`Engine::run_frame` calls every frame, takes the meadow scene's own track instead — the fallback
+if that file is not installed — and hands the scene's back when the title closes. The startup
+sets it before the first load, so a launch never briefly binds the backdrop's track and fades off
+it a frame later.
+
 Music is **streamed**; effects are decoded up front. `StaticSoundData` holds a whole track as
 f32 samples; a streaming sound decodes ahead on kira's thread instead, so a track costs about
 the same whether it runs thirty seconds or twenty minutes, and the effects — which have to
@@ -1500,24 +1508,49 @@ files and a wobble is the difference between a corridor that sounds walked down 
 sounds like a loop of one sample.
 
 **Surfaces.** Footfalls come in five sets — carpet, tile, water, moss, grass — and each level
-declares which ground it has in one line of its `load`: `audio::set_surface(Surface::Carpet)`
-in the Backrooms, `Grass` in the meadow, `Moss` in the overgrown room. The Pool Rooms pass
-`Surface::Tile(&[0.78, 4.54])`, the heights of their two water sheets: a footfall less than
-1.2 m below one of them splashes, and the spiral stair climbing between the storeys is the one
-dry ground in the level. The engine clears the surface before every scene load, so a level
-that declares nothing is silent underfoot rather than walking on the last one's carpet.
+declares which ground it has in one line of its `load`: `audio::set_surface(SURFACE)`, with the
+level's own `SURFACE` constant beside it. The engine clears the surface before every scene load,
+so a level that declares nothing is silent underfoot rather than walking on the last one's
+carpet.
+
+A declaration is resolved **where the player's feet are**, not fixed when the scene loads, because
+two of the four levels are not one ground:
+
+* The Backrooms and the Intro each hold two worlds at once — a meadow at the origin and a far
+  room at x 1000 — so both declare `Surface::SplitX { at: view::MOOD_SPLIT_X, .. }`: grass west
+  of the divide, and carpet (or, in the Intro, open sea) east of it. This is the case that
+  matters most: NEW GAME opens in the Backrooms and its first steps are taken on the meadow, so
+  a scene-wide `Carpet` meant the game's very first sound was carpet played on grass.
+* The Pool Rooms declare `Surface::Tile(&[(0.0, 0.78), (4.2, 4.54)])` — their two storeys as
+  `(floor, water surface)` pairs. A footfall on one of those floors and under its water splashes;
+  anywhere else on the tiles is the dry slap, which is what the spiral stair between the storeys
+  gets. The pairs carry the floor as well as the water line because the upper sheet stands only
+  0.34 m over its own floor, so a fixed wading depth made the top of the dry stair splash.
+
+The soles are the eye less `GH_PLAYER_HEIGHT` **times `p_scale`**: a scaling portal changes the
+player's size, and a shrunk player's feet are not 1.5 below their eye.
 
 **Where each sound fires.** `grab`/`release` from the grab's edges; the footfall from the bob
-counter; `portal` from the engine's portal pass, on any object that warps; `key_take` when the
-key leaves the painting and `key_use` on the press that turns it in the lock; `window_grow`
-the step the window first becomes passable; `elevator_button` + `elevator_doors` on the press,
-`elevator_ride` over the black screen the load happens behind, and `elevator_ding` +
-`elevator_doors` when the screen clears on the far side; `ui_move`/`ui_confirm`/`ui_back` from
-the menu's navigation (silent on the frame a menu opens, and silent while muted). An object
-in the scene vector cannot reach the engine's `Audio` — the engine is holding it — so those
-callers use `audio::request`, which queues a one-shot for the next frame's `tick`; a sound
-already queued that frame is not queued twice, so three props through one portal are one
-whoosh.
+counter; `jump` and `land_soft`/`land_hard` from the player's two take-once jump events, the
+landing chosen by its touchdown speed (`jump::HARD_LANDING`, 4.0 u/s — a hop from the 0.62 m
+apex lands at 3.05–3.08, and 4.0 is reached by falling about 0.85 m, so an ordinary jump is a
+scuff and a storey's drop is a thump); `stow`/`retrieve`/`drop`/`refuse` from the inventory's
+event channel; `portal` from the engine's portal pass, on any object that warps *in a level that
+declares a surface*, so the ported non-Euclidean scenes — whose whole point is that you cannot
+tell where the seam is — are not made to announce every doorway; `key_take` when the key leaves
+the painting and `key_use` on the press that turns it in the lock; `window_grow` the step the
+window first becomes passable; `elevator_button` + `elevator_doors` on the press, `elevator_ride`
+over the black screen the load happens behind, and `elevator_ding` + `elevator_doors` when the
+screen clears on the far side; `ui_move`/`ui_confirm`/`ui_back` from the menu's navigation
+(silent on the frame a menu opens, and silent while muted). An object in the scene vector cannot
+reach the engine's `Audio` — the engine is holding it — so those callers use `audio::request`,
+which queues a one-shot for the next frame's `tick`; a sound already queued that frame is not
+queued twice, so three props through one portal are one whoosh.
+
+Every play writes `[sfx] <stem>` at debug level *before* the mute check. It is there because
+every run this project makes is `--mute`: nothing is played and nothing can be heard, so the log
+is the only evidence that a call site fires at all, and for the footfalls the only evidence of
+which surface resolved under the player.
 
 Everything degrades to a no-op. No audio device, no `assets/` directory, or no files, and the
 engine still starts and runs silently — a demo should not refuse to launch over a missing sound

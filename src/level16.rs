@@ -110,6 +110,15 @@ const HANGING: [usize; 8] = [0, 1, 2, 1, 0, 2, 0, 2];
 /// Where the frames hang along each wall, west to east, in world x.
 const NORTH_X: [f32; 5] = [981.0, 985.0, 989.0, 993.0, 997.0];
 const SOUTH_X: [f32; 3] = [983.0, 991.0, 999.0];
+/// EXT: what the footsteps land on (`ext/audio.rs`). Two worlds in one scene, so the surface is
+/// resolved where the player's feet are rather than fixed for the load: the scene opens in the
+/// meadow, four hundred metres west of the carpet, and NEW GAME's first steps are taken there.
+pub const SURFACE: crate::ext::audio::Surface = crate::ext::audio::Surface::SplitX {
+    at: view::MOOD_SPLIT_X,
+    west: &crate::ext::audio::Surface::Grass,
+    east: &crate::ext::audio::Surface::Carpet,
+};
+
 /// The seed whose sitter wears the key: the last frame on the north wall, the one by the
 /// bare end wall. [`HANGING`] must keep a Mona Lisa there.
 const KEY_SEED: u32 = 4;
@@ -127,8 +136,7 @@ impl Scene for Level16 {
         // Past the split is a building, not a sunset: see the module docs. After `load_meadow`,
         // which turns the split on (and every load resets this to sunset).
         view::set_far_mood(view::MOOD_INTERIOR);
-        // EXT: what the footsteps land on (src/ext/audio.rs).
-        crate::ext::audio::set_surface(crate::ext::audio::Surface::Carpet);
+        crate::ext::audio::set_surface(SURFACE);
 
         // ── The elevator, set into the end wall of the entrance corridor. Built before the
         // backrooms because the scan's collision is cut away behind its doorway.

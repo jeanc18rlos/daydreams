@@ -400,6 +400,17 @@ impl Engine {
                 }
             };
             self.apply_menu_action(action);
+            // EXT: the title screen has its own track. Its backdrop IS the INTRO scene, so the
+            // scene binding alone gave it the Backrooms' fluorescent hum over a night meadow
+            // (src/ext/audio.rs). Told here, after the action, because that is where the title
+            // is entered and left; a frame that changes nothing costs a comparison.
+            {
+                let mut ext = self.ext.borrow_mut();
+                // Open AND title: `is_title` reports which stack the menu is on, and a closed
+                // menu is still standing on the screen it was closed from.
+                let on_title = ext.menu.is_open() && ext.menu.is_title();
+                ext.audio.set_on_title(on_title);
+            }
             self.ext.borrow().menu.is_open()
         };
         if menu_open {
@@ -812,6 +823,15 @@ impl Engine {
     /// EXT: carry out whatever the menu decided this frame.
     fn apply_menu_action(&self, action: crate::ext::menu::MenuAction) {
         use crate::ext::menu::MenuAction;
+        // EXT: the pockets are emptied here rather than in `load_scene`, because this is the
+        // only place that knows the difference. Every branch below that loads a scene means a
+        // different run of the game -- and so does an elevator ride and a window crossing, which
+        // are loads too and where carrying things across is the whole point of the inventory
+        // (`ExtState::on_scene_loaded`). `starts_fresh` is that distinction, kept next to the
+        // actions it is about.
+        if action.starts_fresh() {
+            self.ext.borrow_mut().inventory.clear();
+        }
         match action {
             MenuAction::None => {}
             // EXT: every action that hands control back to the game drops what its own confirm
@@ -1098,8 +1118,12 @@ impl Engine {
                 if let Some(physical) = obj.as_physical_mut() {
                     for j in 0..v_portals.len() {
                         if physical.try_portal(&v_portals[j].borrow()) {
-                            // EXT: a crossing is the one moment a portal is audible.
-                            crate::ext::audio::request(crate::ext::audio::Sfx::Portal);
+                            // EXT: a crossing is the one moment a portal is audible -- in the
+                            // levels that own their ground. The ported scenes are silent here on
+                            // purpose (src/ext/audio.rs, `portal_audible`).
+                            if crate::ext::audio::portal_audible() {
+                                crate::ext::audio::request(crate::ext::audio::Sfx::Portal);
+                            }
                             break;
                         }
                     }
@@ -1412,10 +1436,15 @@ impl Engine {
             grab_pressed = false;
         }
 
-        let (cam_to_world, steps, feet_y) = {
+        let (cam_to_world, steps, feet) = {
             let p = self.player.borrow();
-            // EXT: the player's position is the eye; the footstep sounds want the soles.
-            (p.cam_to_world(), p.steps(), p.obj().pos.y - GH_PLAYER_HEIGHT)
+            // EXT: the player's position is the eye; the footstep sounds want the soles. Scaled
+            // by `p_scale`, which a scaling portal moves (Physical.cpp) and which the capsule is
+            // built at: a shrunk player's soles are not 1.5 below their eye.
+            let o = p.obj();
+            let mut feet = o.pos;
+            feet.y -= GH_PLAYER_HEIGHT * o.p_scale;
+            (p.cam_to_world(), p.steps(), feet)
         };
 
         // EXT: this frame's jump events (src/ext/jump.rs), taken here beside the footsteps
@@ -1427,13 +1456,15 @@ impl Engine {
         // Both lines carry the position as well, to the frame rather than to the step: it is
         // what turns `--jump-at` into a measurement -- the ground a running jump covers is the
         // distance between the two -- and a screenshot can only ever show one point of an arc.
-        {
+        let (jumped, landed) = {
             let p = self.player.borrow();
             let at = p.obj().pos;
-            if p.just_jumped() {
+            let jumped = p.just_jumped();
+            if jumped {
                 log::debug!("[jump] launched at ({:.2}, {:.2}, {:.2})", at.x, at.y, at.z);
             }
-            if let Some(speed) = p.just_landed() {
+            let landed = p.just_landed();
+            if let Some(speed) = landed {
                 log::debug!(
                     "[jump] landed at ({:.2}, {:.2}, {:.2}), {speed:.2} u/s down",
                     at.x,
@@ -1441,7 +1472,8 @@ impl Engine {
                     at.z
                 );
             }
-        }
+            (jumped, landed)
+        };
 
         let objects = self.v_objects.borrow();
 
@@ -1458,14 +1490,24 @@ impl Engine {
             &mut ext.inventory,
         );
         // The frame's inventory event, consumed here so a stale one can never sound a frame
-        // late; the sound layer is next in line for it. At trace, because the inventory has
-        // already said at debug what it did -- this line is about the channel, not the action.
+        // late. At trace, because the inventory has already said at debug what it did -- this
+        // line is about the channel, not the action.
         if let Some(event) = crate::ext::inventory::take_event() {
             log::trace!("[inv] {event:?} on the event channel");
+            ext.audio.play(crate::ext::inventory::sfx(event));
+        }
+        // EXT: and the jump's two, from the block above. Played here rather than queued through
+        // `audio::request`, because `Audio` is reachable from this side of the borrow and a
+        // launch a frame late is a launch you can hear is late.
+        if jumped {
+            ext.audio.play(crate::ext::audio::Sfx::Jump);
+        }
+        if let Some(speed) = landed {
+            ext.audio.play(crate::ext::jump::landing_sfx(speed));
         }
         crate::ext::grab::update(&objects, &cam_to_world, grab_pressed, &mut ext.grab);
         ext.fire_grab_sfx();
-        ext.fire_footstep_sfx(steps, feet_y);
+        ext.fire_footstep_sfx(steps, feet);
         crate::ext::view::set_fov(ext.sprint.ease_fov(crate::ext::view::time()));
     }
 

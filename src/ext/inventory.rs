@@ -119,6 +119,18 @@ fn fire(e: Event) {
     EVENT.with(|c| c.set(Some(e)));
 }
 
+/// The sound an event makes. Here rather than at the call site because which sound goes with
+/// which event is a fact about the inventory, and a fifth event would have to answer it.
+pub fn sfx(e: Event) -> crate::ext::audio::Sfx {
+    use crate::ext::audio::Sfx;
+    match e {
+        Event::Stowed => Sfx::Stow,
+        Event::Retrieved => Sfx::Retrieve,
+        Event::Dropped => Sfx::Drop,
+        Event::Refused => Sfx::Refuse,
+    }
+}
+
 /// One frame's inventory input, latched by `Engine::run_frame` before the fixed-step loop
 /// clears the key edges (`Input::end_frame`), exactly as the grab's E is.
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
@@ -207,6 +219,26 @@ impl Inventory {
         let n = CAPACITY as i32;
         let steps = steps.clamp(-(n as f32), n as f32) as i32;
         self.selected = (self.selected as i32 - steps).rem_euclid(n) as usize;
+    }
+
+    /// Empty every slot and forget everything about them.
+    ///
+    /// NOT called from a scene load. An elevator ride and a window crossing are loads too, and
+    /// carrying things across them is the whole point (`ExtState::on_scene_loaded`). This is for
+    /// the menu actions that mean a different run rather than somewhere else in this one --
+    /// `MenuAction::starts_fresh`, applied by `Engine::apply_menu_action`. Without it NEW GAME
+    /// began carrying the last game's loot, and RESTART LEVEL put a pocketed apple in the hall
+    /// beside the one the level rebuilt.
+    ///
+    /// A retrieve in flight has already asked for its object's spawn; that request is withdrawn
+    /// here, because applying it would drop the object into whatever scene loads next. Dropping
+    /// the slot then drops the object itself, and a `RigidProp` gave its rapier body up on the
+    /// stow, so nothing is left in the physics world either.
+    pub fn clear(&mut self) {
+        for slot in self.slots.iter().flatten() {
+            room::withdraw_spawn(&slot.obj);
+        }
+        *self = Inventory::default();
     }
 
     /// Say why nothing happened, for [`NOTICE_SECS`].
@@ -612,6 +644,64 @@ mod tests {
         drain();
     }
 
+    /// F and G on the same rendered frame used to annihilate the item: the stow's remove and
+    /// the drop's spawn named the same `Rc`, `apply_spawns` appended a second handle and
+    /// `apply_removes` then took both copies out. `room::request_spawn` cancels the pending
+    /// remove now, so the object ends in the world or in a slot -- never in neither.
+    #[test]
+    fn a_stow_and_a_drop_in_one_frame_cannot_destroy_the_item() {
+        drain();
+        let apple = Item::new("APPLE", true);
+        let (scene, mut grab) = carrying(&apple);
+        let mut inv = Inventory::default();
+        let both = Edges { stow: true, drop: true, ..Edges::default() };
+        update(&scene, &cam(), both, &mut grab, &mut inv);
+
+        // The engine applies the queues in this order, between fixed steps.
+        let mut world: Vec<Rc<RefCell<dyn ObjectT>>> = scene.clone();
+        room::apply_spawns(&mut world);
+        room::apply_removes(&mut world);
+
+        let in_world = world.iter().filter(|o| Rc::ptr_eq(o, &scene[0])).count();
+        let in_slot = inv.labels().iter().filter(|l| l.is_some()).count();
+        assert_eq!(in_world + in_slot, 1, "the item is somewhere, exactly once");
+        assert_eq!(in_world, 1, "G put it down, so it is the world that has it");
+        assert!(grab.held.is_none(), "and not in the hand");
+        assert!(apple.borrow().base.gravity.y < 0.0, "with gravity back on");
+        drain();
+    }
+
+    /// The same hazard from the other side: two F presses with no fixed step between them --
+    /// the stow, then the retrieve -- used to leave the prop outside the scene with a live
+    /// rapier body, which is the exact leak `on_stow` exists to prevent.
+    #[test]
+    fn two_stows_before_the_queues_are_applied_cannot_strand_the_item() {
+        drain();
+        let apple = Item::new("APPLE", true);
+        let (scene, mut grab) = carrying(&apple);
+        let mut inv = Inventory::default();
+        let take = Edges { stow: true, ..Edges::default() };
+        // Frame N stows; frame N+1 retrieves. A rendered frame shorter than one 2 ms step runs
+        // no step at all, so the engine has applied neither queue and the object is still in
+        // the vector both times.
+        update(&scene, &cam(), take, &mut grab, &mut inv);
+        update(&scene, &cam(), take, &mut grab, &mut inv);
+
+        let mut world: Vec<Rc<RefCell<dyn ObjectT>>> = scene.clone();
+        room::apply_spawns(&mut world);
+        room::apply_removes(&mut world);
+        assert_eq!(world.len(), 1, "it never left the scene, and was never doubled");
+
+        // And the retrieve still lands: the next frame finds it and pins the carry.
+        update(&world, &cam(), Edges::default(), &mut grab, &mut inv);
+        assert_eq!(grab.held, Some(0));
+        assert!(inv.labels().iter().all(Option::is_none), "the slot let go once it was in hand");
+        let a = apple.borrow();
+        assert_eq!((a.stows, a.unstows, a.grabs), (1, 1, 1), "told once each, not left half-told");
+        drop(a);
+        drain();
+    }
+
     #[test]
     fn an_empty_slot_says_so() {
         drain();
@@ -621,6 +711,48 @@ mod tests {
         assert_eq!(take_event(), Some(Event::Refused));
         assert_eq!(hint::take().as_deref(), Some(EMPTY_HINT));
         drain();
+    }
+
+    /// What NEW GAME and MAIN MENU do: the slots empty, the selection goes back to the first,
+    /// and a retrieve that had already asked for its spawn does not land in the next scene.
+    #[test]
+    fn clearing_empties_the_slots_and_withdraws_a_retrieve_in_flight() {
+        drain();
+        let apple = Item::new("APPLE", true);
+        let (scene, mut grab) = carrying(&apple);
+        let mut inv = Inventory::default();
+        let take = Edges { stow: true, ..Edges::default() };
+        update(&scene, &cam(), take, &mut grab, &mut inv);
+        let mut world: Vec<Rc<RefCell<dyn ObjectT>>> = scene.clone();
+        room::apply_removes(&mut world);
+        assert!(world.is_empty());
+        // F again asks for the spawn; the slot still holds the apple until it lands.
+        update(&world, &cam(), take, &mut grab, &mut inv);
+        assert_eq!(inv.labels()[0], Some("APPLE"));
+
+        inv.clear();
+        assert!(inv.labels().iter().all(Option::is_none));
+        assert_eq!(inv.selected(), 0);
+        room::apply_spawns(&mut world);
+        assert!(world.is_empty(), "the queued spawn was withdrawn, not left for the next scene");
+        drop(scene);
+        assert_eq!(Rc::strong_count(&apple), 1, "only this test still holds it");
+        drain();
+    }
+
+    /// Every event has a sound of its own, and no two share one -- the four files exist so that
+    /// a refusal does not sound like a put-down.
+    #[test]
+    fn every_event_has_its_own_sound() {
+        use crate::ext::audio::Sfx;
+        let all = [Event::Stowed, Event::Retrieved, Event::Dropped, Event::Refused];
+        assert_eq!(sfx(Event::Stowed), Sfx::Stow);
+        assert_eq!(sfx(Event::Retrieved), Sfx::Retrieve);
+        assert_eq!(sfx(Event::Dropped), Sfx::Drop);
+        assert_eq!(sfx(Event::Refused), Sfx::Refuse);
+        let mut sounds: Vec<Sfx> = all.iter().map(|&e| sfx(e)).collect();
+        sounds.dedup();
+        assert_eq!(sounds.len(), all.len());
     }
 
     #[test]

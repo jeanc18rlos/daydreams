@@ -126,6 +126,27 @@ pub enum MenuAction {
     ToggleMute,
 }
 
+impl MenuAction {
+    /// Whether this action begins somewhere new rather than carrying on where the player was.
+    ///
+    /// The distinction the engine cannot make for itself: every one of these loads a scene, and
+    /// so do an elevator ride and a window crossing, but only these mean "a different run". The
+    /// inventory survives travel and not the menu (`ext::inventory::Inventory::clear`), which is
+    /// why NEW GAME does not start carrying the last game's loot and RESTART LEVEL does not put
+    /// a pocketed apple in the hall beside the one the level rebuilds.
+    pub fn starts_fresh(self) -> bool {
+        match self {
+            MenuAction::NewGame
+            | MenuAction::RestartLevel
+            | MenuAction::SwitchLevel(_)
+            | MenuAction::MainMenu => true,
+            MenuAction::None | MenuAction::Continue | MenuAction::Quit | MenuAction::ToggleMute => {
+                false
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Screen {
     Title,
@@ -705,6 +726,39 @@ mod tests {
         step(&mut m, KEY_UP, 14);
         step(&mut m, KEY_UP, 14);
         assert_eq!(step(&mut m, KEY_ENTER, 14), MenuAction::MainMenu);
+    }
+
+    /// Which actions empty the pockets, driven through the screens a player would use rather
+    /// than asserted on the enum: NEW GAME off the title and MAIN MENU out of the pause menu
+    /// are the two the inventory's `clear` exists for, and CONTINUE is the one that must not
+    /// touch it -- a pause menu is not a new game.
+    #[test]
+    fn a_new_game_and_the_main_menu_start_fresh_and_continue_does_not() {
+        let mut m = Menu::new();
+        assert_eq!(m.sel, 0, "NEW GAME is the title's first row");
+        let action = step(&mut m, KEY_ENTER, 14);
+        assert_eq!(action, MenuAction::NewGame);
+        assert!(action.starts_fresh());
+
+        let mut m = Menu::new();
+        m.open_pause();
+        let action = step(&mut m, KEY_ENTER, 14);
+        assert_eq!(action, MenuAction::Continue);
+        assert!(!action.starts_fresh(), "resuming is not a new game");
+
+        let mut m = Menu::new();
+        m.open_pause();
+        step(&mut m, KEY_UP, 14); // CONTINUE -> MAIN MENU, wrapping backwards
+        let action = step(&mut m, KEY_ENTER, 14);
+        assert_eq!(action, MenuAction::MainMenu);
+        assert!(action.starts_fresh());
+
+        // And the rest of the table, so a new variant has to choose a side.
+        assert!(MenuAction::RestartLevel.starts_fresh());
+        assert!(MenuAction::SwitchLevel(3).starts_fresh());
+        assert!(!MenuAction::None.starts_fresh());
+        assert!(!MenuAction::Quit.starts_fresh());
+        assert!(!MenuAction::ToggleMute.starts_fresh());
     }
 
     /// Walk from the title into Options and land the selection on a given row.

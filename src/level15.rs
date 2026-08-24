@@ -11,6 +11,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::ext::audio;
 use crate::ext::bounds::bounds_box;
 use crate::ext::meadow::{door_with_portal, load_meadow, FAR};
 use crate::object::{Object, ObjectT};
@@ -22,6 +23,16 @@ use crate::vector::Vector3;
 
 pub struct Level15;
 
+/// EXT: what the footsteps land on (`ext/audio.rs`). Two worlds in one scene, so the surface is
+/// resolved where the player's feet are rather than fixed for the load: the meadow this side of
+/// `view::MOOD_SPLIT_X`, and beyond it the sea, which is waded through rather than walked on --
+/// its ground collider sits just below the surface (below).
+pub const SURFACE: audio::Surface = audio::Surface::SplitX {
+    at: crate::ext::view::MOOD_SPLIT_X,
+    west: &audio::Surface::Grass,
+    east: &audio::Surface::Water,
+};
+
 impl Scene for Level15 {
     fn load(
         &self,
@@ -32,8 +43,7 @@ impl Scene for Level15 {
         player: &mut Player,
     ) {
         let meadow = load_meadow(gl, res, objs, portals, player);
-        // EXT: what the footsteps land on (src/ext/audio.rs).
-        crate::ext::audio::set_surface(crate::ext::audio::Surface::Grass);
+        audio::set_surface(SURFACE);
 
         // ── The sea world: nothing of the meadow here, only water to every horizon ─────────
         // The sea quad carries the ground collider, set just below the surface so the player

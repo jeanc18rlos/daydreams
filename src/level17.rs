@@ -112,6 +112,15 @@ fn placement() -> Object {
     obj
 }
 
+/// EXT: what the footsteps land on (`ext/audio.rs`): tile, with the two storeys that stand under
+/// water given as `(floor, water surface)` -- the hall's floor at 0 under water at 0.78, and the
+/// upper storey's at 4.2 under water at 4.54. A footfall on one of those floors and below its
+/// water splashes; the spiral stair between them is the level's one dry ground, and its top
+/// passes within a third of a metre of the upper water line, which is why the floor is carried
+/// beside the line rather than a fixed wading depth being assumed.
+pub const SURFACE: crate::ext::audio::Surface =
+    crate::ext::audio::Surface::Tile(&[(0.0, 0.78), (4.2, 4.54)]);
+
 impl Scene for Level17 {
     fn load(
         &self,
@@ -121,10 +130,8 @@ impl Scene for Level17 {
         _portals: &mut PPortalVec,
         player: &mut Player,
     ) {
-        // EXT: what the footsteps land on (src/ext/audio.rs): tile under standing water, at
-        // the two water lines this level has -- the hall's and the upper storey's. A footfall
-        // under one of them splashes; the spiral stair between them is dry.
-        crate::ext::audio::set_surface(crate::ext::audio::Surface::Tile(&[0.78, 4.54]));
+        // EXT: what the footsteps land on (src/ext/audio.rs).
+        crate::ext::audio::set_surface(SURFACE);
         // The elevator first, set into the hall's west wall (`ext/elevator.rs`, "Set into a wall"):
         // the model is carved round its doorway as it loads, and the fence takes in the
         // cabin, which stands outside the model behind the wall.

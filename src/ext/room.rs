@@ -175,8 +175,34 @@ thread_local! {
 
 /// Ask the engine to add `obj` to the scene at the end of this step. Requests accumulate
 /// until applied and keep their order.
+///
+/// A spawn CANCELS a pending remove of the same object rather than queueing beside it -- see
+/// [`request_remove`], which is where the reasoning is written out.
 pub fn request_spawn(obj: Rc<RefCell<dyn ObjectT>>) {
+    if cancel(&REMOVES, &obj) {
+        return;
+    }
     SPAWNS.with(|q| q.borrow_mut().push(obj));
+}
+
+/// Withdraw a spawn that was asked for and has not been applied yet; says whether there was
+/// one. The inventory uses it when the menu empties the slots: a retrieve in flight has already
+/// queued its object, and letting that land would drop it into whatever scene loads next.
+pub fn withdraw_spawn(obj: &Rc<RefCell<dyn ObjectT>>) -> bool {
+    cancel(&SPAWNS, obj)
+}
+
+/// The shape both object queues have: handles waiting to be added to or taken out of the scene.
+type ObjQueue = std::thread::LocalKey<RefCell<Vec<Rc<RefCell<dyn ObjectT>>>>>;
+
+/// Drop every pending request for `obj` from `queue`, and say whether there was one.
+fn cancel(queue: &'static ObjQueue, obj: &Rc<RefCell<dyn ObjectT>>) -> bool {
+    queue.with(|q| {
+        let mut q = q.borrow_mut();
+        let before = q.len();
+        q.retain(|o| !Rc::ptr_eq(o, obj));
+        q.len() != before
+    })
 }
 
 /// Carry out pending spawns: the objects are appended to the scene's object vector in the
@@ -191,7 +217,24 @@ pub fn apply_spawns(objs: &mut PObjectVec) {
 /// Ask the engine to take `obj` out of the scene at the end of this step. Matched by
 /// `Rc::ptr_eq`, so the handle must be a clone of the one the scene was given; an object
 /// that is not in the scene is ignored. Asking twice removes it once.
+///
+/// # The two queues cancel each other, by identity
+///
+/// A remove and a spawn of the SAME object can both be asked for before either is applied --
+/// the inventory does it whenever two of its keys land inside one batch of requests, which is
+/// any rendered frame that runs no fixed step (`--no-vsync` produces those routinely). Queued
+/// side by side they destroyed the object: `apply_spawns` runs first and appends a second
+/// handle, then `apply_removes` matches by `Rc::ptr_eq` across the whole vector and takes BOTH
+/// copies out, and the last `Rc` dies. Stow-then-drop lost the item for good; stow-then-retrieve
+/// left it outside the scene with a live rapier body.
+///
+/// So the later request cancels the earlier one instead of joining it. Both orders end where
+/// the pair means: a spawn after a remove leaves the object in the scene it never left, and a
+/// remove after a spawn leaves it out of the scene it never entered. Neither can lose it.
 pub fn request_remove(obj: &Rc<RefCell<dyn ObjectT>>) {
+    if cancel(&SPAWNS, obj) {
+        return;
+    }
     REMOVES.with(|q| q.borrow_mut().push(Rc::clone(obj)));
 }
 
@@ -335,6 +378,31 @@ mod tests {
         assert_eq!(xs(&v), [0.0, 2.0, 4.0]);
         assert!(apply_removes(&mut v).is_empty(), "consumed");
         assert_eq!(v.len(), 3);
+    }
+
+    /// The pair cancels by identity, both ways round, and a stranger in the queue is untouched.
+    /// Without this an object asked for twice in one batch was appended once and then removed
+    /// twice, which took the original out with the copy.
+    #[test]
+    fn a_spawn_and_a_remove_of_one_object_cancel_each_other() {
+        let mut v = scene(3);
+        // Remove then spawn: the object stays in the scene, exactly once -- and its neighbour's
+        // removal, asked for in the same batch, is not disturbed.
+        request_remove(&v[0]);
+        request_remove(&v[2]);
+        request_spawn(Rc::clone(&v[0]));
+        apply_spawns(&mut v);
+        assert_eq!(xs(&v), [0.0, 1.0, 2.0], "the spawn cancelled the remove, not queued beside it");
+        assert_eq!(apply_removes(&mut v), [2], "only the neighbour goes");
+        assert_eq!(xs(&v), [0.0, 1.0]);
+
+        // Spawn then remove: the object never enters the scene.
+        let newcomer = scene(1);
+        request_spawn(Rc::clone(&newcomer[0]));
+        request_remove(&newcomer[0]);
+        apply_spawns(&mut v);
+        assert_eq!(v.len(), 2, "the remove cancelled the spawn");
+        assert!(apply_removes(&mut v).is_empty());
     }
 
     #[test]

@@ -71,6 +71,29 @@ pub const LAUNCH_LOCKOUT: f32 = 0.05;
 /// -- below that it is a scuff, above it is a kerb or a jump.
 pub const LANDING_MIN_AIR: f32 = 0.08;
 
+/// Touchdown speed, in units per second, at or above which a landing is a thump rather than a
+/// scuff (`landing_sfx`).
+///
+/// A jump from [`APEX`] lands at **3.05-3.08 u/s** in game (3.09 through the integrator), so an
+/// ordinary hop has to be below this and a real drop above it. Four is a quarter clear of the hop
+/// -- far enough that the walk's own micro-drops and a jump taken while running downhill still
+/// read as soft -- and is reached by falling about **0.85 m**, which is a storey's step rather
+/// than a kerb. Nothing in the shipped scenes is high enough to jump off and land hard; the pool
+/// basin, a 1.19 m drop, is.
+pub const HARD_LANDING: f32 = 4.0;
+
+/// Which landing sound a touchdown at `speed` (downward, u/s) is.
+///
+/// Here rather than at the call site because the threshold is a fact about the jump: it is chosen
+/// against the arc [`APEX`] produces, and moving the apex would move it.
+pub fn landing_sfx(speed: f32) -> crate::ext::audio::Sfx {
+    if speed >= HARD_LANDING {
+        crate::ext::audio::Sfx::LandHard
+    } else {
+        crate::ext::audio::Sfx::LandSoft
+    }
+}
+
 /// The player's own drag, set by `Player::reset` (Player.cpp:20). Named here because the apex
 /// depends on it and the derivation below has to see it; the ported line remains the source of
 /// truth, and `the_drag_solved_for_is_the_players_own` pins the two together so this copy cannot
@@ -228,6 +251,38 @@ mod tests {
                 return (apex, steps as f32 * GH_DT);
             }
         }
+    }
+
+    /// Fall from `height` with an initial upward `v0`, through the same integrator, and return
+    /// the downward speed at the moment the floor is reached.
+    fn touchdown(v0: f32, height: f32) -> f32 {
+        let mut p = Physical::new();
+        p.drag = PLAYER_DRAG;
+        p.velocity.y = v0;
+        p.base.pos.y = height;
+        loop {
+            p.update();
+            if p.base.pos.y <= 0.0 {
+                return -p.velocity.y;
+            }
+        }
+    }
+
+    /// Which landing is which, measured against the arcs the threshold has to tell apart rather
+    /// than asserted on the number itself.
+    #[test]
+    fn an_ordinary_jump_lands_soft_and_a_real_drop_lands_hard() {
+        use crate::ext::audio::Sfx;
+        let hop = touchdown(impulse(1.0), 0.0);
+        assert!((3.0..3.2).contains(&hop), "a jump from the apex lands at {hop} u/s");
+        assert_eq!(landing_sfx(hop), Sfx::LandSoft, "an ordinary hop is a scuff");
+        // A step off the pool basin's edge -- 1.19 m, the one real drop in the shipped scenes.
+        let basin = touchdown(0.0, 1.19);
+        assert!(basin >= HARD_LANDING, "the basin lands at {basin} u/s");
+        assert_eq!(landing_sfx(basin), Sfx::LandHard);
+        // And the scanned floor's own micro-drops, which `LANDING_MIN_AIR` suppresses but which
+        // must never be a thump if one ever gets through.
+        assert_eq!(landing_sfx(0.5), Sfx::LandSoft);
     }
 
     #[test]
