@@ -115,6 +115,15 @@ pub struct Engine {
     // press could land entirely between two of them. Negative means idle.
     dev_jump_at: Cell<Option<i32>>,
     dev_jump_hold: Cell<i32>,
+    // EXT: dev tooling -- `--stow-at N,M` / `--drop-at N,M`: rendered frames left until each F
+    // and G press, the way `dev_e_at` presses E. Lists, because the round trip a run has to
+    // show -- stow it, take it out, put it down -- is more than one press of each.
+    dev_stow_at: RefCell<Vec<i32>>,
+    dev_drop_at: RefCell<Vec<i32>>,
+    // EXT: this frame's inventory input (F, G, the wheel), latched at the top of run_frame
+    // before the fixed-step loop's `Input::end_frame` clears the edges, and consumed by
+    // `ext_update` (src/ext/inventory.rs).
+    inv_edges: Cell<crate::ext::inventory::Edges>,
     // EXT: this frame's gamepad edges, handed in by main.rs before run_frame.
     pad_events: Cell<crate::ext::gamepad::PadEvents>,
     // EXT: dev tooling -- wall time per rendered frame, reported on the `[shot]` line.
@@ -136,6 +145,23 @@ pub struct Engine {
     // drawable (capped at GH_FBO_SIZE a side) by `ensure_portal_fbos`, which recreates them on
     // a resize; borrowed immutably through the RenderCtx, since `render` is re-entrant.
     portal_fbos: RefCell<Vec<crate::frame_buffer::FrameBuffer>>,
+}
+
+/// EXT: dev tooling -- tick one list of "frames until a key press" (`--stow-at`, `--drop-at`)
+/// and say whether this rendered frame is one of them. Frames that have come round are taken
+/// out of the list, so each is pressed once; two naming the same frame are still one press,
+/// because a key press is an edge.
+fn dev_press_due(left: &RefCell<Vec<i32>>) -> bool {
+    let mut left = left.borrow_mut();
+    if left.is_empty() {
+        return false;
+    }
+    let due = left.iter().any(|&n| n <= 1);
+    left.retain(|&n| n > 1);
+    for n in left.iter_mut() {
+        *n -= 1;
+    }
+    due
 }
 
 impl Engine {
@@ -221,6 +247,9 @@ impl Engine {
             dev_e_at: Cell::new(None),
             dev_jump_at: Cell::new(None),
             dev_jump_hold: Cell::new(-1),
+            dev_stow_at: RefCell::new(Vec::new()),
+            dev_drop_at: RefCell::new(Vec::new()),
+            inv_edges: Cell::new(crate::ext::inventory::Edges::default()),
             pad_events: Cell::new(crate::ext::gamepad::PadEvents::default()),
             frame_clock: RefCell::new(crate::ext::frametime::FrameClock::new()),
             occlusion: RefCell::new(crate::ext::occlusion::Occlusion::new(gl)),
@@ -314,6 +343,14 @@ impl Engine {
             self.input.borrow_mut().key[b' ' as usize] = hold > 0;
             self.dev_jump_hold.set(hold - 1);
         }
+        // EXT: and `--stow-at` / `--drop-at` are the keyboard's F and G, the same way, on each
+        // frame they name (src/ext/inventory.rs).
+        for (left, slot) in [(&self.dev_stow_at, b'F' as usize), (&self.dev_drop_at, b'G' as usize)]
+        {
+            if dev_press_due(left) {
+                self.input.borrow_mut().key_press[slot] = true;
+            }
+        }
         // EXT: and the dev frame-time record. Ticked here, at the top, so one interval spans a
         // whole frame including the swap main.rs does after run_frame returns.
         self.frame_clock.borrow_mut().tick();
@@ -398,10 +435,26 @@ impl Engine {
         // calls Input::EndFrame -- which memsets key_press to zero (Input.cpp:11). Anything that
         // reads key_press after that loop always sees false. The ported scene keys above avoid
         // this only by being checked first.
-        if self.input.borrow().key_press[b'E' as usize] {
-            self.pad_grab.set(true);
+        //
+        // TAKEN, not read. That loop runs ZERO times on a rendered frame shorter than one 2 ms
+        // step, which `--no-vsync` produces routinely; `EndFrame` then never runs at all and the
+        // press is still standing on the next frame, where this block would latch it a second
+        // time. One E press picked an object up and put it straight back down; one F stowed an
+        // item and took it out again. Taking the slot here is what makes a press a press --
+        // nothing else reads any of these four, and the wheel is an edge on the same terms.
+        {
+            let mut input = self.input.borrow_mut();
+            if std::mem::take(&mut input.key_press[b'E' as usize]) {
+                self.pad_grab.set(true);
+            }
+            // EXT: the inventory's own three (src/ext/inventory.rs).
+            self.inv_edges.set(crate::ext::inventory::Edges {
+                stow: std::mem::take(&mut input.key_press[b'F' as usize]),
+                drop: std::mem::take(&mut input.key_press[b'G' as usize]),
+                wheel: std::mem::take(&mut input.wheel),
+            });
         }
-        if self.input.borrow().key_press[b'M' as usize] {
+        if std::mem::take(&mut self.input.borrow_mut().key_press[b'M' as usize]) {
             let muted = self.ext.borrow_mut().audio.toggle_mute();
             log::debug!("[audio] {}", if muted { "muted" } else { "unmuted" });
         }
@@ -522,6 +575,13 @@ impl Engine {
             };
             ext.ui.begin(i_width, i_height);
             crate::ext::hud::draw(&ext.ui, cursor);
+            // The inventory's slots, along the bottom (src/ext/inventory.rs). Only here, so it
+            // is never drawn over a menu.
+            crate::ext::hud::draw_inventory(
+                &ext.ui,
+                &ext.inventory.labels(),
+                ext.inventory.selected(),
+            );
             // This frame's prompt, whoever offered it (src/ext/hint.rs), and the elevator's
             // black-out between floors (src/ext/elevator.rs); the black goes over the cursor
             // too.
@@ -556,7 +616,9 @@ impl Engine {
     /// lifts every rigid-body prop by that many metres once the scene is loaded
     /// (`--drop-props`, src/ext/physics.rs). `hold_key` starts with the painting's key in
     /// hand and `e_at` presses E as a key on that frame (`--hold-key`, `--e-at`,
-    /// src/ext/key.rs).
+    /// src/ext/key.rs). `stow_at` and `drop_at` press F and G on each frame they name, so a
+    /// stow, the retrieve after it and a put-down can be driven the same way (`--stow-at`,
+    /// `--drop-at`, src/ext/inventory.rs).
     pub fn start_direct(&self, run: crate::app::cli::DirectRun) {
         use crate::app::cli::{DirectRun, DirectScene};
         let DirectRun {
@@ -573,11 +635,15 @@ impl Engine {
             hold_key,
             e_at,
             jump_at,
+            stow_at,
+            drop_at,
         } = run;
         *self.dev_hold.borrow_mut() = hold;
         self.dev_ride_at.set(ride_at);
         self.dev_e_at.set(e_at);
         self.dev_jump_at.set(jump_at);
+        *self.dev_stow_at.borrow_mut() = stow_at;
+        *self.dev_drop_at.borrow_mut() = drop_at;
         if let Some(scene) = scene {
             self.ext.borrow_mut().menu.close();
             if arrive {
@@ -1375,6 +1441,22 @@ impl Engine {
 
         let mut ext = self.ext.borrow_mut();
         let ext = &mut *ext;
+        // EXT: the inventory runs BEFORE the grab: a stow must empty the hand before the carry
+        // would move the object again, and a retrieve must pin the carry before it runs, so the
+        // item is carried on the very frame it comes out (src/ext/inventory.rs).
+        crate::ext::inventory::update(
+            &objects,
+            &cam_to_world,
+            self.inv_edges.replace(crate::ext::inventory::Edges::default()),
+            &mut ext.grab,
+            &mut ext.inventory,
+        );
+        // The frame's inventory event, consumed here so a stale one can never sound a frame
+        // late; the sound layer is next in line for it. At trace, because the inventory has
+        // already said at debug what it did -- this line is about the channel, not the action.
+        if let Some(event) = crate::ext::inventory::take_event() {
+            log::trace!("[inv] {event:?} on the event channel");
+        }
         crate::ext::grab::update(&objects, &cam_to_world, grab_pressed, &mut ext.grab);
         ext.fire_grab_sfx();
         ext.fire_footstep_sfx(steps);

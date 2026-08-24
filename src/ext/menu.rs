@@ -87,6 +87,15 @@ const DIM_READING: f32 = 0.62;
 
 /// Column positions of the key-map table, as fractions of width.
 const KEYMAP_COLS: [f32; 3] = [0.10, 0.42, 0.68];
+/// The key map's own top, line height and text size, rather than the sub-screens' shared ones.
+///
+/// It is the longest list on any screen -- thirteen rows once jumping and the inventory had
+/// theirs -- and at `SUB_LIST_Y` / `SMALL_LINE_H` its BACK row ran off the bottom into the
+/// footer hints. Starting higher and setting tighter buys the rows without shrinking any other
+/// screen; `the_key_map_fits_between_the_heading_and_the_footer` pins both ends at compile time.
+const KEYMAP_Y: f32 = 0.31;
+const KEYMAP_LINE_H: f32 = 0.039;
+const KEYMAP_SIZE: f32 = 0.030;
 
 // Key slots (VK codes) read from `Input::key_press`.
 const KEY_BACKSPACE: usize = 8;
@@ -178,13 +187,15 @@ const CREDITS_BACK_Y: f32 = SUB_LIST_Y + (CREDITS_TEXT.len() as f32 + 1.0) * SMA
 /// `Nav::read`, `Player::update_player` and `Gamepads::poll`, and inventing a binding table
 /// just so this screen could read it would be a large refactor in service of one list. The
 /// cost is that this table is documentation, and goes stale if a binding moves without it.
-const KEYMAP: [(&str, &str, &str); 11] = [
+const KEYMAP: [(&str, &str, &str); 13] = [
     ("MOVE", "W A S D", "LEFT STICK"),
     ("SPRINT", "HOLD SHIFT", "L3 (STICK CLICK) TOGGLES"),
     ("JUMP", "SPACE", "CROSS"),
     ("LOOK", "MOUSE", "RIGHT STICK"),
     ("GRAB / RELEASE", "E", "SQUARE / R2"),
     ("ROTATE HELD", "HOLD R + MOUSE", "HOLD R1 + RIGHT STICK"),
+    ("STOW / TAKE OUT", "F", "-"),
+    ("PUT DOWN / PICK SLOT", "G / MOUSE WHEEL", "-"),
     ("PAUSE MENU", "ESC", "OPTIONS"),
     ("MENU: MOVE", "ARROWS / W A S D", "D-PAD"),
     ("MENU: CONFIRM", "ENTER / SPACE", "CROSS"),
@@ -496,19 +507,19 @@ impl Menu {
     /// Controls: the key map, one row per action, in three columns.
     fn draw_controls(&self, ui: &Ui) {
         let (w, h) = ui.size();
-        let head_y = h * (SUB_LIST_Y - SMALL_LINE_H * 1.4);
+        let head_y = h * (KEYMAP_Y - KEYMAP_LINE_H * 1.4);
         for (col, title) in ["ACTION", "KEYBOARD", "GAMEPAD"].iter().enumerate() {
             ui.draw_text(title, w * KEYMAP_COLS[col], head_y, h * HINT_SIZE, DIM, Align::Left);
         }
         for (row, (action, key, pad)) in KEYMAP.iter().enumerate() {
-            let y = h * (SUB_LIST_Y + row as f32 * SMALL_LINE_H);
+            let y = h * (KEYMAP_Y + row as f32 * KEYMAP_LINE_H);
             // The action in white and its bindings dimmed: the eye finds the row by what it
             // does, then reads across to how.
-            ui.draw_text(action, w * KEYMAP_COLS[0], y, h * SMALL_SIZE, WHITE, Align::Left);
-            ui.draw_text(key, w * KEYMAP_COLS[1], y, h * SMALL_SIZE, DIM, Align::Left);
-            ui.draw_text(pad, w * KEYMAP_COLS[2], y, h * SMALL_SIZE, DIM, Align::Left);
+            ui.draw_text(action, w * KEYMAP_COLS[0], y, h * KEYMAP_SIZE, WHITE, Align::Left);
+            ui.draw_text(key, w * KEYMAP_COLS[1], y, h * KEYMAP_SIZE, DIM, Align::Left);
+            ui.draw_text(pad, w * KEYMAP_COLS[2], y, h * KEYMAP_SIZE, DIM, Align::Left);
         }
-        let after = SUB_LIST_Y + (KEYMAP.len() as f32 + 0.8) * SMALL_LINE_H;
+        let after = KEYMAP_Y + (KEYMAP.len() as f32 + 0.8) * KEYMAP_LINE_H;
         self.draw_rows(ui, &CONTROLS_ROWS, after, LINE_H, ITEM_SIZE);
     }
 
@@ -780,13 +791,19 @@ mod tests {
         const { assert!(CREDITS_BACK_Y + ITEM_SIZE + SMALL_LINE_H < HINT_Y) }
     }
 
-    /// The key map has the same budget, and less of it left: adding JUMP took the table to
-    /// eleven rows and its BACK row to within a hint's height of the footer. A twelfth row does
-    /// not fit, and this says so at compile time rather than in a screenshot.
+    /// The key map has the same budget at the bottom and a heading to clear at the top. Jumping
+    /// and the inventory took it to thirteen rows, which is why it has its own `KEYMAP_Y` /
+    /// `KEYMAP_LINE_H` instead of the sub-screens' shared ones -- at those it ran into the
+    /// footer. Both ends are held here at compile time rather than in a screenshot: BACK's whole
+    /// glyph box stays above the footer hints, and the column headings stay below the heading.
     #[test]
-    fn the_key_map_fits_above_the_footer() {
-        const BACK_Y: f32 = SUB_LIST_Y + (KEYMAP.len() as f32 + 0.8) * SMALL_LINE_H;
+    fn the_key_map_fits_between_the_heading_and_the_footer() {
+        const BACK_Y: f32 = KEYMAP_Y + (KEYMAP.len() as f32 + 0.8) * KEYMAP_LINE_H;
         const { assert!(BACK_Y + ITEM_SIZE + HINT_SIZE < HINT_Y) }
+        const HEAD_Y: f32 = KEYMAP_Y - KEYMAP_LINE_H * 1.4;
+        const { assert!(TITLE_Y + TITLE_SIZE < HEAD_Y) }
+        // And the rows are still leaded, not overlapping.
+        const { assert!(KEYMAP_SIZE < KEYMAP_LINE_H) }
     }
 
     #[test]

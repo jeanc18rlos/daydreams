@@ -27,6 +27,15 @@
 //! * **`on_rescale`**: the collider is rebuilt at the new `p_scale`; its mass follows its
 //!   volume through the material's density.
 //!
+//! # Being stowed
+//!
+//! The inventory (`ext/inventory.rs`) takes a prop out of the world altogether, and the rapier
+//! world is not the world: it outlives a scene load, only its static colliders are rebuilt. A
+//! body left behind would go on falling with nothing drawing it and would still be in the
+//! `[prop]` report. So `on_stow` removes the body and `on_unstow` builds a fresh one at the
+//! pose and `p_scale` the prop comes back at -- which is also what `Drop` does at its one end,
+//! so `body` is an `Option` and the two paths cannot double-remove.
+//!
 //! Names, shapes and materials are the prop's own: `Shape` says what the collider is about
 //! the mesh's origin, `Material` how it slides, bounces and weighs (`ext/physics.rs`).
 
@@ -91,7 +100,12 @@ fn euler_matrix(e: Vector3) -> Matrix4 {
 pub struct RigidProp {
     base: Physical,
     shape: Shape,
-    body: BodyId,
+    /// What the `[prop]` report calls it, and the word the inventory HUD prints.
+    name: &'static str,
+    /// How it slides, bounces and weighs; kept so a stowed prop's body can be rebuilt.
+    material: Material,
+    /// `None` only while the prop is stowed: it has no body in the rapier world (module docs).
+    body: Option<BodyId>,
     /// Set between `on_grab` and `on_release`: the body is kinematic and follows `base`.
     held: bool,
 }
@@ -121,13 +135,24 @@ impl RigidProp {
         base.set_position(pos);
         base.base.rot = Some(Matrix4::identity());
         let body = physics::with(|w| w.add_body(name, &shape, material, pos, &Matrix4::identity()));
-        RigidProp { base, shape, body, held: false }
+        RigidProp { base, shape, name, material, body: Some(body), held: false }
+    }
+
+    /// Build this prop's body at where it stands now, at the `p_scale` it is at now. The one
+    /// place a body is made after construction: `on_unstow`.
+    fn add_body(&mut self) {
+        let b = &self.base.base;
+        let rot = b.rot.unwrap_or_else(|| euler_matrix(b.euler));
+        let shape = self.shape.scaled(b.p_scale);
+        let (name, material, pos) = (self.name, self.material, b.pos);
+        self.body = Some(physics::with(|w| w.add_body(name, &shape, material, pos, &rot)));
     }
 }
 
 impl Drop for RigidProp {
     fn drop(&mut self) {
-        let body = self.body;
+        // Nothing to remove for a prop dropped while stowed -- `on_stow` already did it.
+        let Some(body) = self.body else { return };
         physics::try_with(|w| w.remove_body(body));
     }
 }
@@ -141,12 +166,15 @@ impl ObjectT for RigidProp {
     }
 
     fn update(&mut self, _ctx: &UpdateCtx) {
+        // A stowed prop has no body and is not in the scene either, so this cannot run for one;
+        // the guard is what makes the `Option` cost nothing to reason about.
+        let Some(body) = self.body else { return };
         let b = &mut self.base.base;
         if self.held {
             // The hand (ext/grab.rs) wrote `pos`, and the rotate feature `euler`: the body
             // follows.
-            physics::with(|w| w.set_pose(self.body, b.pos, &euler_matrix(b.euler)));
-        } else if let Some((pos, rot)) = physics::with(|w| w.pose(self.body)) {
+            physics::with(|w| w.set_pose(body, b.pos, &euler_matrix(b.euler)));
+        } else if let Some((pos, rot)) = physics::with(|w| w.pose(body)) {
             b.pos = pos;
             b.rot = Some(rot);
             self.base.prev_pos = pos;
@@ -176,7 +204,9 @@ impl ObjectT for RigidProp {
             b.euler = rot.to_euler();
         }
         self.held = true;
-        physics::with(|w| w.set_kinematic(self.body));
+        if let Some(body) = self.body {
+            physics::with(|w| w.set_kinematic(body));
+        }
     }
 
     fn on_release(&mut self, velocity: Vector3) {
@@ -184,19 +214,42 @@ impl ObjectT for RigidProp {
         let rot = euler_matrix(b.euler);
         b.rot = Some(rot);
         self.held = false;
+        let Some(body) = self.body else { return };
         let mut v = velocity;
         v.clip_mag(MAX_THROW);
         let spin = Vector3::unit_y().cross(v) * THROW_SPIN;
         physics::with(|w| {
-            w.set_dynamic(self.body);
-            w.set_pose(self.body, b.pos, &rot);
-            w.set_velocity(self.body, v, spin);
+            w.set_dynamic(body);
+            w.set_pose(body, b.pos, &rot);
+            w.set_velocity(body, v, spin);
         });
     }
 
     fn on_rescale(&mut self, p_scale: f32) {
+        let Some(body) = self.body else { return };
         let shape = self.shape.scaled(p_scale);
-        physics::with(|w| w.rescale_collider(self.body, &shape));
+        physics::with(|w| w.rescale_collider(body, &shape));
+    }
+
+    /// Out of the rapier world for as long as it is in a pocket (module docs).
+    fn on_stow(&mut self) {
+        self.held = false;
+        if let Some(body) = self.body.take() {
+            physics::with(|w| w.remove_body(body));
+        }
+    }
+
+    /// And back into it, at the pose and size the inventory put the prop back at. A new body,
+    /// not the old handle: rapier's is gone, and the collider has to be built for this
+    /// `p_scale` anyway.
+    fn on_unstow(&mut self) {
+        if self.body.is_none() {
+            self.add_body();
+        }
+    }
+
+    fn stow_label(&self) -> &'static str {
+        self.name
     }
 
     fn as_physical(&self) -> Option<&Physical> {

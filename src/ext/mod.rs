@@ -49,6 +49,7 @@
 //! | `window`   | A grabbable, resizable, locked window-portal into a far copy of another level's room |
 //! | `key`      | The key painted into one portrait in anamorphosis, and what it opens          |
 //! | `jump`     | Jumping: the apex the impulse is solved from, coyote time and the input buffer |
+//! | `inventory` | Six slots the player stows things into, which survive a scene load          |
 
 pub mod audio;
 pub mod backrooms;
@@ -68,6 +69,7 @@ pub mod grassgen;
 pub mod hint;
 pub mod hud;
 pub mod interior;
+pub mod inventory;
 pub mod jump;
 pub mod key;
 pub mod meadow;
@@ -96,6 +98,7 @@ pub mod window;
 
 use audio::{Audio, Sfx};
 use grab::GrabState;
+use inventory::Inventory;
 use menu::Menu;
 use outline::Outline;
 use rotate::Rotate;
@@ -108,6 +111,8 @@ use ui::Ui;
 /// rather than a scattering of new members.
 pub struct ExtState {
     pub grab: GrabState,
+    /// The slots the player carries. Deliberately NOT per scene -- see `on_scene_loaded`.
+    pub inventory: Inventory,
     pub audio: Audio,
     pub ui: Ui,
     pub outline: Outline,
@@ -134,6 +139,7 @@ impl ExtState {
     pub fn new(gl: &std::rc::Rc<glow::Context>, res: &crate::resources::Resources) -> ExtState {
         ExtState {
             grab: GrabState::default(),
+            inventory: Inventory::default(),
             audio: Audio::new(),
             ui: Ui::new(gl, res),
             outline: Outline::new(gl, res),
@@ -151,6 +157,10 @@ impl ExtState {
     /// (`Engine::LoadScene` clears the object vector, which would leave a dangling index).
     pub fn on_scene_loaded(&mut self, scene: usize) {
         self.grab.clear();
+        // EXT: `self.inventory` is deliberately left alone. Surviving the load is the whole
+        // point of it -- a slot owns its object outright (an `Rc`, not an index into the vector
+        // that was just replaced), so nothing here can dangle, and an apple pocketed in the
+        // Backrooms is the same apple that comes out in the Pool Rooms.
         // EXT: an effect must never leak into the next scene.
         crate::ext::view::reset_fov();
         self.sprint.reset(crate::ext::view::time());

@@ -534,6 +534,14 @@ impl ObjectT for Window {
         self.clamp_scale();
     }
 
+    /// Not pocketable (`ext/inventory.rs`). It is a piece of the level the size of a door, and
+    /// its opening is a pair of portals owned by the scene's portal vector: taken out of the
+    /// world into a slot it would leave those behind, and put back in another level it would be
+    /// a frame around nothing. It is also the way out, which is not a thing to carry off.
+    fn can_stow(&self) -> bool {
+        false
+    }
+
     fn as_physical(&self) -> Option<&Physical> {
         Some(&self.body)
     }

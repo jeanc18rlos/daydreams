@@ -70,7 +70,7 @@ dev profile to keep it real-time, and builds dependencies at `opt-level = 3` so 
 once and cached. Release is still recommended.
 
 ```sh
-cargo test --release   # 358 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, the portal warps and the teleport, the collision push, the camera, the platform layer and the extensions' pure logic
+cargo test --release   # 372 tests: Matrix4/Vector3 algebra, the .obj parser against the shipped meshes, the portal warps and the teleport, the collision push, the camera, the platform layer and the extensions' pure logic
 ```
 
 The mesh tests read `Meshes/`, so a checkout without the assets fails them.
@@ -762,7 +762,7 @@ binary already has stdout) and the entire Win32 half of `Engine.cpp`: `CreateGLW
 ## Status
 
 `cargo build --release` — 0 errors, 0 warnings; `cargo build --profile dist` — clean.
-`cargo test --release` — 384 passed, 0 failed.
+`cargo test --release` — 394 passed, 0 failed.
 `cargo clippy --release --all-targets -- -D warnings` — clean, with an empty `[lints.clippy]` table.
 `cargo fmt --check` — clean.
 `cargo deny check` — advisories, bans, licences, sources ok.
@@ -813,6 +813,100 @@ d = hit_dist / (1 + r·k)        p_scale = k · d
 
 Closed form, no iteration. Three tests pin the invariants — apparent size never drifts, further
 placement is genuinely larger, and the object touches the surface rather than clipping it.
+
+### Inventory — `ext/inventory.rs`
+
+The carry above holds one thing, in front of the eye, and puts it down where you aim. The
+inventory is the other half: six slots you can stow into and take back out, which survive
+walking through a door and riding the elevator.
+
+A slot owns the **object itself** — the same `Rc<RefCell<dyn ObjectT>>` the scene held, not a
+description of it. Stowing takes it out of the world with `room::request_remove` and keeps the
+`Rc` alive in the slot; taking it out puts it back with `room::request_spawn`. Those are queues
+the engine already applies between fixed steps, so nothing here reaches into the object vector
+while a step is iterating it — and the object keeps its identity, its scale and its state. The
+apple you pocket in the Backrooms is the apple that rolls across the Pool Rooms' tiles.
+
+`request_spawn` lands at the end of the *next* fixed step, so the index the grab names an object
+by does not exist yet when the key is pressed. A retrieve therefore places the object, tells it
+(`on_unstow`, then `on_grab`), asks for the spawn and remembers which slot it came from; the next
+frame finds it in the vector by identity and pins the carry. The slot holds the item for that one
+frame, so a retrieve that never landed would leave it in the inventory rather than nowhere.
+
+| Input | Action |
+| --- | --- |
+| `F` | Stow what is in hand — or, with an empty hand, take the selected slot's item into it, at the size it was stowed at |
+| `G` | Put the selected slot's item down in front of you, without going through the hand |
+| Mouse wheel | Pick the slot |
+
+The keys were chosen against a crowded keyboard: the number row and the punctuation keys are the
+[scene registry's](#scene-registry), `E` is grab/use, `M` mute, `R` rotate, `Shift` sprint. The
+**gamepad is deliberately left out**: D-pad ←→ already cycles scenes, and a button that means two
+things depending on how long you have been playing is worse than no button. Capacity is six
+because the row has to be readable at a glance without crowding the hint line, and because six is
+enough that *which* slot is a real choice and few enough that scrolling to one is never a chore.
+
+Four hooks on `ObjectT` carry it, all defaulted: `on_stow` / `on_unstow`, `can_stow` and
+`stow_label`. Between the two hooks an object is drawn by nobody and stepped by nobody, and a
+scene load replaces the world around it — so anything of the object's that belongs to the *scene*
+rather than to the object has to be given up and rebuilt:
+
+* A `RigidProp`'s rapier body. The rigid-body world outlives a scene load (only its static
+  colliders are rebuilt), so a body left behind would keep falling with nothing drawing it and
+  would still be in the `[prop]` report. It leaves the world on stow; `on_unstow` builds a fresh
+  one at the pose and `p_scale` the prop comes back at. `Drop` does the same at its one end, so
+  `RigidProp::body` is an `Option` and the two paths cannot double-remove.
+* The key's standing "a lock is in reach" offer, which would otherwise let a pocketed key claim
+  the frame's `E` press. Its link to the painting that painted it is a shared `Rc<Cell<bool>>` and
+  needs nothing — it is the key's, not the scene's, and comes back with it.
+* `Physical::prev_pos`. The portal pass reads the segment from `prev_pos` to `pos`, and a segment
+  from the level an object was stowed in to the one it is taken out in sweeps every doorway
+  between them; every placement here goes through `set_position`, which moves both.
+
+The **window refuses outright** (`can_stow` is false, and the HUD says `IT WILL NOT FIT`): it is
+level furniture the size of a door, its opening is a pair of portals owned by the scene's portal
+vector, and it is the way out. A seventh stow is refused the same way, with `POCKETS FULL`.
+
+The row of slots is drawn on every gameplay frame rather than fading in and out, because `F` and
+`G` act on the *selected* slot and the row has to be readable at the moment the player decides to
+press one — which is exactly the moment a fade would have hidden it. It sits below the hint line
+and outside the crosshair, and costs one draw per slot. `ext::inventory::take_event()` reports
+`Stowed` / `Retrieved` / `Dropped` / `Refused` once per rendered frame, on the same shape of
+channel as the elevator's ride-start edge, for the sound layer.
+
+**The runs.** All from the Backrooms (scene 16), `--windowed --mute --no-gamepad --no-vsync`:
+
+```bash
+# 1. Pick the apple up off the carpet (E at 30) and stow it (F at 60): APPLE fills slot 1, the
+#    carpet keeps only the die and the king, and the [prop] report has lost the apple -- its
+#    rapier body left the world with it
+--scene 16 --pos 999.4,1.5,0.6 --yaw 90 --pitch -36 --e-at 30 --stow-at 60 --frames 90
+
+# 2. And take it out again (F at 120): "[grab] holding object #29 at 2.46 units, p_scale 1.015"
+#    -- picked up at 1.00, back in hand at the same apparent size -- and a [prop] line again,
+#    "held"
+--scene 16 --pos 999.4,1.5,0.6 --yaw 90 --pitch -36 --e-at 30 --stow-at 60,120 --frames 180
+
+# 3. Or put it down instead (G at 120), without the hand: it falls the 0.92 m to the carpet and
+#    is asleep at (998.672, 0.047, 0.600) -- the body is live again
+--scene 16 --pos 999.4,1.5,0.6 --yaw 90 --pitch -36 --e-at 30 --drop-at 120 --stow-at 60 --frames 2400
+
+# 4. The acceptance test: stow the key (F at 30), take it out (F at 90), use it on the window
+#    (E at 150). "[key] used on the window: unlock requested", and by frame 210 the glass is
+#    clear and the hover says TOO SMALL - GRAB IT AND STEP BACK
+--scene 16 --hold-key --pos 987,1.5,1.2 --yaw 180 --stow-at 30,90 --e-at 150 --frames 210
+
+# 5. Try to pocket the window: "[inv] refused: IT WILL NOT FIT", the line is on the HUD, and
+#    the window is still in hand at frame 90
+--scene 16 --pos 987,1.5,1.2 --yaw 180 --e-at 30 --stow-at 60 --frames 90
+
+# 6. Across a level: key stowed in the cabin (F at 30), E rides, "[load] scene 17", and F at
+#    3200 takes the same key out in the Pool Rooms, at the Pool Rooms' own coordinates
+--scene 16 --hold-key --pos 995.25,1.5,-8.0 --yaw 180 --stow-at 30,3200 --ride-at 60 --frames 3600
+```
+
+A seventh stow into a full inventory, and the wheel's wrap, are pinned by the tests rather than
+a screenshot: no shipped scene has six grabbable objects in it.
 
 ### Ray casting — `ext/raycast.rs`
 
@@ -1543,11 +1637,11 @@ Small additions, each tagged `// EXT:`:
 | File | Hook |
 |------|------|
 | `collider.rs` | read-only `mat()` accessor, so rays can transform the rectangle to world space; `Collider::rect(centre, half_u, half_v)`, the three-corner constructor with the sorting already done |
-| `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`R` and the scene keys `8`–`.` (`8` `9` `0` `-` `=` `[` `]` `\` `;` `'` `,` `.`); `Shift` into the `VK_SHIFT` slot and the resolved sprint multipliers; the pad's rotate, sprint and jump *levels* |
+| `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`R`/`F`/`G` and the scene keys `8`–`.` (`8` `9` `0` `-` `=` `[` `]` `\` `;` `'` `,` `.`); `Shift` into the `VK_SHIFT` slot and the resolved sprint multipliers; the pad's rotate, sprint and jump *levels*; a `wheel` accumulator in notches, cleared with the other edges by `EndFrame` |
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter; the `#if 0` jump switched on (`ext/jump.rs`) — moved above the physics step, which is the only ported *ordering* that changed and the reason it never worked where it was — plus the touchdown speed sampled in `OnCollide` and the two take-once jump events |
-| `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look, and the scene's object vector (`scene`), for an object that reads the others during its step (the held key); `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery; `Object::rot`, a rotation matrix that stands in for `euler` in `local_to_world`/`world_to_local`/`forward` when set (a rigid body's orientation does not round-trip through Euler angles); the prop hooks on `ObjectT`, all defaulted: `engine_collision()` (false: the collision pass never pushes it and the portal pass never warps it -- something else owns its motion), `on_grab()`, `on_release(velocity)`, `on_rescale(p_scale)` (called by `ext/grab.rs`), `place_flat()` (the grab lays it on the surface it hits instead of standing it off by its sphere), `pick_hint()` (a HUD line while the crosshair is on it), `accepts_key()` (the held key can be used on it: the window, while locked) and `static_collision()` (whether its colliders go into the rigid-body world's load-time snapshot: false for the elevator's leaves and the window) |
+| `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look, and the scene's object vector (`scene`), for an object that reads the others during its step (the held key); `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery; `Object::rot`, a rotation matrix that stands in for `euler` in `local_to_world`/`world_to_local`/`forward` when set (a rigid body's orientation does not round-trip through Euler angles); the prop hooks on `ObjectT`, all defaulted: `engine_collision()` (false: the collision pass never pushes it and the portal pass never warps it -- something else owns its motion), `on_grab()`, `on_release(velocity)`, `on_rescale(p_scale)` (called by `ext/grab.rs`), `place_flat()` (the grab lays it on the surface it hits instead of standing it off by its sphere), `pick_hint()` (a HUD line while the crosshair is on it), `accepts_key()` (the held key can be used on it: the window, while locked), `on_stow()`/`on_unstow()`, `can_stow()` and `stow_label()` (the inventory takes it out of the world into a slot and puts it back; see [Inventory](#inventory--extinventoryrs)) and `static_collision()` (whether its colliders go into the rigid-body world's load-time snapshot: false for the elevator's leaves and the window) |
 | `frame_buffer.rs` | sized attachments instead of `GH_FBO_SIZE` square |
-| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn, portal-removal, spawn and remove requests applied after the portal pass (a removal's freed indices handed to the grab), its scene-load request applied after the fixed-step loop; the collision pass skipping an `engine_collision() == false` object as its subject and the portal pass skipping it outright; E offered to the elevator, then to the held key, before the grab, the frame's hint (`ext/hint.rs`) and the elevator's black-out in the overlay block (the black-out under the pause menu too); the `--forward`/`--strafe`/`--sprint` held keys, `--arrive`, `--ride-at`, `--hold-key`, `--e-at` and `--jump-at`, handed over as one `cli::DirectRun`; the frame's jump events logged and offered for sound (`ext/jump.rs`), and the menu's own confirm button released from the grab latch and the jump when a menu hands control back; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`); the rigid-body world's static rebuild once a load's object list is complete, its step between the collision and portal passes, its `[phys]`/`[prop]` report at shot time and `--drop-props` (`ext/physics.rs`) |
+| `engine.rs` | one `ext` field, the scene vector, names and keys read from the [registry](#scene-registry), a grab tick, the sprint resolve, scene-load notification; the portal frustum pre-test and the one-frame-late occlusion slots; the old scene's objects and portals kept alive across `load_scene`; the triangle-mesh rounds in the collision pass; a room's respawn, portal-removal, spawn and remove requests applied after the portal pass (a removal's freed indices handed to the grab), its scene-load request applied after the fixed-step loop; the collision pass skipping an `engine_collision() == false` object as its subject and the portal pass skipping it outright; E offered to the elevator, then to the held key, before the grab; the inventory's F, G and wheel latched with it and its tick run before the grab's (and every one of those edges TAKEN out of `Input` rather than read, because a rendered frame shorter than one fixed step never reaches `EndFrame` and would otherwise hand the same press to the next frame as well); the frame's hint (`ext/hint.rs`), the inventory row and the elevator's black-out in the overlay block (the black-out under the pause menu too); the `--forward`/`--strafe`/`--sprint` held keys, `--arrive`, `--ride-at`, `--hold-key`, `--e-at`, `--jump-at`, `--stow-at`, `--drop-at` and `--wheel-at`, handed over as one `cli::DirectRun`; the frame's jump events logged and offered for sound (`ext/jump.rs`), and the menu's own confirm button released from the grab latch and the jump when a menu hands control back; `load_scene_from`, the body of `load_scene` taking a scene that is not in the registry (`--view-glb`); the rigid-body world's static rebuild once a load's object list is complete, its step between the collision and portal passes, its `[phys]`/`[prop]` report at shot time and `--drop-props` (`ext/physics.rs`) |
 | `portal.rs` | the nested pass scissored to the quad's screen footprint; `passable` (default true) and `tint` (default clear), the second uploaded to `portal.frag` as `uniform vec4 tint` and mixed over the far side by its alpha |
 | `physical.rs` | `try_portal` returns false without warping through a portal that is not `passable` |
 | `shader.rs` | memoised by-name uniform lookup (misses cached too), `set_mat4`; `new` returns `Result<_, AssetError>` and the attribute scan is a pure, tested `scrape_attribs` |
@@ -1555,7 +1649,7 @@ Small additions, each tagged `// EXT:`:
 | `mesh.rs` | `new` returns `Result<_, AssetError>`: a missing `.obj` is an error, not an empty mesh; `Mesh::colliders_only(gl, colliders)`, a mesh with no faces and only rectangles -- the in-memory `intro_door_collide.obj` |
 | `resources.rs` | every `acquire_*` turns a loader's `Err` into `app::crash::fatal` |
 | `props.rs` | `Sky::draw` takes the eye from the inverse it already computes, and draws at the far plane under `GL_LEQUAL` so it can go last |
-| `main.rs` | gamepad polling in `about_to_wait`; the platform layer's startup order (panic hook, command line, logging, asset root -- all in `src/app/`); the hidden `--panic-test`; key levels dropped on focus loss; the window's dev preset (`--window-scale`, `--unlock-window`) set before the engine builds a scene |
+| `main.rs` | gamepad polling in `about_to_wait`; the platform layer's startup order (panic hook, command line, logging, asset root -- all in `src/app/`); the hidden `--panic-test`; key levels dropped on focus loss; `WindowEvent::MouseWheel`, which the port never read, fed to `Input::add_mouse_wheel`; the window's dev preset (`--window-scale`, `--unlock-window`) set before the engine builds a scene |
 
 ### One bug this surfaced
 
@@ -2102,7 +2196,7 @@ parsing, so a double-clicked bundle starts clean.
 `daydreams gen-terrain` is the one subcommand: it rewrites `Meshes/meadow_tile.obj` under the
 asset root from `ext::terrain::height` and exits (see [Meadow](#meadow-grass-and-clouds-scene-)).
 
-Nine flags are hidden from `--help` because they are tools rather than features: `--panic-test`
+Thirteen flags are hidden from `--help` because they are tools rather than features: `--panic-test`
 (the crash dialog, below), `--view-glb PATH` with `--view-translucent NAMES` (a scene of one
 model, see [glTF loader](#gltf-loader)), `--arrive` and `--ride-at FRAME` (with `--scene`:
 load it as an elevator ride would, and press E once on that frame; see
@@ -2113,7 +2207,12 @@ Backrooms' window is built; see [The window](#the-window)), `--drop-props H` (wi
 (with `--scene`: start with the painting's key in hand, and press E on that frame as the
 keyboard would -- the press slot, seen by the frame's first fixed step and latched for the
 grab; see
-[The key in the painting](#the-key-in-the-painting--extkeyrs-extpaintingrs-shaderspaintingfrag)).
+[The key in the painting](#the-key-in-the-painting--extkeyrs-extpaintingrs-shaderspaintingfrag)),
+`--jump-at FRAME` (with `--scene`: hold Space from that frame; see
+[Jumping](#jumping--extjumprs)), and `--stow-at FRAMES` / `--drop-at FRAMES` (with `--scene`:
+press F and G on each frame they name -- `--stow-at 60,120` -- the same way, so a stow, the
+retrieve after it and a put-down can be driven headlessly; see
+[Inventory](#inventory--extinventoryrs)).
 `--view-glb` excludes `--scene`; its path is taken under the working directory when a file is
 there, under the asset root otherwise.
 

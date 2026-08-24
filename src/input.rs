@@ -36,6 +36,10 @@ pub struct Input {
     // the engine's fixed-step loop, so an edge slot is clear for every step of a frame but the
     // first (src/ext/jump.rs).
     pub pad_jump: bool,
+    // EXT: mouse wheel since the last `end_frame`, in notches, positive away from the player.
+    // The inventory's slot selector reads it (src/ext/inventory.rs). An edge like `key_press`,
+    // and cleared with them: the wheel says "one notch happened", not "the wheel is at 3".
+    pub wheel: f32,
     // EXT: this frame's resolved sprint multipliers -- hold, toggle, the forward-only rule and
     // the eased speed cap already folded in by `ext::sprint::Sprint::resolve`, which the engine
     // runs once per rendered frame before the fixed-step loop. `Player::update_player` reads
@@ -72,6 +76,8 @@ impl Input {
             pad_sprint: false,
             // EXT: jump.
             pad_jump: false,
+            // EXT: the wheel's edge.
+            wheel: 0.0,
             sprint: crate::ext::sprint::Factors::WALK,
         }
     }
@@ -86,6 +92,23 @@ impl Input {
         self.mouse_dy = self.mouse_dy * GH_MOUSE_SMOOTH + self.mouse_ddy * (1.0 - GH_MOUSE_SMOOTH);
         self.mouse_ddx = 0.0;
         self.mouse_ddy = 0.0;
+        // EXT: the wheel is an edge, cleared with the key and button edges above. This runs
+        // inside the 500 Hz loop, so `Engine::run_frame` latches the notch before the loop,
+        // exactly as it latches the E press.
+        self.wheel = 0.0;
+    }
+
+    // EXT: one wheel event from the platform layer. winit reports a mouse's wheel in lines and
+    // a trackpad's two-finger scroll in pixels; both arrive here as notches, so nothing
+    // downstream has to know which device it was. Horizontal scroll is dropped: nothing reads
+    // it, and a trackpad's diagonal flick would otherwise change the selected slot sideways.
+    pub fn add_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
+        /// Trackpad pixels per notch, at winit's logical-pixel scale.
+        const PIXELS_PER_NOTCH: f32 = 40.0;
+        self.wheel += match delta {
+            winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+            winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32 / PIXELS_PER_NOTCH,
+        };
     }
 
     // PORT: replaces Input::UpdateRaw(const tagRAWINPUT*) mouse-move branch, which is Win32
@@ -154,6 +177,9 @@ pub fn key_index(k: winit::keyboard::KeyCode) -> Option<usize> {
         KeyCode::KeyE => b'E',
         // EXT: mute toggle.
         KeyCode::KeyM => b'M',
+        // EXT: the inventory -- stow / take out, and put down (src/ext/inventory.rs).
+        KeyCode::KeyF => b'F',
+        KeyCode::KeyG => b'G',
         // EXT: rotate-modifier on keyboard (hold R + mouse).
         KeyCode::KeyR => b'R',
         // EXT: sprint (hold). Both Shifts land in the Win32 VK_SHIFT slot (16), the slot the
@@ -182,7 +208,7 @@ mod tests {
     /// indexes with `wParam & 0xFF`, the Win32 virtual-key numbers for the rest.
     #[test]
     fn every_key_the_game_reads_lands_in_its_slot() {
-        let table: [(KeyCode, usize); 38] = [
+        let table: [(KeyCode, usize); 40] = [
             (KeyCode::KeyW, b'W' as usize),
             (KeyCode::KeyA, b'A' as usize),
             (KeyCode::KeyS, b'S' as usize),
@@ -208,6 +234,8 @@ mod tests {
             (KeyCode::Period, b'.' as usize),
             (KeyCode::KeyE, b'E' as usize),
             (KeyCode::KeyM, b'M' as usize),
+            (KeyCode::KeyF, b'F' as usize),
+            (KeyCode::KeyG, b'G' as usize),
             (KeyCode::KeyR, b'R' as usize),
             (KeyCode::ShiftLeft, crate::ext::sprint::KEY_SPRINT),
             (KeyCode::ShiftRight, crate::ext::sprint::KEY_SPRINT),
@@ -272,5 +300,24 @@ mod tests {
         assert!(i.mouse_ddx == 0.0 && i.mouse_ddy == 0.0);
         i.set_mouse_button(0, false);
         assert!(!i.mouse_button[0]);
+    }
+
+    /// EXT: both of winit's wheel shapes arrive as notches, they accumulate within a frame,
+    /// and `end_frame` clears them like every other edge.
+    #[test]
+    fn the_wheel_accumulates_in_notches_and_is_an_edge() {
+        use winit::dpi::PhysicalPosition;
+        use winit::event::MouseScrollDelta;
+        let mut i = Input::new();
+        assert_eq!(i.wheel, 0.0);
+        i.add_mouse_wheel(MouseScrollDelta::LineDelta(0.0, 1.0));
+        i.add_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
+        assert!((i.wheel + 2.0).abs() < 1e-6);
+        // A trackpad's pixels: 40 of them are one notch, and its horizontal half is dropped.
+        i.wheel = 0.0;
+        i.add_mouse_wheel(MouseScrollDelta::PixelDelta(PhysicalPosition::new(500.0, 20.0)));
+        assert!((i.wheel - 0.5).abs() < 1e-6);
+        i.end_frame();
+        assert_eq!(i.wheel, 0.0, "an edge, not a level");
     }
 }

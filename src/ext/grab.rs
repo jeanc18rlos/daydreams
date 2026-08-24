@@ -800,6 +800,70 @@ fn release(objects: &[Rc<RefCell<dyn ObjectT>>], state: &mut GrabState) {
     log::debug!("[grab] released");
 }
 
+// ── The inventory's seam (src/ext/inventory.rs) ──────────────────────────────────────────────
+//
+// Three small doors beside the pick/release pair above, so that stowing and retrieving need no
+// copy of the carry's invariants. `GrabState::held` is an index into the object vector, which
+// `on_removed` already fixes when objects leave the scene, so none of these may leave it
+// pointing at something else.
+
+/// The object in hand right now, as its index and a handle on it.
+///
+/// The handle so the caller can hold the object alive after it leaves the scene (a slot owns
+/// its item), the index because that is what `GrabState` names it by.
+pub fn held_object(
+    objects: &[Rc<RefCell<dyn ObjectT>>],
+    state: &GrabState,
+) -> Option<(usize, Rc<RefCell<dyn ObjectT>>)> {
+    let idx = state.held?;
+    Some((idx, Rc::clone(objects.get(idx)?)))
+}
+
+/// Let go WITHOUT dropping the object into the world: no `on_release`, no gravity given back,
+/// no release edge for the HUD or the sounds to see.
+///
+/// [`release`] is the drop; this is what a stow does, where the object is not being let go of
+/// but taken away -- the inventory calls it in the same breath as `room::request_remove`, and
+/// the object's own `ObjectT::on_stow` is what puts its affairs in order.
+pub fn release_without_dropping(state: &mut GrabState) {
+    state.held = None;
+    state.fit_shrunk = false;
+}
+
+/// Take up an object the inventory has just put back into the scene, at the apparent size it
+/// was stowed at.
+///
+/// The object is already placed and already told (`ObjectT::on_unstow`, then `on_grab`) by the
+/// retrieve that asked for its spawn a frame ago, so this only pins the carry: `ratio` is the
+/// `k` it was carried with, `radius` its bounding radius and `p_scale` the size to start the
+/// ease from. [`try_grab`] cannot serve here -- it derives both numbers from where the
+/// crosshair hit, which would resize the object on the way out of the pocket.
+///
+/// The hand's last position and time are seeded from where the object is, as the first frame of
+/// a real carry leaves them: without them the frame's `on_release` velocity would be the
+/// object's position divided by the seconds since launch.
+pub fn hold_retrieved(
+    objects: &[Rc<RefCell<dyn ObjectT>>],
+    idx: usize,
+    ratio: f32,
+    radius: f32,
+    p_scale: f32,
+    state: &mut GrabState,
+) {
+    let Some(pos) = objects.get(idx).and_then(|o| o.try_borrow().ok()).map(|o| o.base().pos) else {
+        return;
+    };
+    state.held = Some(idx);
+    state.ratio = ratio;
+    state.radius = radius;
+    state.eased_scale = p_scale;
+    state.fit_shrunk = false;
+    state.hand_pos = pos;
+    state.hand_time = crate::ext::view::time();
+    state.hand_vel = Vector3::zero();
+    log::debug!("[grab] object #{idx} out of the inventory at p_scale {p_scale:.2}");
+}
+
 /// Recover the bounding radius of an object if it is grabbable.
 ///
 /// `dyn ObjectT` gives no downcast without `Any`, so grabbables advertise themselves through

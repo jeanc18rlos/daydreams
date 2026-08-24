@@ -249,6 +249,30 @@ pub trait ObjectT {
     fn on_release(&mut self, _velocity: Vector3) {}
     fn on_rescale(&mut self, _p_scale: f32) {}
 
+    // EXT: the inventory's hooks (src/ext/inventory.rs). `on_stow` when the object is taken out
+    // of the world into a slot, `on_unstow` when it is put back -- and between the two nothing
+    // draws it, nothing steps it, and a scene load may have replaced the world it left. So
+    // anything of the object's that belongs to the scene rather than to the object must be given
+    // up in `on_stow` and rebuilt in `on_unstow`: a rigid body in the rapier world would keep
+    // falling with nothing drawing it (src/ext/rigid.rs), a standing offer on a shared channel
+    // would let a pocketed key claim the frame's E press (src/ext/key.rs). Both default to
+    // nothing, which is right for an object that is only a mesh and a position.
+    fn on_stow(&mut self) {}
+    fn on_unstow(&mut self) {}
+
+    // EXT: whether this object may be stowed at all. False for level furniture that happens to
+    // be grabbable -- the window, which is the size of a door and whose opening is a pair of
+    // portals belonging to the scene (src/ext/window.rs).
+    fn can_stow(&self) -> bool {
+        true
+    }
+
+    // EXT: the word the inventory HUD prints in the slot. Each prop names itself; the default
+    // is for anything that has not bothered to.
+    fn stow_label(&self) -> &'static str {
+        "ITEM"
+    }
+
     // EXT: how the grab places this object against what the crosshair hits. False (the
     // default) stands it off the surface by its bounding radius, as a ball would rest; true
     // lays it flush -- a picture or a window on a wall, a mat on a floor -- and turns it to

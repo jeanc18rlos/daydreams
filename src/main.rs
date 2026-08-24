@@ -526,6 +526,15 @@ impl ApplicationHandler for App {
                 }
             }
 
+            // EXT: no C++ counterpart -- the original reads no wheel at all. It picks the
+            // inventory's slot (src/ext/inventory.rs); `Input::add_mouse_wheel` turns either of
+            // winit's two shapes into notches.
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let Some(engine) = self.engine.as_ref() {
+                    engine.input().borrow_mut().add_mouse_wheel(delta);
+                }
+            }
+
             // PORT: WindowEvent::CursorMoved is deliberately IGNORED. It reports an absolute
             // position that stops changing once the cursor is locked or warped back to the
             // centre; the mouse look must be driven by raw relative deltas, which is what
