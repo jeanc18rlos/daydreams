@@ -67,18 +67,26 @@ use std::rc::{Rc, Weak};
 pub const USE_REACH: f32 = 2.5;
 
 thread_local! {
-    /// Set by the held key's step while a lock is in reach; taken by the engine once per
-    /// rendered frame, before it decides whose the frame's E press is.
+    /// Whether the held key has a lock in reach, as of its last step; read by the engine
+    /// each rendered frame, before it decides whose the frame's E press is.
     static WANTS_USE: Cell<bool> = const { Cell::new(false) };
     /// The frame's E, handed to the key by the engine; taken by the key's next step.
     static PRESS: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Whether the held key wants the frame's E press -- a lock is under the crosshair within
-/// reach. Consumed: the key's steps set it afresh every frame it holds, so the engine reads
-/// it once per frame and never sees a stale offer from a key since dropped or removed.
-pub fn take_wants_use() -> bool {
-    WANTS_USE.with(Cell::take)
+/// reach.
+///
+/// A standing answer, not an offer consumed by the reader. It used to be taken by the
+/// engine's read, on the reasoning that the key's steps set it afresh every frame; but the
+/// fixed-step loop only runs a step when 2 ms of wall clock have gone by, and a frame that
+/// renders faster than that runs none at all -- most frames of an uncapped build. The key
+/// then had no step in which to renew the offer, the engine read false, and the press it
+/// should have used the key with went to the grab, which dropped the key instead. Whoever
+/// stops holding the key clears it: `on_release`, `on_stow`, and the key's own step the
+/// moment the crosshair leaves the lock.
+pub fn wants_use() -> bool {
+    WANTS_USE.with(Cell::get)
 }
 
 /// Hand the frame's E press to the key (module docs, "The press").
@@ -86,9 +94,9 @@ pub fn press() {
     PRESS.with(|p| p.set(true));
 }
 
-/// The key's side: say the press is wanted, and take one the engine has handed over.
-fn offer_use() {
-    WANTS_USE.with(|w| w.set(true));
+/// The key's side: say whether the press is wanted, and take one the engine has handed over.
+fn offer_use(on: bool) {
+    WANTS_USE.with(|w| w.set(on));
 }
 
 fn take_press() -> bool {
@@ -292,10 +300,10 @@ impl ObjectT for Key {
             self.scanned_at = now;
             self.lock_near = lock_under_crosshair(ctx.scene, &ctx.cam_to_world).is_some();
         }
+        offer_use(self.lock_near);
         if !self.lock_near {
             return;
         }
-        offer_use();
         hint::insist(USE_HINT);
         if pressed {
             self.used = true;
@@ -335,6 +343,10 @@ impl ObjectT for Key {
 
     fn on_release(&mut self, _velocity: Vector3) {
         self.held = false;
+        // Out of the hand, the standing answer goes with it -- it has no step left in which
+        // to say so itself.
+        self.lock_near = false;
+        offer_use(false);
     }
 
     /// Into a pocket (`ext/inventory.rs`). A stowed key is not in the hand and must not act
@@ -346,7 +358,7 @@ impl ObjectT for Key {
         self.held = false;
         self.lock_near = false;
         self.scanned_at = f32::NAN;
-        take_wants_use();
+        offer_use(false);
         take_press();
     }
 
@@ -437,15 +449,19 @@ mod tests {
         drop(held);
     }
 
-    /// The press channel: the key's offer is consumed by the engine's read, so a stale offer
-    /// cannot claim a later frame's press; a press handed over is taken once by the key.
+    /// The press channel: the key's answer stands until the key itself changes it -- reading
+    /// it does not, or a frame too fast to run a fixed step would lose it -- while a press
+    /// handed over is taken once by the key.
     #[test]
-    fn the_offer_and_the_press_are_each_taken_once() {
-        assert!(!take_wants_use());
-        offer_use();
-        offer_use(); // several steps a frame
-        assert!(take_wants_use());
-        assert!(!take_wants_use(), "consumed by the frame's read");
+    fn the_offer_stands_and_the_press_is_taken_once() {
+        offer_use(false);
+        assert!(!wants_use());
+        offer_use(true);
+        offer_use(true); // several steps a frame
+        assert!(wants_use());
+        assert!(wants_use(), "still true: a frame with no step must not lose it");
+        offer_use(false);
+        assert!(!wants_use(), "and the key's own step is what takes it back");
         assert!(!take_press());
         press();
         assert!(take_press());

@@ -1455,7 +1455,7 @@ impl Engine {
             crate::ext::elevator::press();
             grab_pressed = false;
         }
-        let key_wants_use = crate::ext::key::take_wants_use();
+        let key_wants_use = crate::ext::key::wants_use();
         if grab_pressed && key_wants_use {
             crate::ext::key::press();
             grab_pressed = false;

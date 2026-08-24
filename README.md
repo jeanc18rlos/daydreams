@@ -929,7 +929,7 @@ it into `stow` / `retrieve` / `drop` / `refuse` (`inventory::sfx`).
 # 4. The acceptance test: stow the key (F at 30), take it out (F at 90), use it on the window
 #    (E at 150). "[key] used on the window: unlock requested", and by frame 210 the glass is
 #    clear and the hover says TOO SMALL - GRAB IT AND STEP BACK
---scene 16 --hold-key --pos 987,1.5,1.2 --yaw 180 --stow-at 30,90 --e-at 150 --frames 210
+--scene 16 --hold-key --pos 987,1.5,1.2 --yaw 180 --pitch=-10 --stow-at 30,90 --e-at 200 --frames 400
 
 # 5. Try to pocket the window: "[inv] refused: IT WILL NOT FIT", the line is on the HUD, and
 #    the window is still in hand at frame 90
@@ -1318,7 +1318,7 @@ daydreams --windowed --mute --scene 16 --pos 994.4,1.5,1.55 --yaw=-100.4 --pitch
 #    BACK. The press waits for frame 200 for the same reason step 1 waits: under --no-vsync
 #    a frame is under a millisecond, and the key's first look for a lock happens after the
 #    scene has settled -- press too early and the grab takes the press as a release instead.
-daydreams --windowed --mute --scene 16 --hold-key --pos 987,1.5,1.2 --yaw 180 --e-at 200 --frames 400 --shot use.bmp
+daydreams --windowed --mute --scene 16 --hold-key --pos 987,1.5,1.2 --yaw 180 --pitch=-10 --e-at 200 --frames 400 --shot use.bmp
 # 3. Unlocked and grown to a door, walk through: `[load] scene 18 in 3 ms` and the `[shot]`
 #    at (-3.82, 1.50, -9.13), the Overgrown level's own coordinates, walked on from the
 #    partner at (-8.86, 1.35, -9.3).
@@ -2392,7 +2392,7 @@ cargo run --release -- --windowed --mute --scene 16 --pos 993.4,1.5,1.55 --yaw -
 # The use: key in hand, aimed at the north wall, E on frame 30. Expect
 # "[key] used on the window: unlock requested", then the key gone by frame 60. Without a
 # window in the scene a stand-in lock is planted a metre ahead, and says so.
-cargo run --release -- --windowed --mute --scene 16 --hold-key --pos 987,1.5,1.2 --yaw 180 --e-at 30 --shot out.bmp --frames 60
+cargo run --release -- --windowed --mute --scene 16 --hold-key --pos 987,1.5,1.2 --yaw 180 --pitch=-10 --e-at 200 --shot out.bmp --frames 400
 ```
 
 ### Logging
