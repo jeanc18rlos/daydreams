@@ -118,6 +118,8 @@ impl Scene for Level18 {
         _portals: &mut PPortalVec,
         player: &mut Player,
     ) {
+        // EXT: what the footsteps land on (src/ext/audio.rs).
+        crate::ext::audio::set_surface(crate::ext::audio::Surface::Moss);
         // The elevator first, set into the south wall (`ext/elevator.rs`, "Set into a wall"):
         // the model is carved round its doorway as it loads, and the fence takes in the
         // cabin, which stands outside the model behind the wall.

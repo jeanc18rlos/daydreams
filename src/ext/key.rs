@@ -45,6 +45,7 @@
 //! the key at all.
 
 use crate::camera::Camera;
+use crate::ext::audio::{self, Sfx};
 use crate::ext::grab::{bound_radius, GrabState};
 use crate::ext::raycast::{ray_sphere, raycast_ignoring};
 use crate::ext::{hint, room};
@@ -293,6 +294,9 @@ impl ObjectT for Key {
         hint::insist(USE_HINT);
         if pressed {
             self.used = true;
+            // EXT: the lock turning over -- fired here, on the press, rather than off the
+            // window's unlock a step later, because this is the frame the player acted on.
+            audio::request(Sfx::KeyUse);
             room::request_unlock_window();
             log::info!("[key] used on the window: unlock requested");
             // Removal by identity; the cell this key lives in is the one the scene holds.
@@ -306,6 +310,9 @@ impl ObjectT for Key {
         self.held = true;
         self.floating = false;
         self.taken.set(true);
+        // EXT: the small ring of it coming off the picture plane. Once: `on_grab` is what
+        // ends the floating life, and a key already in hand cannot be taken again.
+        audio::request(Sfx::KeyTake);
         let b = &mut self.base.base;
         // Whatever point of the emergence it was taken at, in hand it is whole.
         b.scale = Vector3::ones();

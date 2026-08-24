@@ -112,6 +112,8 @@ impl Scene for Level16 {
         // Past the split is a building, not a sunset: see the module docs. After `load_meadow`,
         // which turns the split on (and every load resets this to sunset).
         view::set_far_mood(view::MOOD_INTERIOR);
+        // EXT: what the footsteps land on (src/ext/audio.rs).
+        crate::ext::audio::set_surface(crate::ext::audio::Surface::Carpet);
 
         // ── The elevator, set into the end wall of the entrance corridor. Built before the
         // backrooms because the scan's collision is cut away behind its doorway.

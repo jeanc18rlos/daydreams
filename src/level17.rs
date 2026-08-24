@@ -121,6 +121,10 @@ impl Scene for Level17 {
         _portals: &mut PPortalVec,
         player: &mut Player,
     ) {
+        // EXT: what the footsteps land on (src/ext/audio.rs): tile under standing water, at
+        // the two water lines this level has -- the hall's and the upper storey's. A footfall
+        // under one of them splashes; the spiral stair between them is dry.
+        crate::ext::audio::set_surface(crate::ext::audio::Surface::Tile(&[0.78, 4.54]));
         // The elevator first, set into the hall's west wall (`ext/elevator.rs`, "Set into a wall"):
         // the model is carved round its doorway as it loads, and the fence takes in the
         // cabin, which stands outside the model behind the wall.

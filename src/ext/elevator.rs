@@ -50,9 +50,9 @@
 //! An object in the scene vector cannot reach the engine's input, its HUD or its audio, and
 //! nothing survives a scene load but the engine. So, as with `ext::view` and `ext::room`, the
 //! handful of values that cross those lines are ambient: the fade level the overlay draws
-//! ([`fade`]), the E press the engine hands over ([`wants_interact`], [`press`]), the
-//! ride-start edge for the sound ([`take_ride_started`]), the arrival the next level picks up
-//! ([`take_arrival`]) and the registry index of the scene being played, which is how an
+//! ([`fade`]), the E press the engine hands over ([`wants_interact`], [`press`]), the four
+//! sounds of a ride (queued through `ext::audio::request`), the arrival the next level picks
+//! up ([`take_arrival`]) and the registry index of the scene being played, which is how an
 //! elevator knows which floor it is on ([`on_scene_loaded`]). The hint line the HUD shows goes
 //! through the shared channel every prompt uses (`ext::hint`), set each step the offer stands.
 //!
@@ -65,6 +65,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::camera::Camera;
+use crate::ext::audio::{self, Sfx};
 use crate::ext::bounds::transformed_box;
 use crate::ext::gltf_model::{Anchor, Fit, Frame, GltfModel, Load, PartSpec};
 use crate::ext::hint;
@@ -204,7 +205,6 @@ thread_local! {
     /// offering the E press, and the hint line says what it would do.
     static OFFERING: Cell<bool> = const { Cell::new(false) };
     static PRESSED: Cell<bool> = const { Cell::new(false) };
-    static RIDE_STARTED: Cell<bool> = const { Cell::new(false) };
     static ARRIVAL: Cell<Option<Arrival>> = const { Cell::new(None) };
     /// Whether the scene now loading was asked for by a ride, so it starts black.
     static ARRIVING: Cell<bool> = const { Cell::new(false) };
@@ -230,11 +230,6 @@ pub fn wants_interact() -> bool {
 /// Hand the elevator this frame's E press. Consumed by its next `update`.
 pub fn press() {
     PRESSED.with(|p| p.set(true));
-}
-
-/// Whether a ride began since the last call: the cue for `Sfx::Elevator`.
-pub fn take_ride_started() -> bool {
-    RIDE_STARTED.with(Cell::take)
 }
 
 /// Leave an arrival for the next scene to load: what a ride does as it asks for the load, and
@@ -325,6 +320,11 @@ pub enum Event {
     Started { to: usize },
     /// The screen is black: load this floor's scene now.
     Load { to: usize },
+    // EXT: nothing outside the sound acts on this one -- the arrival's doors open off
+    // `openness` like any other frame -- but it is the moment the ding belongs to, and the
+    // state machine is the only thing that knows when the screen has finished clearing.
+    /// The screen has cleared and the doors have started opening.
+    Arrived,
 }
 
 /// The ride's state machine. Pure: it knows time only as the `dt` it is stepped by.
@@ -382,12 +382,14 @@ impl Ride {
             }
             Phase::Gone => None,
             Phase::Arriving(t) => {
+                let was_dark = t < FADE_SECS;
                 let t = t + dt;
                 self.fade = (1.0 - t / FADE_SECS).max(0.0);
                 self.openness = ((t - FADE_SECS) / OPEN_SECS).clamp(0.0, 1.0);
                 self.phase =
                     if t >= FADE_SECS + OPEN_SECS { Phase::Idle } else { Phase::Arriving(t) };
-                None
+                // The step the fade finishes on, once: the doors start moving here.
+                (was_dark && t >= FADE_SECS).then_some(Event::Arrived)
             }
         }
     }
@@ -611,14 +613,24 @@ impl ObjectT for Elevator {
         let pressed = PRESSED.with(Cell::take);
         let here = current_floor();
         let next = next_floor(here, floor_registered);
+        // EXT: one ride is four sounds, and this is where each of them falls due.
         match self.ride.step(GH_DT, inside, pressed, next) {
-            Some(Event::Started { .. }) => RIDE_STARTED.with(|r| r.set(true)),
+            Some(Event::Started { .. }) => {
+                audio::request(Sfx::ElevatorButton);
+                audio::request(Sfx::ElevatorDoors);
+            }
             Some(Event::Load { to }) => {
+                // The motor, over the black screen the load happens behind.
+                audio::request(Sfx::ElevatorRide);
                 // `next_floor` only names a floor from a floor, and only a registered one.
                 let from_floor = here.expect("a ride starts on a floor");
                 let scene = scenes::index_of(FLOORS[to].scene_name).expect("a registered floor");
                 deliver(Arrival { from_floor });
                 request_scene_load(scene);
+            }
+            Some(Event::Arrived) => {
+                audio::request(Sfx::ElevatorDing);
+                audio::request(Sfx::ElevatorDoors);
             }
             None => {}
         }
@@ -714,7 +726,9 @@ mod tests {
         assert!(a.fade() == 1.0 && a.openness() == 0.0 && !a.is_idle());
         assert!(run(&mut a, FADE_SECS * 0.5, true, Some(0)).is_empty());
         assert!((a.fade() - 0.5).abs() < 0.01 && a.openness() == 0.0);
-        assert!(run(&mut a, FADE_SECS * 0.5 + OPEN_SECS * 0.5, true, Some(0)).is_empty());
+        // The screen clearing is the arrival, announced once (the ding hangs off it).
+        let events = run(&mut a, FADE_SECS * 0.5 + OPEN_SECS * 0.5, true, Some(0));
+        assert_eq!(events, [Event::Arrived]);
         assert!(a.fade() == 0.0 && (a.openness() - 0.5).abs() < 0.01, "{}", a.openness());
         assert!(a.step(GH_DT, true, true, Some(0)).is_none(), "a press while opening is ignored");
         assert!(run(&mut a, OPEN_SECS * 0.5 + GH_DT, true, Some(0)).is_empty());

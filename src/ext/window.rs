@@ -64,6 +64,7 @@ use std::rc::Rc;
 
 use crate::camera::Camera;
 use crate::collider::Collider;
+use crate::ext::audio::{self, Sfx};
 use crate::ext::door::yaw_facing;
 use crate::ext::room::take_unlock_window;
 use crate::level18::CEILING;
@@ -493,7 +494,16 @@ impl ObjectT for Window {
             self.locked = false;
             set_unlocked();
         }
+        let was = self.opening;
         self.settle();
+        // EXT: the one moment the frame stops being furniture and becomes a way through --
+        // whether it got there by the key or by being carried backwards until it was tall
+        // enough. Here rather than in `settle`, which the constructor also calls: a window
+        // built already unlocked and oversized (`--unlock-window --window-scale`) would
+        // otherwise swell at the player the instant the level loaded.
+        if !was.passable() && self.opening.passable() {
+            audio::request(Sfx::WindowGrow);
+        }
     }
 
     fn draw(&self, ctx: &RenderCtx, cam: &Camera, _fbo: Option<glow::Framebuffer>) {

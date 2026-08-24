@@ -35,6 +35,7 @@
 //! fixed-step loop (Engine.cpp:114). The engine therefore calls `update` at the top of the
 //! frame before that loop, which is the only moment the latches are valid for a whole frame.
 
+use crate::ext::audio::{self, Sfx};
 use crate::ext::gamepad::PadEvents;
 use crate::ext::settings;
 use crate::ext::ui::{Align, Ui, DIM, GOLD, WHITE};
@@ -267,18 +268,29 @@ impl Menu {
         if nav.down {
             self.sel = (self.sel + 1) % n;
         }
+        // EXT: the menu's three sounds. This whole function is skipped on the frame a menu
+        // opens (`Engine::run_frame`), so opening one is silent and the first tick a player
+        // hears is a row they moved to themselves.
+        if nav.up || nav.down {
+            audio::request(Sfx::UiMove);
+        }
         // Left/right belong to whichever value row the selection is on; everywhere else they
         // are simply ignored rather than falling through to something else.
         if nav.left || nav.right {
             let delta = i32::from(nav.right) - i32::from(nav.left);
             if let Some(action) = self.adjust(delta) {
+                // Only a row that took the press answers: a row with nothing to change stays
+                // silent, which is the difference the player needs to hear.
+                audio::request(Sfx::UiMove);
                 return action;
             }
         }
         if nav.back {
+            audio::request(Sfx::UiBack);
             return self.back();
         }
         if nav.confirm {
+            audio::request(Sfx::UiConfirm);
             return self.confirm(scene_count);
         }
         MenuAction::None
