@@ -864,8 +864,6 @@ pub fn hold_retrieved(
     log::debug!("[grab] object #{idx} out of the inventory at p_scale {p_scale:.2}");
 }
 
-/// Recover the bounding radius of an object if it is grabbable.
-///
 /// Whether this scene holds anything at all that could be picked up.
 ///
 /// Asked once per load, by `Engine::load_scene_from`: the HUD's inventory row is drawn only where
@@ -877,6 +875,8 @@ pub fn any_grabbable(objects: &[std::rc::Rc<std::cell::RefCell<dyn ObjectT>>]) -
     objects.iter().any(|o| o.try_borrow().ok().is_some_and(|o| as_grabbable(&*o).is_some()))
 }
 
+/// Recover the bounding radius of an object if it is grabbable.
+///
 /// `dyn ObjectT` gives no downcast without `Any`, so grabbables advertise themselves through
 /// the physical hit-sphere the engine already understands: `Grabbable::new` seeds exactly one
 /// hit sphere whose radius is the bounding radius. Anything else -- including the player, which

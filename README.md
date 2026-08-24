@@ -1313,10 +1313,12 @@ elevator's), so the puzzle is driven in steps, each headless, windowed and muted
 #    still-emerging key is then a race (3 hits in 5 at --e-at 60; 5 in 5 at 3000). Expect
 #    `[grab] picked up object #30 at 2.26 units, p_scale 1.00` (--log-level debug).
 daydreams --windowed --mute --scene 16 --pos 994.4,1.5,1.55 --yaw=-100.4 --pitch=-1.3 --e-at 3000 --frames 3200 --shot take.bmp
-# 2. Key in hand at the window, E at 30: `[key] used on the window: unlock requested`; by
-#    frame 60 the glass is clear, the key gone, and the hover says TOO SMALL - GRAB IT AND
-#    STEP BACK.
-daydreams --windowed --mute --scene 16 --hold-key --pos 987,1.5,1.2 --yaw 180 --e-at 30 --frames 60 --shot use.bmp
+# 2. Key in hand at the window: `[key] used on the window: unlock requested`, and by the
+#    shot the glass is clear, the key gone, and the hover says TOO SMALL - GRAB IT AND STEP
+#    BACK. The press waits for frame 200 for the same reason step 1 waits: under --no-vsync
+#    a frame is under a millisecond, and the key's first look for a lock happens after the
+#    scene has settled -- press too early and the grab takes the press as a release instead.
+daydreams --windowed --mute --scene 16 --hold-key --pos 987,1.5,1.2 --yaw 180 --e-at 200 --frames 400 --shot use.bmp
 # 3. Unlocked and grown to a door, walk through: `[load] scene 18 in 3 ms` and the `[shot]`
 #    at (-3.82, 1.50, -9.13), the Overgrown level's own coordinates, walked on from the
 #    partner at (-8.86, 1.35, -9.3).
