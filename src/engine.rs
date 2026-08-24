@@ -33,6 +33,15 @@ use crate::resources::Resources;
 use crate::scene::{PObjectVec, PPortalVec, Scene};
 use crate::timer::Timer;
 
+/// EXT: rendered frames `--jump-at` holds Space down for.
+///
+/// A headless frame is well under the 2 ms step, so most of them run no fixed steps at all and a
+/// one-frame press can fall entirely between two steps -- ten frames was not always enough, and a
+/// jump that silently did not happen is a worse dev tool than none. Thirty is 24 ms at headless
+/// speed and half a second at 60 Hz, either way short of the 0.71 s a jump is in the air, so the
+/// hold can never become a second hop.
+const DEV_JUMP_FRAMES: i32 = 30;
+
 pub struct Engine {
     // PORT: hDC / hRC / hWnd / hInstance (Engine.h:39-42) and iWidth / iHeight / isFullscreen
     // (Engine.h:44-46) live in main.rs now. The window size arrives as parameters to
@@ -100,6 +109,12 @@ pub struct Engine {
     // EXT: dev tooling -- `--e-at N`: rendered frames left until E is pressed once as the
     // keyboard would press it (the `key_press` slot, which the first fixed step sees).
     dev_e_at: Cell<Option<i32>>,
+    // EXT: dev tooling -- `--jump-at N`: rendered frames left until Space goes down, and then
+    // the frames it stays down for. The jump is read as a level (src/ext/jump.rs), so it is
+    // held rather than pressed: a headless frame can run no fixed steps at all, and a one-frame
+    // press could land entirely between two of them. Negative means idle.
+    dev_jump_at: Cell<Option<i32>>,
+    dev_jump_hold: Cell<i32>,
     // EXT: this frame's gamepad edges, handed in by main.rs before run_frame.
     pad_events: Cell<crate::ext::gamepad::PadEvents>,
     // EXT: dev tooling -- wall time per rendered frame, reported on the `[shot]` line.
@@ -204,6 +219,8 @@ impl Engine {
             dev_hold: RefCell::new(Vec::new()),
             dev_ride_at: Cell::new(None),
             dev_e_at: Cell::new(None),
+            dev_jump_at: Cell::new(None),
+            dev_jump_hold: Cell::new(-1),
             pad_events: Cell::new(crate::ext::gamepad::PadEvents::default()),
             frame_clock: RefCell::new(crate::ext::frametime::FrameClock::new()),
             occlusion: RefCell::new(crate::ext::occlusion::Occlusion::new(gl)),
@@ -280,6 +297,22 @@ impl Engine {
             } else {
                 self.dev_e_at.set(Some(left - 1));
             }
+        }
+        // EXT: `--jump-at` counts down to the frame Space goes down on, and then `dev_jump_hold`
+        // counts the frames it stays down: `DEV_JUMP_FRAMES` of held, one that releases it, and
+        // then the flag is spent and never touches the key again.
+        if let Some(left) = self.dev_jump_at.get() {
+            if left <= 1 {
+                self.dev_jump_at.set(None);
+                self.dev_jump_hold.set(DEV_JUMP_FRAMES);
+            } else {
+                self.dev_jump_at.set(Some(left - 1));
+            }
+        }
+        let hold = self.dev_jump_hold.get();
+        if hold >= 0 {
+            self.input.borrow_mut().key[b' ' as usize] = hold > 0;
+            self.dev_jump_hold.set(hold - 1);
         }
         // EXT: and the dev frame-time record. Ticked here, at the top, so one interval spans a
         // whole frame including the swap main.rs does after run_frame returns.
@@ -539,10 +572,12 @@ impl Engine {
             drop_props,
             hold_key,
             e_at,
+            jump_at,
         } = run;
         *self.dev_hold.borrow_mut() = hold;
         self.dev_ride_at.set(ride_at);
         self.dev_e_at.set(e_at);
+        self.dev_jump_at.set(jump_at);
         if let Some(scene) = scene {
             self.ext.borrow_mut().menu.close();
             if arrive {
@@ -713,30 +748,30 @@ impl Engine {
         use crate::ext::menu::MenuAction;
         match action {
             MenuAction::None => {}
-            // EXT: every action that closes the menu also drops a stale gamepad grab latch.
-            // gilrs Button::South is bound to both `grab` and `menu_confirm`, so confirming a
-            // menu item would otherwise fire a grab on the first frame after resuming.
+            // EXT: every action that hands control back to the game drops what its own confirm
+            // button left behind -- see `release_input_latches`, and note that it runs *after*
+            // any scene load, which resets the player and with them the jump's state.
             MenuAction::NewGame => {
-                self.pad_grab.set(false);
                 // EXT: a new game opens on the INTRO scene (the Backrooms).
                 self.load_scene(INTRO);
                 self.ext.borrow_mut().menu.close();
+                self.release_input_latches();
             }
             MenuAction::Continue => {
-                self.pad_grab.set(false);
                 self.ext.borrow_mut().menu.close();
+                self.release_input_latches();
             }
             MenuAction::RestartLevel => {
-                self.pad_grab.set(false);
                 self.load_scene(self.cur_scene_ix.get());
                 self.ext.borrow_mut().menu.close();
+                self.release_input_latches();
             }
             MenuAction::SwitchLevel(i) => {
-                self.pad_grab.set(false);
                 if i < self.v_scenes.len() {
                     self.load_scene(i);
                 }
                 self.ext.borrow_mut().menu.close();
+                self.release_input_latches();
             }
             MenuAction::MainMenu => {
                 // The title screen's backdrop IS the INTRO scene, so leaving a game reloads it;
@@ -1310,6 +1345,32 @@ impl Engine {
             let p = self.player.borrow();
             (p.cam_to_world(), p.steps())
         };
+
+        // EXT: this frame's jump events (src/ext/jump.rs), taken here beside the footsteps
+        // because both are things the fixed-step loop did that the frame has to answer for. Both
+        // are take-once, so this is their one reader: a launch sound and a landing sound belong
+        // in these two branches. The landing carries the touchdown speed, which is what tells a
+        // scuff from a thump.
+        //
+        // Both lines carry the position as well, to the frame rather than to the step: it is
+        // what turns `--jump-at` into a measurement -- the ground a running jump covers is the
+        // distance between the two -- and a screenshot can only ever show one point of an arc.
+        {
+            let p = self.player.borrow();
+            let at = p.obj().pos;
+            if p.just_jumped() {
+                log::debug!("[jump] launched at ({:.2}, {:.2}, {:.2})", at.x, at.y, at.z);
+            }
+            if let Some(speed) = p.just_landed() {
+                log::debug!(
+                    "[jump] landed at ({:.2}, {:.2}, {:.2}), {speed:.2} u/s down",
+                    at.x,
+                    at.y,
+                    at.z
+                );
+            }
+        }
+
         let objects = self.v_objects.borrow();
 
         let mut ext = self.ext.borrow_mut();
@@ -1358,6 +1419,19 @@ impl Engine {
     /// EXT: latch a gamepad grab press until the next frame consumes it.
     pub fn set_pad_grab(&self) {
         self.pad_grab.set(true);
+    }
+
+    /// EXT: drop what a menu's own confirm button would otherwise carry into the game with it.
+    ///
+    /// A menu row is confirmed with Enter, Space, `E` or Cross, and three of those four are
+    /// gameplay bindings: `E` and R2's `grab` share the pad-grab latch, and Space and Cross are
+    /// the jump. Without this, CONTINUE would grab whatever was in reach or launch the player on
+    /// the very frame the menu closed under them. The grab latch is simply cleared; the jump is
+    /// made to wait for its button to come up, because it reads a level and the thumb is still
+    /// on it.
+    fn release_input_latches(&self) {
+        self.pad_grab.set(false);
+        self.player.borrow_mut().ignore_jump_until_release();
     }
 
     /// EXT: how many scenes are registered, so the platform layer can bound its cycling.

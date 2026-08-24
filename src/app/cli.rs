@@ -120,6 +120,15 @@ pub struct Args {
     #[arg(long, hide = true, requires = "scene", value_name = "FRAME")]
     pub e_at: Option<u32>,
 
+    /// With `--scene`: on rendered frame N, hold Space for thirty frames -- one jump, whatever a
+    /// headless frame's share of fixed steps turns out to be, and far short of the 0.71 s a
+    /// jump is in the air, so it can never be two. The `[shot]` line's player y is then a point
+    /// on the arc and `--log-level debug` prints the `[jump]` launch and landing, both with the
+    /// position, which is how a running jump's range is measured. Hidden: dev tooling; the
+    /// README's "Jumping" section has the commands.
+    #[arg(long, hide = true, requires = "scene", value_name = "FRAME")]
+    pub jump_at: Option<u32>,
+
     /// Panic after the first frame, to exercise the crash dialog. Hidden: it is a test of the
     /// platform layer, not a feature.
     #[arg(long, hide = true)]
@@ -177,6 +186,8 @@ pub struct DirectRun {
     pub hold_key: bool,
     /// The rendered frame on which E is pressed once, as a key press (`--e-at`).
     pub e_at: Option<i32>,
+    /// The rendered frame on which Space goes down (`--jump-at`).
+    pub jump_at: Option<i32>,
 }
 
 /// `--window-scale`'s parser: a scale the grab itself could produce.
@@ -296,6 +307,7 @@ impl Args {
             drop_props: self.drop_props,
             hold_key: self.hold_key,
             e_at: self.e_at.map(count),
+            jump_at: self.jump_at.map(count),
         })
     }
 
@@ -357,7 +369,7 @@ mod tests {
         assert_eq!(run.scene, Some(DirectScene::Index(14)));
         assert_eq!((run.frames, run.yaw, run.pitch), (120, Some(30.0), Some(-5.0)));
         assert!(run.hold.is_empty() && !run.arrive && run.ride_at.is_none());
-        assert!(!run.hold_key && run.e_at.is_none());
+        assert!(!run.hold_key && run.e_at.is_none() && run.jump_at.is_none());
         // `--shot` alone is a run too: the title screen's photograph.
         let a = Args::try_from_tokens(&["--shot", "title.bmp"]).unwrap();
         let run = a.direct_run().expect("a dev run");
@@ -482,6 +494,17 @@ mod tests {
         let run = a.direct_run().unwrap();
         assert!(run.hold_key && run.e_at == Some(30));
         assert!(Args::try_from_tokens(&["--scene", "16", "--e-at", "-1"]).is_err());
+    }
+
+    #[test]
+    fn jump_at_needs_a_scene_and_a_frame() {
+        assert!(Args::try_from_tokens(&["--jump-at", "30"]).is_err());
+        assert!(Args::try_from_tokens(&["--scene", "16", "--jump-at", "-1"]).is_err());
+        assert!(Args::try_from_tokens(&["--scene", "16", "--jump-at", "soon"]).is_err());
+        let a = Args::try_from_tokens(&["--scene", "16", "--jump-at", "30"]).unwrap();
+        assert_eq!(a.jump_at, Some(30));
+        assert_eq!(a.direct_run().unwrap().jump_at, Some(30));
+        assert!(Args::try_from_tokens(&["--scene", "16"]).unwrap().jump_at.is_none());
     }
 
     #[test]

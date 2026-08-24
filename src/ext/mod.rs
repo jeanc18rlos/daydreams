@@ -48,6 +48,7 @@
 //! | `rigid`    | A prop that is a rigid body: falls, rolls, topples, is thrown, and is grabbed like any other |
 //! | `window`   | A grabbable, resizable, locked window-portal into a far copy of another level's room |
 //! | `key`      | The key painted into one portrait in anamorphosis, and what it opens          |
+//! | `jump`     | Jumping: the apex the impulse is solved from, coyote time and the input buffer |
 
 pub mod audio;
 pub mod backrooms;
@@ -67,6 +68,7 @@ pub mod grassgen;
 pub mod hint;
 pub mod hud;
 pub mod interior;
+pub mod jump;
 pub mod key;
 pub mod meadow;
 pub mod menu;

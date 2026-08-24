@@ -178,11 +178,12 @@ const CREDITS_BACK_Y: f32 = SUB_LIST_Y + (CREDITS_TEXT.len() as f32 + 1.0) * SMA
 /// `Nav::read`, `Player::update_player` and `Gamepads::poll`, and inventing a binding table
 /// just so this screen could read it would be a large refactor in service of one list. The
 /// cost is that this table is documentation, and goes stale if a binding moves without it.
-const KEYMAP: [(&str, &str, &str); 10] = [
+const KEYMAP: [(&str, &str, &str); 11] = [
     ("MOVE", "W A S D", "LEFT STICK"),
     ("SPRINT", "HOLD SHIFT", "L3 (STICK CLICK) TOGGLES"),
+    ("JUMP", "SPACE", "CROSS"),
     ("LOOK", "MOUSE", "RIGHT STICK"),
-    ("GRAB / RELEASE", "E", "CROSS / SQUARE / R2"),
+    ("GRAB / RELEASE", "E", "SQUARE / R2"),
     ("ROTATE HELD", "HOLD R + MOUSE", "HOLD R1 + RIGHT STICK"),
     ("PAUSE MENU", "ESC", "OPTIONS"),
     ("MENU: MOVE", "ARROWS / W A S D", "D-PAD"),
@@ -777,6 +778,15 @@ mod tests {
     #[test]
     fn credits_fit_above_the_footer() {
         const { assert!(CREDITS_BACK_Y + ITEM_SIZE + SMALL_LINE_H < HINT_Y) }
+    }
+
+    /// The key map has the same budget, and less of it left: adding JUMP took the table to
+    /// eleven rows and its BACK row to within a hint's height of the footer. A twelfth row does
+    /// not fit, and this says so at compile time rather than in a screenshot.
+    #[test]
+    fn the_key_map_fits_above_the_footer() {
+        const BACK_Y: f32 = SUB_LIST_Y + (KEYMAP.len() as f32 + 0.8) * SMALL_LINE_H;
+        const { assert!(BACK_Y + ITEM_SIZE + HINT_SIZE < HINT_Y) }
     }
 
     #[test]

@@ -30,6 +30,12 @@ pub struct Input {
     // poll by src/ext/gamepad.rs. A level like `pad_rotate_mod`; the press *edge* that flips
     // toggle mode travels separately, as `PadEvents::sprint`.
     pub pad_sprint: bool,
+    // EXT: raw state of the pad's jump button (Cross / `Button::South`), refreshed every poll by
+    // src/ext/gamepad.rs and read by `Player::update_player` beside the keyboard's Space. A level
+    // like `pad_rotate_mod`, and for a second reason as well as the first: `end_frame` runs inside
+    // the engine's fixed-step loop, so an edge slot is clear for every step of a frame but the
+    // first (src/ext/jump.rs).
+    pub pad_jump: bool,
     // EXT: this frame's resolved sprint multipliers -- hold, toggle, the forward-only rule and
     // the eased speed cap already folded in by `ext::sprint::Sprint::resolve`, which the engine
     // runs once per rendered frame before the fixed-step loop. `Player::update_player` reads
@@ -64,6 +70,8 @@ impl Input {
             pad_rotate_mod: false,
             // EXT: sprint -- raw pad level and the engine-resolved level.
             pad_sprint: false,
+            // EXT: jump.
+            pad_jump: false,
             sprint: crate::ext::sprint::Factors::WALK,
         }
     }

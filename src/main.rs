@@ -573,9 +573,11 @@ impl ApplicationHandler for App {
                     engine.with_input(|input| pads.poll(input))
                 };
                 // EXT: gameplay-only pad effects are gated on the menu being closed. South is
-                // bound to both `grab` and `menu_confirm`, and the D-pad to both scene cycling
-                // and menu navigation; the menu's own copy of these events arrives via
-                // set_pad_events below and is the only path that may act while it is open.
+                // bound to both the jump and `menu_confirm`, and the D-pad to both scene
+                // cycling and menu navigation; the menu's own copy of these events arrives via
+                // set_pad_events below and is the only path that may act while it is open. The
+                // jump needs no gate of its own: it travels as a level in `Input`, and a menu
+                // frame returns before the fixed-step loop that would read it.
                 if !engine.menu_is_open() {
                     if pad.grab {
                         engine.set_pad_grab();
