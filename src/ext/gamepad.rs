@@ -13,8 +13,8 @@
 //! |--------------------------|-----------------------------------------------|
 //! | Left stick               | Move (analog)                                  |
 //! | Right stick              | Look (analog)                                  |
-//! | `South` [Cross]          | Grab / release the held object                 |
-//! | `West` [Square]          | Grab / release (alternate)                     |
+//! | `South` [Cross]          | Jump                                           |
+//! | `West` [Square]          | Grab / release the held object                 |
 //! | `RightTrigger2` [R2]     | Grab / release (alternate)                     |
 //! | `RightTrigger` [R1]      | Hold: rotate the held object with the right stick |
 //! | `LeftTrigger` [L1]       | (reserved as a modifier; currently unbound)    |
@@ -25,6 +25,20 @@
 //! | `Start` [Options]        | Open the pause menu / close it again            |
 //! | `Select` [Create]        | Toggle mute                                    |
 //! | `Mode` [PS button]       | Toggle fullscreen                              |
+//!
+//! # Why Cross jumps and Square grabs
+//!
+//! Cross was the grab (and the elevator, and the key: they share one button). Jumping arrived and
+//! took it, because Cross-to-jump is what a pad player's thumb already believes and because a
+//! button cannot be both "jump" and "pick this up" -- every hop in front of a prop would have
+//! grabbed it. Grab moved one seat left to Square, which was already an alternate for it, and R2
+//! stayed. Cross keeps `menu_confirm` as well, since a menu has nothing to jump over; the frame a
+//! menu closes calls `Player::ignore_jump_until_release` so the confirm cannot follow the player
+//! back into the world as a launch.
+//!
+//! Jump is published as a *level* (`Input::pad_jump`) rather than raised as an edge here, like R1's
+//! `pad_rotate_mod` and L3's `pad_sprint`: the fixed-step loop clears the edge slots partway
+//! through a rendered frame, and `ext::jump` wants the button's state on every step.
 //!
 //! # Why Options opens the menu, and why PS no longer quits
 //!
@@ -200,6 +214,9 @@ impl Gamepads {
         let mut cur = ButtonState::default();
         // EXT: R1 level, for src/ext/rotate.rs.
         let mut rotate_mod = false;
+        // EXT: Cross level, for src/ext/jump.rs. A local rather than a `ButtonState` field for
+        // the same reason as R1's: nothing here edge-detects it.
+        let mut jump = false;
 
         for (_id, pad) in gilrs.gamepads() {
             let lx = deadzone(pad.value(gilrs::Axis::LeftStickX));
@@ -217,10 +234,11 @@ impl Gamepads {
                 pad.button_data(b).map_or(0.0, |d| d.value()) > TRIGGER_THRESHOLD
             };
 
-            cur.grab |= pressed(gilrs::Button::South)
-                || pressed(gilrs::Button::West)
+            // EXT: Cross is the jump now; grab keeps Square and R2 -- see the module docs.
+            cur.grab |= pressed(gilrs::Button::West)
                 || pressed(gilrs::Button::RightTrigger2)
                 || analog(gilrs::Button::RightTrigger2);
+            jump |= pressed(gilrs::Button::South);
             // EXT: scene switching is D-pad only -- see the module docs for why the bumpers
             // were taken off these bindings.
             cur.next_scene |= pressed(gilrs::Button::DPadRight);
@@ -263,6 +281,10 @@ impl Gamepads {
         input.pad_rotate_mod = rotate_mod;
         // EXT: sprint level, published raw for the same reason; the edge is raised below.
         input.pad_sprint = cur.sprint;
+        // EXT: jump level, ditto. Written whether or not a menu is open, which is safe because
+        // `Engine::run_frame` returns before the fixed-step loop on a menu frame, so nothing ever
+        // reads it there.
+        input.pad_jump = jump;
 
         // ── Rising-edge detection for the digital actions ──────────────────────────────────
         events.grab = cur.grab && !self.prev.grab;
