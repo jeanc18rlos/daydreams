@@ -122,11 +122,21 @@ impl Audio {
     /// Initialise the mixer and index the asset directories. Never fails in a way that stops the
     /// engine -- a missing device just yields a silent `Audio`.
     pub fn new() -> Audio {
-        let manager = match AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()) {
-            Ok(m) => Some(m),
-            Err(e) => {
-                log::warn!("[audio] no output device ({e}); running silent");
-                None
+        // EXT: a forced mute (`--mute`) means this process must not TOUCH the audio device,
+        // not merely play nothing through it. Opening an output stream claims the default
+        // device and starts kira's mixer thread, which on this machine has hung a headless
+        // run on shutdown while another application held the device -- and a muted run has
+        // nothing to play anyway.
+        let manager = if forced() {
+            log::info!("[audio] muted for this run (--mute); no output device opened");
+            None
+        } else {
+            match AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    log::warn!("[audio] no output device ({e}); running silent");
+                    None
+                }
             }
         };
 
