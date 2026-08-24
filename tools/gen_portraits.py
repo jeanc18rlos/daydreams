@@ -43,28 +43,41 @@ THE THREE KINDS OF SHEET
   masks cross-fade through the overlap, summing to one there: the shader composites parts
   additively in premultiplied form, so two parts may overlap only where their alphas
   partition.
-* `chain` (the Hals "Laughing Cavalier" sheet): a hybrid. The left column holds two alpha
-  figures on the painted ground -- the ORIGINAL on top, the blanked base below, the same
-  framing give or take a few pixels. The middle column holds rectangular VARIANT CROPS with
-  alpha (soft torn edges, a rounded corner), each showing one variant's pieces IN PLACE on
-  the face. The right column holds the true PNG cutouts -- one piece per eye, and each mouth
-  as FOUR pieces laid out splayed (lips, goatee, left and right moustache), NOT in their
-  on-face arrangement. So a piece cannot register against the base directly (the base has no
-  moustache under a moustache) and registers through a chain: piece -> its variant crop
-  (which shows the arrangement) -> the ORIGINAL (whole-rectangle NCC, the crop's own alpha as
-  the mask) -> the base (the original shifted by the same inset-core NCC the `black` kind
-  uses). The crops are a different RENDERING of the same arrangement -- the hair strokes do
-  not correlate -- so the piece -> crop hop cannot be texture NCC either: an eye piece lands
-  by aligning its opening's ellipse (`eye`, hand-read in piece pixels) onto the crop's
-  (`target`, hand-read in crop pixels) and is then polished by a local NCC; a mouth piece
-  lands by the best silhouette overlap (IoU) of its alpha against the crop-minus-base
-  difference map inside its hand-boxed `window`, over the manifest's scale sweep, then the
-  same local NCC polish. The pieces keep their own alpha edges -- the moustache wisps -- and
-  are NOT feathered (`feather: 0` per piece); colours are matched to the crop under the
-  piece's own alpha. The sheet also carries a fourth, unlabelled mouth set (its lips and
-  goatee are one connected blob, not four pieces); the labels sit BELOW their content
-  everywhere on the sheet, so the three labelled sets are the manifest's and the orphan is
-  ignored.
+* `chain` (the Hals "Laughing Cavalier" sheet): a hybrid, and on close inspection every
+  panel of it is a separate RE-RENDERING of the painting rather than a crop of one master.
+  The left column holds two alpha figures on the painted ground -- the ORIGINAL on top, the
+  blanked base below, near enough one framing that an inset-core NCC finds the shift (the
+  `black` kind's move; ncc 0.92, not the 0.98 of a true duplicate). The middle column holds
+  rectangular VARIANT CROPS with alpha, each showing one variant's pieces IN PLACE on the
+  face. The right column holds the true PNG cutouts -- one piece per eye, and each mouth as
+  FOUR pieces laid out splayed (lips, goatee, left and right moustache), NOT in their
+  on-face arrangement. No automated registration survives this sheet: a piece cannot NCC
+  against the base (no moustache under a moustache), the crops' facial geometry is not a
+  rigid scale of the original's (measured: the iris spacing implies crop scale 0.43, the
+  eye widths 0.7 -- no similarity transform satisfies both, and a sweep just picks a
+  degenerate corner), and the original-minus-base blank map rings on every re-rendered
+  edge, so silhouette matching shrinks the wispy pieces into its densest lobe. So every
+  piece is HAND-ANCHORED in the ORIGINAL's frame and the tool only applies and verifies
+  the anchors: an eye piece lays its opening's ellipse (`eye`, piece pixels) onto the
+  original's (`target`, ORIGINAL pixels), both read off gridded crops; a mouth piece fits
+  its solid silhouette to a hand-boxed content `box` (ORIGINAL pixels, read off the
+  original's own smile -- the same boxes for all three mouths, the arrangement being the
+  same face), anchored by `pin`: the moustaches their root corner (a smile's far tip curls
+  high, a sad one droops -- the root line is what holds still), the lips their centre. The
+  base placement is the original's plus the measured shift. Recorded per piece: the NCC
+  against the original AT the landing spot (a diagnostic -- two renderings' brushwork caps
+  it well below the one-piece sheets' scores) and, for a mouth piece, how much of the
+  blanked area inside its box it covers. An eye piece's alpha is faded outside a HALO
+  round its opening (HALO_IN/OUT): the cutout carries far more re-rendered skin and brow
+  than the socket needs, and that far from the opening its geometry no longer matches the
+  base's (the base keeps its own brows). Mouth pieces keep their own alpha edges -- the
+  moustache wisps -- and are NOT feathered (`feather: 0` per piece); a mouth piece's
+  colour is matched to the original under its alpha weighted by the blank map (hair
+  against the hair that was blanked, not against bare skin), an eye piece's to the base
+  under its haloed border ring, as the `alpha` kind does. The sheet also carries a fourth,
+  unlabelled mouth set (its lips and goatee are one connected blob, not four pieces); the
+  labels sit BELOW their content everywhere on the sheet, so the three labelled sets are
+  the manifest's and the orphan is ignored.
 
 ADDING A SHEET: one more manifest entry, of whichever kind fits its layout. `eye` per eye
 piece is the eye opening's ellipse in the piece's own pixels (centre x, y, radius x, y): the
@@ -154,6 +167,74 @@ MANIFEST = [
             "mouth_smile": {"region": (560, 505, 960, 740)},
             "mouth_sad": {"region": (960, 505, 1369, 740), "framing": "mouth_smile"},
             "mouth_angry": {"region": (700, 740, 1200, 1000), "framing": "mouth_smile"},
+        },
+    },
+    {
+        "name": "cavalier",
+        "title": "The Laughing Cavalier (Frans Hals, 1624); the sheet is the user's edit",
+        "sheet": "assets/paintings/src/cavalier_sheet.png",
+        "kind": "chain",
+        # The left column's two figures: the ORIGINAL on top, the blanked base below, each
+        # region cut between its figure and the label under it (the labels have alpha too).
+        "base": {"region": (0, 522, 575, 991)},
+        "reference": {"region": (0, 0, 575, 500)},
+        # The eye skin patches feather like the Mona's; the mouth cutouts keep their own
+        # wispy edges (`feather: 0` per piece).
+        "feather": 0.08,
+        # Per variant: the crop that shows the arrangement (used for the ground mask and by
+        # whoever reads the sheet; the registration lives in the original's frame, see the
+        # docstring), and the pieces. `eye` is the opening's ellipse in the piece's pixels,
+        # `target` the same opening in the ORIGINAL's (both hand-read off gridded crops;
+        # the openings do not move between the centre and left variants, so the targets
+        # repeat). A mouth piece's `box` is where its content sits on the ORIGINAL --
+        # hand-read off the original's own smile, the same boxes for all three mouths, the
+        # arrangement being the same face -- and `pin` says which edges anchor it there
+        # (the moustaches their root corner, since a smile's tip curls high and a sad one
+        # droops; the lips their centre). A mouth's pieces are in paint order, last on
+        # top. The sheet's fourth, unlabelled mouth set (its lips and goatee one connected
+        # blob) is the orphan the docstring mentions: not listed, not cut.
+        "variants": {
+            "eyes_center": {
+                "crop": (575, 44, 965, 168),
+                "pieces": {
+                    "eyes_center_l": {"region": (1030, 50, 1225, 172), "eye": (108, 74, 42, 20), "target": (121, 196, 16, 8)},
+                    "eyes_center_r": {"region": (1255, 50, 1470, 160), "eye": (85, 68, 50, 21), "target": (188, 188, 25, 11)},
+                },
+            },
+            "eyes_left": {
+                "crop": (575, 194, 965, 312),
+                "pieces": {
+                    "eyes_left_l": {"region": (1015, 185, 1200, 302), "eye": (95, 73, 45, 20), "target": (121, 196, 16, 8)},
+                    "eyes_left_r": {"region": (1258, 185, 1460, 296), "eye": (88, 66, 49, 21), "target": (188, 188, 25, 11)},
+                },
+            },
+            "mouth_smile": {
+                "crop": (605, 378, 938, 522),
+                "pieces": {
+                    "mouth_smile_lips": {"region": (1183, 396, 1299, 446), "box": (104, 242, 210, 272), "pin": ("center", "center"), "fit": "min", "feather": 0},
+                    "mouth_smile_goatee": {"region": (1198, 446, 1272, 514), "box": (118, 276, 178, 340), "pin": ("center", "top"), "fit": "min", "feather": 0},
+                    "mouth_smile_lm": {"region": (1045, 352, 1183, 450), "box": (98, 233, 166, 292), "pin": ("right", "roottop"), "feather": 0},
+                    "mouth_smile_rm": {"region": (1301, 342, 1432, 448), "box": (150, 227, 248, 272), "pin": ("left", "roottop"), "feather": 0},
+                },
+            },
+            "mouth_sad": {
+                "crop": (605, 543, 942, 683),
+                "pieces": {
+                    "mouth_sad_lips": {"region": (1186, 566, 1296, 616), "box": (104, 242, 210, 272), "pin": ("center", "center"), "fit": "min", "feather": 0},
+                    "mouth_sad_goatee": {"region": (1202, 617, 1268, 688), "box": (118, 276, 178, 340), "pin": ("center", "top"), "fit": "min", "feather": 0},
+                    "mouth_sad_lm": {"region": (1045, 530, 1185, 624), "box": (98, 233, 166, 292), "pin": ("right", "roottop"), "feather": 0},
+                    "mouth_sad_rm": {"region": (1297, 528, 1448, 616), "box": (150, 227, 248, 272), "pin": ("left", "roottop"), "feather": 0},
+                },
+            },
+            "mouth_angry": {
+                "crop": (605, 705, 938, 868),
+                "pieces": {
+                    "mouth_angry_lips": {"region": (1200, 855, 1303, 898), "box": (104, 242, 210, 272), "pin": ("center", "center"), "fit": "min", "feather": 0},
+                    "mouth_angry_goatee": {"region": (1210, 897, 1280, 968), "box": (118, 276, 178, 340), "pin": ("center", "top"), "fit": "min", "feather": 0},
+                    "mouth_angry_lm": {"region": (1064, 805, 1207, 907), "box": (98, 233, 166, 292), "pin": ("right", "roottop"), "feather": 0},
+                    "mouth_angry_rm": {"region": (1295, 815, 1440, 907), "box": (150, 227, 248, 272), "pin": ("left", "roottop"), "feather": 0},
+                },
+            },
         },
     },
 ]
@@ -571,14 +652,20 @@ def whole_tile(pieces, name):
 
 
 # ── The chain kind (docstring, "THE THREE KINDS OF SHEET") ───────────────────────────────────
-# The crop-minus-base difference map: |Δ luminance| over this many grey levels is fully "a
-# piece lives here", and above DIFF_TH of that a pixel counts toward a mouth piece's IoU.
+# The blank map (original minus the base laid over it): |Δ luminance| over this many grey
+# levels is fully "something was blanked here", and above DIFF_TH of that a pixel counts as
+# blanked. The map only VERIFIES a placement (the coverage diagnostic) and weighs the colour
+# match; nothing optimises against it -- both figures are re-renderings and the map rings on
+# every edge, not just the blanked features.
 DIFF_NORM = 60.0
 DIFF_TH = 0.45
-# How far the local NCC polish may move an eye piece off its ellipse-aligned spot, in crop
-# pixels, and how far off the ellipse-implied scale it may go.
-POLISH = 8
-POLISH_SCALES = (0.90, 0.95, 1.00, 1.05, 1.10)
+# An eye piece's halo: its alpha fades over the elliptical band from HALO_IN to HALO_OUT
+# times its opening's radii (the vertical radius stretched by HALO_RY, the lids being taller
+# than the opening). The pieces carry far more re-rendered skin and brow than the base's
+# blanked socket needs, and geometry that far from the opening does not match the base's.
+HALO_IN = 1.15
+HALO_OUT = 1.40
+HALO_RY = 1.5
 
 
 def coverage_rect(alpha, region, th=0.5, trim=2):
@@ -638,94 +725,128 @@ def load_chain_sheet(entry):
     return base, ref, pieces, tiles
 
 
-def diff_map(bg, cg, scale, bx, by):
-    """|the crop - the base under it| in crop pixels, blurred a touch and clipped 0..1: a
-    variant's pieces are exactly where its crop differs from the blanked base."""
-    ch, cw = cg.shape
+def blank_map(rg, bg, dx, dy):
+    """|the original - the base laid over it| in ORIGINAL pixels, blurred a touch and clipped
+    0..1: the two are the same rendering shifted by (dx, dy), so what differs is exactly what
+    the base blanked -- the eyes and the whole mouth. Zero where the base does not reach."""
+    rh, rw = rg.shape
     bh, bw = bg.shape
-    x0, y0 = int(round(bx)), int(round(by))
-    x1, y1 = int(round(bx + cw * scale)), int(round(by + ch * scale))
-    sub = bg[max(y0, 0) : min(y1, bh), max(x0, 0) : min(x1, bw)]
-    pad = ((max(-y0, 0), max(y1 - bh, 0)), (max(-x0, 0), max(x1 - bw, 0)))
-    if any(p for pair in pad for p in pair):
-        sub = np.pad(sub, pad, mode="edge")
-    up = np.array(Image.fromarray(sub.astype(np.float32), mode="F").resize((cw, ch), Image.BILINEAR), dtype=np.float64)
-    d = np.abs(gauss_blur(cg, 1.5) - gauss_blur(up, 1.5))
+    over = np.zeros((rh, rw), np.float64)
+    have = np.zeros((rh, rw), bool)
+    # base pixel (x, y) sits at original pixel (x - dx, y - dy)
+    rx0, ry0 = max(-dx, 0), max(-dy, 0)
+    rx1, ry1 = min(bw - dx, rw), min(bh - dy, rh)
+    over[ry0:ry1, rx0:rx1] = bg[ry0 + dy : ry1 + dy, rx0 + dx : rx1 + dx]
+    have[ry0:ry1, rx0:rx1] = True
+    d = np.abs(gauss_blur(rg, 1.5) - gauss_blur(over, 1.5))
+    d = np.where(have, d, 0.0)
     return np.clip(gauss_blur(d, 2.0) / DIFF_NORM, 0, 1)
 
 
-def place_eye(cg, p, pspec):
-    """An eye piece in its crop: the piece's opening ellipse laid on the crop's, then a local
-    NCC polish -- +-POLISH pixels, POLISH_SCALES about the ellipses' scale -- of the piece's
-    grayscale under its own alpha. Returns (scale, x, y, ncc)."""
+def halo(alpha, eye):
+    """An eye piece's alpha faded outside the halo band round its opening (HALO_IN/OUT)."""
+    cx, cy, rx, ry = eye
+    h, w = alpha.shape
+    ys, xs = np.mgrid[0:h, 0:w]
+    r = np.sqrt(((xs - cx) / rx) ** 2 + ((ys - cy) / (ry * HALO_RY)) ** 2)
+    t = np.clip((r - HALO_IN) / (HALO_OUT - HALO_IN), 0, 1)
+    fade = 1 - t * t * (3 - 2 * t)
+    return (alpha.astype(np.float64) * fade).astype(np.uint8)
+
+
+def place_eye(rg, p, pspec, crop_at):
+    """An eye piece on the original: the piece's opening ellipse laid on the original's --
+    scale from the radii, position from the centres, both hand-read (`crop_at` is what the
+    halo crop took off the manifest's piece coordinates). No NCC search: the piece is a
+    re-rendering and the local NCC landscape drifts it into corners; the returned ncc is
+    the diagnostic at the anchor, under the piece's alpha."""
     ecx, ecy, erx, ery = pspec["eye"]
     tcx, tcy, trx, try_ = pspec["target"]
-    s0 = 0.5 * (trx / erx + try_ / ery)
-    tpl = gray(p.rgba)
-    mask = p.rgba[..., 3].astype(np.float64) / 255.0
-    best = None
-    for f in POLISH_SCALES:
-        s = s0 * f
-        t = resize(tpl, s)
-        m = np.clip(resize(mask, s), 0, 1)
-        th, tw = t.shape
-        x0 = int(round(tcx - ecx * s)) - POLISH
-        y0 = int(round(tcy - ecy * s)) - POLISH
-        wx0, wy0 = max(x0, 0), max(y0, 0)
-        wx1 = min(x0 + 2 * POLISH + tw + 1, cg.shape[1])
-        wy1 = min(y0 + 2 * POLISH + th + 1, cg.shape[0])
-        if wy1 - wy0 <= th or wx1 - wx0 <= tw:
-            continue
-        n = masked_ncc(cg[wy0:wy1, wx0:wx1], t, m)
-        y, x = np.unravel_index(np.argmax(n), n.shape)
-        if best is None or n[y, x] > best[3]:
-            best = (float(s), int(x + wx0), int(y + wy0), float(n[y, x]))
-    return best
+    s = 0.5 * (trx / erx + try_ / ery)
+    x = int(round(tcx - (ecx - crop_at[0]) * s))
+    y = int(round(tcy - (ecy - crop_at[1]) * s))
+    return s, x, y, ncc_at(rg, p, s, x, y)
 
 
-def place_mouth(cg, d, p, pspec, scales):
-    """A mouth piece in its crop: the best silhouette overlap (IoU) of the piece's alpha with
-    the difference map inside the hand-boxed window, over the scale sweep. The recorded score
-    is the NCC of the piece against the crop AT that placement -- a diagnostic, not the
-    optimiser: the crop is another rendering of the same hair and texture NCC cannot place a
-    moustache, but it says how alike the two are where the piece landed."""
-    M = (d > DIFF_TH).astype(np.float64)
-    tpl = (gauss_blur(p.rgba[..., 3].astype(np.float64) / 255.0, 2.0) > 0.5).astype(np.float64)
-    wx0, wy0, wx1, wy1 = pspec["window"]
-    img = M[wy0:wy1, wx0:wx1]
-    best = None
-    for s in scales:
-        t = (np.clip(resize(tpl, s), 0, 1) > 0.5).astype(np.float64)
-        if t.shape[0] >= img.shape[0] or t.shape[1] >= img.shape[1]:
-            continue
-        inter = xcorr(img, t)
-        mbox = xcorr(img, np.ones_like(t))
-        iou = inter / np.maximum(t.sum() + mbox - inter, 1e-9)
-        y, x = np.unravel_index(np.argmax(iou), iou.shape)
-        if best is None or iou[y, x] > best[3]:
-            best = (float(s), int(x + wx0), int(y + wy0), float(iou[y, x]))
-    s, x, y, iou_score = best
-    # The diagnostic NCC at the landing spot.
+def ncc_at(rg, p, s, x, y):
+    """The NCC of the piece against the original AT a placement, under its alpha: the
+    diagnostic every chain piece records -- two renderings' brushwork caps it well below the
+    one-piece sheets' scores, but it still says how alike the two are where the piece sits."""
     t = resize(gray(p.rgba), s)
     m = np.clip(resize(p.rgba[..., 3].astype(np.float64) / 255.0, s), 0, 1)
     th, tw = t.shape
-    sub = cg[y : y + th, x : x + tw]
-    if sub.shape == t.shape:
-        ncc = float(masked_ncc(sub, t, m)[0, 0])
+    sub = rg[max(y, 0) : y + th, max(x, 0) : x + tw]
+    if sub.shape != t.shape:
+        return 0.0
+    return float(masked_ncc(sub, t, m)[0, 0])
+
+
+def silhouette(p):
+    """The piece's solid silhouette (the wisp gaps closed) and its bbox in piece pixels."""
+    sil = gauss_blur(p.rgba[..., 3].astype(np.float64) / 255.0, 3.0) > 0.3
+    return sil, bbox(sil)
+
+
+def place_mouth(rg, d, p, pspec):
+    """A mouth piece on the original: its solid silhouette fitted to the hand-boxed `box`
+    (ORIGINAL pixels, where this piece's content sits on the face) -- the scale from the
+    widths, the position from the `pin` (which edges of box and silhouette coincide: the
+    moustaches pin their root corner, the lips their centre). Fully hand-anchored: on this
+    sheet nothing correlates well enough to optimise against (docstring). Returns the
+    diagnostic ncc and how much of the blanked area inside the box the piece covers."""
+    bx0, by0, bx1, by1 = pspec["box"]
+    pin_x, pin_y = pspec["pin"]
+    sil, (sx0, sy0, sx1, sy1) = silhouette(p)
+    s = (bx1 - bx0) / (sx1 - sx0)
+    if pspec.get("fit") == "min":
+        # The piece stays inside the box both ways (the lips and the goatee, whose visible
+        # part the moustache is meant to overhang); a moustache fits by width alone, its
+        # curl going where it goes.
+        s = min(s, (by1 - by0) / (sy1 - sy0))
+    if pin_x == "left":
+        x = bx0 - int(round(sx0 * s))
+    elif pin_x == "right":
+        x = bx1 - int(round(sx1 * s))
     else:
-        ncc = 0.0
-    return s, x, y, ncc, iou_score
+        x = int(round(0.5 * (bx0 + bx1) - 0.5 * (sx0 + sx1) * s))
+    if pin_y == "roottop":
+        # The silhouette's top near the pinned side: the moustache root's upper edge, the
+        # stable line across the variants (a smile's far tip curls high, a sad one droops).
+        cols = sil[:, sx0 : sx0 + max(1, (sx1 - sx0) * 3 // 10)] if pin_x == "left" else sil[:, sx1 - max(1, (sx1 - sx0) * 3 // 10) : sx1]
+        rows = np.nonzero(cols.any(axis=1))[0]
+        root_top = int(rows.min())
+        y = by0 - int(round(root_top * s))
+    elif pin_y == "top":
+        y = by0 - int(round(sy0 * s))
+    else:
+        y = int(round(0.5 * (by0 + by1) - 0.5 * (sy0 + sy1) * s))
+    # Coverage: the blanked pixels inside the box that the placed silhouette covers.
+    M = d[by0:by1, bx0:bx1] > DIFF_TH
+    placed = np.zeros_like(M)
+    small = np.clip(resize(sil.astype(np.float64), s), 0, 1) > 0.5
+    px0, py0 = bx0 - x, by0 - y
+    sh, sw = small.shape
+    ix0, iy0 = max(px0, 0), max(py0, 0)
+    ix1, iy1 = min(px0 + M.shape[1], sw), min(py0 + M.shape[0], sh)
+    if ix1 > ix0 and iy1 > iy0:
+        placed[iy0 - py0 : iy1 - py0, ix0 - px0 : ix1 - px0] = small[iy0:iy1, ix0:ix1]
+    cover = float((M & placed).sum() / max(M.sum(), 1))
+    return s, x, y, ncc_at(rg, p, s, x, y), cover
 
 
-def match_colour_at(piece, img, scale, at, weights):
-    """`match_colour` against any image at an explicit placement (the chain matches a piece
-    to its CROP: the base has no moustache under a moustache)."""
+def match_colour_at(piece, img, scale, at, weights, img_weights=None):
+    """`match_colour` against any image at an explicit placement, with explicit weights (the
+    chain matches a mouth piece to the ORIGINAL under the blank map: hair against the hair
+    that was blanked, not against the base's bare chin). `weights` is in the piece's pixels;
+    `img_weights`, if given, multiplies in at the placement, in the image's pixels."""
     s, (x, y) = scale, at
     w, h = piece.size
     sw, sh = int(round(w * s)), int(round(h * s))
     under = img[y : y + sh, x : x + sw, :3].astype(np.float64)
     small = resize_rgba(piece.rgba, (sw, sh)).astype(np.float64)
     wts = np.clip(resize(weights, s), 0, 1)[: under.shape[0], : under.shape[1]]
+    if img_weights is not None:
+        wts = wts * img_weights[: wts.shape[0], : wts.shape[1]]
     small = small[: under.shape[0], : under.shape[1]]
     wsum = max(wts.sum(), 1e-6)
     mb = (under * wts[..., None]).sum(axis=(0, 1)) / wsum
@@ -745,39 +866,39 @@ def register_chain(entry, base, ref, pieces, tiles):
     oy, ox = np.unravel_index(np.argmax(n), n.shape)
     dx, dy = inset - int(ox), inset - int(oy)
     print(f"  base is the original shifted by ({dx}, {dy}), ncc {n[oy, ox]:.3f}")
-    lo, hi, step = entry["register"]["scales"]
-    crop_scales = np.arange(lo, hi + step / 2, step)
-    plo, phi, pstep = entry["piece_scales"]
-    piece_scales = np.arange(plo, phi + pstep / 2, pstep)
+    d = blank_map(rg, bg, dx, dy)
     for vname, vspec in entry["variants"].items():
-        crgb, ca, rect = tiles[vname]
-        cg = gray(crgb)
-        # Crop -> original: the whole rectangle, the crop's own alpha as the mask (the torn
-        # edge and the rounded corner weigh themselves out), a few rim pixels dropped.
-        mask = ca.copy()
-        mask[:3] = 0
-        mask[-3:] = 0
-        mask[:, :3] = 0
-        mask[:, -3:] = 0
-        s2, x2, y2, sc2 = register(rg, cg, mask, crop_scales)
-        print(f"  {vname}: crop scale {s2:.3f} at ({x2}, {y2}) on the original, ncc {sc2:.3f}")
-        d = diff_map(bg, cg, s2, x2 + dx, y2 + dy)
         for pname, pspec in vspec["pieces"].items():
             p = pieces[pname]
             if "eye" in pspec:
-                s1, x1, y1, score = place_eye(cg, p, pspec)
+                p.rgba[..., 3] = halo(p.rgba[..., 3], pspec["eye"])
+                # Crop the piece to the halo's own extent: beyond it the alpha is zero by
+                # construction, and the empty margin would otherwise keep the piece's rect
+                # wide enough to overlap a moustache's on the base (the atlas test forbids
+                # an eye rect touching a mouth rect: those are summed).
+                cx, cy, rx, ry = pspec["eye"]
+                x0 = max(0, int(cx - rx * HALO_OUT) - 1)
+                y0 = max(0, int(cy - ry * HALO_RY * HALO_OUT) - 1)
+                x1 = min(p.size[0], int(cx + rx * HALO_OUT) + 2)
+                y1 = min(p.size[1], int(cy + ry * HALO_RY * HALO_OUT) + 2)
+                p.rgba = p.rgba[y0:y1, x0:x1]
+                p.eye = (cx - x0, cy - y0, rx, ry)
+                s, x, y, score = place_eye(rg, p, pspec, (x0, y0))
                 extra = ""
             else:
-                s1, x1, y1, score, iou = place_mouth(cg, d, p, pspec, piece_scales)
-                extra = f" iou {iou:.3f}"
-            p.scale = s1 * s2
-            p.at = (int(round(x2 + x1 * s2 + dx)), int(round(y2 + y1 * s2 + dy)))
+                s, x, y, score, cover = place_mouth(rg, d, p, pspec)
+                extra = f" covers {cover:.2f} of the blank"
+            p.scale = s
+            p.at = (x + dx, y + dy)
             p.score = score
-            gain = match_colour_at(p, crgb, s1, (x1, y1), p.rgba[..., 3].astype(np.float64) / 255.0)
+            # No colour scaling: unlike the one-photo sheets, every piece here is its own
+            # rendering already toned for this face, and a mean-gain against the original's
+            # differently-lit hair (or against the hat the halo band grazes) clamps at the
+            # limits and paints the moustache copper. The composite-vs-original NCC below
+            # is the tone check.
             print(
-                f"  {pname}: scale {s1:.3f} at ({x1}, {y1}) in the crop -> "
-                f"{p.scale:.3f} at {p.at} on the base, ncc {score:.3f}{extra} "
-                f"gain {np.round(gain, 3)}"
+                f"  {pname}: scale {s:.3f} at ({x}, {y}) on the original -> {p.at} on the "
+                f"base, ncc {score:.3f}{extra}"
             )
 
 
@@ -919,6 +1040,19 @@ def generate(entry, preview):
     write_bmp32(os.path.join(TEX_DIR, f"portrait_{name}.bmp"), np.dstack([base, np.full(base.shape[:2], 255, np.uint8)]))
     write_bmp32(os.path.join(TEX_DIR, f"portrait_{name}_parts.bmp"), atlas)
     print(f"  base {bw}x{bh}, parts atlas {aw}x{ah}")
+    centre_eyes = ["eyes_center_l", "eyes_center_r"]
+    left_eyes = ["eyes_left_l", "eyes_left_r"]
+    if entry["kind"] == "chain":
+        # The end-to-end check: the composite of the centre eyes and the smile mouth against
+        # the original, which wears exactly those. Held to the bare base's own score (the
+        # figures are separate renderings, so neither reaches a duplicate's ~0.98): the
+        # pieces must not LOWER it.
+        comp = gray(np.array(composite(base, pieces, centre_eyes + list(variants["mouth_smile"]))))
+        inset = 40
+        for what, img in (("base alone", gray(base)), ("composite", comp)):
+            core = img[inset:-inset, inset:-inset]
+            n = masked_ncc(gray(ref), core, np.ones_like(core))
+            print(f"  {what} vs the original: ncc {n.max():.3f}")
     if preview:
         os.makedirs(preview, exist_ok=True)
         ell = [
@@ -926,8 +1060,6 @@ def generate(entry, preview):
              pieces[n].eye[2] * pieces[n].scale, pieces[n].eye[3] * pieces[n].scale)
             for n in EYE_PARTS[:2]
         ]
-        centre_eyes = ["eyes_center_l", "eyes_center_r"]
-        left_eyes = ["eyes_left_l", "eyes_left_r"]
         composite(base, pieces, centre_eyes + list(variants["mouth_smile"])).save(os.path.join(preview, f"{name}_center_smile.png"))
         composite(base, pieces, left_eyes + list(variants["mouth_sad"])).save(os.path.join(preview, f"{name}_left_sad.png"))
         composite(base, pieces, centre_eyes + list(variants["mouth_angry"]), ell).save(os.path.join(preview, f"{name}_center_angry_ellipses.png"))

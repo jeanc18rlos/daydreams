@@ -99,6 +99,18 @@ const WINDOW_SPOT: Vector3 = Vector3 { x: 987.0, y: 1.35, z: 2.07 - crate::ext::
 /// The wall's normal, into the hall.
 const WINDOW_FACING: Vector3 = Vector3 { x: 0.0, y: 0.0, z: -1.0 };
 
+/// Which sitter hangs on which of the hall's eight frames: an index into
+/// `portrait_atlas::PORTRAITS` (0 the Mona, 1 the Vermeer, 2 the Cavalier) per seed. Seeds
+/// 0..5 run west to east along the north wall -- Mona, Vermeer, Cavalier, Vermeer, Mona, the
+/// frame by the bare end wall staying the key's Mona ([`KEY_SEED`]) -- and 5..8 along the
+/// south: Cavalier, Mona, Cavalier. Each sitter hangs more than once, no two alike face one
+/// another across the hall, and the ends of each wall differ (the tests hold the shape).
+const HANGING: [usize; 8] = [0, 1, 2, 1, 0, 2, 0, 2];
+/// The seed whose painting wears the key: the last frame on the north wall, by the end wall.
+/// `HANGING` must keep a Mona there -- the anamorphic key was tuned for her bodice -- and the
+/// assert where it hangs holds it.
+const KEY_SEED: u32 = 4;
+
 impl Scene for Level16 {
     fn load(
         &self,
@@ -168,11 +180,11 @@ impl Scene for Level16 {
 
         // ── Portraits along the hall, watching (`ext/painting.rs`). Five on the north wall,
         // three on the south, each a hair off its wall face so nothing is coplanar with the
-        // scan, the Mona Lisa and the Girl with a Pearl Earring turn and turn about
-        // (`ext/portrait_atlas.rs`). The watch is taken now, after both doors exist, so a
-        // painting knows it is being looked at through the meadow door as well as from the
-        // carpet -- and only while the doors stand: once they have gone, so have their
-        // portals.
+        // scan; the Mona Lisa, the Girl with a Pearl Earring and the Laughing Cavalier hang
+        // where `HANGING` says (`ext/portrait_atlas.rs`). The watch is taken now, after both
+        // doors exist, so a painting knows it is being looked at through the meadow door as
+        // well as from the carpet -- and only while the doors stand: once they have gone, so
+        // have their portals.
         {
             use crate::ext::painting::{KeySpec, Painting, Watch};
             use crate::ext::portrait_atlas::PORTRAITS;
@@ -193,7 +205,6 @@ impl Scene for Level16 {
             /// bodice the gold reads -- and is seen from 2.6 m west of it along the wall and
             /// half a metre out -- a grazing look along the wall, at eye height: the spot,
             /// how near to it the eye must be, and how near to the canvas centre the look.
-            const KEY_SEED: u32 = 4;
             const KEY_SPEC: KeySpec = KeySpec {
                 view: Vector3 { x: 994.4, y: GH_PLAYER_HEIGHT, z: 1.55 },
                 radius: 0.45,
@@ -205,11 +216,11 @@ impl Scene for Level16 {
                 let centre = Vector3::new(x, HEIGHT, wall_z + facing_z * WALL_GAP);
                 let facing = Vector3::new(0.0, 0.0, facing_z);
                 let key = (seed == KEY_SEED).then_some(KEY_SPEC);
-                let portrait = &PORTRAITS[seed as usize % PORTRAITS.len()];
+                let portrait = &PORTRAITS[HANGING[seed as usize]];
                 // EXT: the anamorphic key's KEY_ON_PLANE spot was tuned for the Mona's dark
-                // bodice; a third portrait in the rotation would silently re-seat the key on
-                // whichever sitter lands on this seed. Pin it so the sheet that adds one
-                // fails here instead of shipping a key on the wrong painting.
+                // bodice; a change to the hanging would silently re-seat the key on whichever
+                // sitter lands on this seed. Pin it so the edit fails here instead of
+                // shipping a key on the wrong painting.
                 if key.is_some() {
                     assert_eq!(portrait.name, "mona", "KEY_SEED must land on the Mona");
                 }
@@ -442,6 +453,30 @@ mod tests {
         assert!(threshold.z > end.wall_z && threshold.z - end.wall_z < 0.05);
         assert_eq!(threshold.y, FLOOR_Y, "the cabin floor meets the carpet");
         assert!((ELEVATOR_FACING.mag() - 1.0).abs() < 1e-6 && ELEVATOR_FACING.z > 0.0);
+    }
+
+    /// The hanging: eight seeds, each a portrait the atlas has, all three sitters hung, the
+    /// key seed pinned to the Mona (the load's assert then cannot fire), and no sitter
+    /// facing their own likeness across the hall (a south frame "faces" the north frames
+    /// within a couple of metres of its x).
+    #[test]
+    fn the_hanging_covers_the_hall_and_pins_the_key_to_the_mona() {
+        use crate::ext::portrait_atlas::PORTRAITS;
+        assert!(HANGING.iter().all(|&i| i < PORTRAITS.len()));
+        for name in ["mona", "vermeer", "cavalier"] {
+            assert!(HANGING.iter().any(|&i| PORTRAITS[i].name == name), "{name} not hung");
+        }
+        assert_eq!(PORTRAITS[HANGING[KEY_SEED as usize]].name, "mona");
+        // The frames' x per seed, as load() hangs them: north seeds 0..5, south 5..8.
+        let north_x = [981.0f32, 985.0, 989.0, 993.0, 997.0];
+        let south_x = [983.0f32, 991.0, 999.0];
+        for (s, &sx) in south_x.iter().enumerate() {
+            for (n, &nx) in north_x.iter().enumerate() {
+                if (sx - nx).abs() < 2.5 {
+                    assert_ne!(HANGING[5 + s], HANGING[n], "seed {} faces seed {n}", 5 + s);
+                }
+            }
+        }
     }
 
     /// The carpet must be at world y = 0 where the door stands: the door's foot is at FAR.y

@@ -1121,6 +1121,18 @@ mod tests {
         let inside = |r: &[f32; 4]| {
             r[0] >= 0.0 && r[1] >= 0.0 && r[2] <= 1.0 && r[3] <= 1.0 && r[0] < r[2] && r[1] < r[3]
         };
+        // Every piece's rects carry a ring of transparent padding (the tool's PAD, 4 atlas
+        // texels, so a mip never pulls in a neighbour); the overlap check discounts it --
+        // two pads may cross, painted pixels may not. The pad's width in place UV follows
+        // from the atlas rect it maps to.
+        const ATLAS_PAD: f32 = 4.0; // tools/gen_portraits.py PAD
+        let core = |p: &crate::ext::portrait_atlas::Part, parts_size: (u32, u32)| {
+            let pu = (p.place[2] - p.place[0]) * ATLAS_PAD
+                / ((p.atlas[2] - p.atlas[0]) * parts_size.0 as f32);
+            let pv = (p.place[3] - p.place[1]) * ATLAS_PAD
+                / ((p.atlas[3] - p.atlas[1]) * parts_size.1 as f32);
+            [p.place[0] + pu, p.place[1] + pv, p.place[2] - pu, p.place[3] - pv]
+        };
         let overlap =
             |a: &[f32; 4], b: &[f32; 4]| a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
         for p in &PORTRAITS {
@@ -1164,7 +1176,7 @@ mod tests {
                     for a in variant.iter() {
                         for b in other.iter() {
                             assert!(
-                                !overlap(&a.place, &b.place),
+                                !overlap(&core(a, p.parts_size), &core(b, p.parts_size)),
                                 "{}: {} overlaps {}",
                                 p.name,
                                 PART_ORDER[i],
