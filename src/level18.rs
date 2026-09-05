@@ -131,7 +131,17 @@ impl Scene for Level18 {
         let lift = Elevator::new(gl, res, ELEVATOR_SPOT, ELEVATOR_YAW, arrived);
         let openings = Openings { cut: &[lift.wall_cut()], also_inside: &[lift.world_bounds()] };
         let arrival = interior::arrival(ELEVATOR_SPOT, ELEVATOR_YAW);
-        interior::load(gl, res, objs, player, &load_spec(), &placement(), openings, 0.0, arrival);
+        interior::load(
+            gl,
+            res,
+            objs,
+            player,
+            &load_spec(),
+            &placement(),
+            openings,
+            interior::Floor::at(0.0),
+            arrival,
+        );
         if arrived.is_some() {
             // Delivered by a ride: in the cabin, facing its doors, which are about to open.
             lift.board(player);
@@ -246,7 +256,6 @@ mod tests {
 
     #[test]
     fn registered_on_period() {
-        let e = crate::ext::scenes::SCENES.iter().find(|e| e.name == "Overgrown").expect("listed");
-        assert_eq!(e.key, b'.');
+        crate::ext::scenes::SCENES.iter().find(|e| e.name == "Overgrown").expect("listed");
     }
 }

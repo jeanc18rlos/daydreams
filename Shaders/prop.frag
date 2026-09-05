@@ -30,13 +30,48 @@ in vec2 ex_uv;
 in vec3 ex_normal;
 in vec3 ex_world;
 
+// EXT: the flashlight's cone (src/ext/view.rs publishes these; ext/tool.rs aims it).
+// GLSL 150 has no #include, so this block is duplicated by hand across the lit shaders the
+// way LIGHT and EVE_SUN already are -- src/ext/view.rs owns a test that reads these files
+// and fails if the copies drift.
+uniform vec4 spot_pos;   // xyz world origin, w = range in metres (0 = off, and GL's default)
+uniform vec4 spot_dir;   // xyz unit direction, w = cos(outer angle)
+uniform vec4 spot_col;   // rgb radiance, w = cos(inner angle)
+
+uniform vec4 shine;      // rgb = colour, a = strength; zero = ordinary scenery
+
+// EXT: what an interactive object does when the beam finds it. The rim term is why it reads
+// as "that one is a THING" rather than "that one is brighter": a silhouette lights before a
+// face does, which is how an eye picks an object out of a cluttered room.
+vec3 shine_answer(vec3 P, vec3 N, vec3 V, vec3 lit) {
+	if (shine.a <= 0.0) return vec3(0.0);
+	float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0);
+	return shine.rgb * shine.a * lit * (0.35 + 1.30 * rim);
+}
+
+vec3 spot_light(vec3 P, vec3 N) {
+	if (spot_pos.w <= 0.0) return vec3(0.0);
+	vec3 d = spot_pos.xyz - P;
+	float r = length(d);
+	if (r >= spot_pos.w) return vec3(0.0);
+	vec3 L = d / max(r, 1e-4);
+	// The cone: full inside the core angle, faded to nothing by the outer one.
+	float cone = smoothstep(spot_dir.w, spot_col.w, dot(-L, spot_dir.xyz));
+	if (cone <= 0.0) return vec3(0.0);
+	// Same falloff curve the door's light pool uses, so the two read as one lighting model.
+	float atten = pow(max(1.0 - r / spot_pos.w, 0.0), 2.2);
+	// Wrapped lambert: a torch beam grazing a wall should not have a hard terminator.
+	float ndl = max(dot(N, L), 0.0) * 0.8 + 0.2;
+	return spot_col.rgb * cone * atten * ndl;
+}
+
 out vec4 fragColor;
 
 void main(void) {
 	vec3 base = texture(tex, ex_uv).rgb;
 	vec3 n = normalize(ex_normal);
 	vec3 col;
-	if (mood > 1.5) {
+	if (mood > 1.5 && mood < 2.5) {   // interior; 3 is dusk and must not land here
 		vec3 hemi = mix(HEMI_DOWN, HEMI_UP, n.y * 0.5 + 0.5) + AMBIENT;
 		col = base * hemi;
 		// A soft highlight from overhead, as gltfpbr.frag gives a dielectric of middling
@@ -52,5 +87,9 @@ void main(void) {
 		float s = dot(n, LIGHT) * 0.5 + 0.5;
 		col = base * s;
 	}
+	// The torch, on both branches: a prop the beam finds should light up wherever it stands.
+	vec3 sp = spot_light(ex_world, n);
+	col += col * sp * 1.35 + sp * 0.055;
+	col += shine_answer(ex_world, n, normalize(cam_pos.xyz - ex_world), sp);
 	fragColor = vec4(col, 1.0);
 }

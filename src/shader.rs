@@ -240,6 +240,13 @@ impl Shader {
         }
     }
 
+    /// EXT: set a `vec2` uniform on the currently bound program.
+    pub fn set_vec2(&self, name: &str, v: [f32; 2]) {
+        if let Some(loc) = self.uniform(name) {
+            unsafe { self.gl.uniform_2_f32(Some(&loc), v[0], v[1]) }
+        }
+    }
+
     /// EXT: set an `int` uniform (sampler unit) on the currently bound program.
     pub fn set_i32(&self, name: &str, v: i32) {
         if let Some(loc) = self.uniform(name) {

@@ -287,7 +287,13 @@ impl ObjectT for Key {
             return;
         }
         self.base.update();
+        // Every way of not asking for the press has to say so, not just fall out of the
+        // function: the answer stands until it is changed, and a key that has just been used
+        // was asking on the step before. Left standing, it took every E in the session from
+        // the grab and handed it to a key that had already removed itself -- nothing could be
+        // picked up again after the window was unlocked.
         if !self.held || self.used {
+            offer_use(false);
             return;
         }
         // A press handed over is this frame's, whether or not the lock is still in reach: it
@@ -307,6 +313,13 @@ impl ObjectT for Key {
         hint::insist(USE_HINT);
         if pressed {
             self.used = true;
+            // And the offer goes with the use, here rather than on the next step, because
+            // there is no next step: the key asks for its own removal three lines down and
+            // never updates again. Left standing, the "a lock is in reach" answer outlived the
+            // key -- the engine went on handing every E to an object that was no longer in the
+            // scene, and nothing could be picked up for the rest of the run.
+            self.lock_near = false;
+            offer_use(false);
             // EXT: the lock turning over -- fired here, on the press, rather than off the
             // window's unlock a step later, because this is the frame the player acted on.
             audio::request(Sfx::KeyUse);
@@ -447,6 +460,72 @@ mod tests {
         let held = scene[2].borrow_mut();
         assert_eq!(lock_under_crosshair(&scene, &cam), Some(0));
         drop(held);
+    }
+
+    /// A key with nothing around it, for the tests that only drive its flags.
+    fn bare_key(held: bool, used: bool) -> Key {
+        Key {
+            base: Physical::new(),
+            me: Weak::new(),
+            taken: Rc::new(Cell::new(true)),
+            floating: false,
+            held,
+            used,
+            lock_near: false,
+            scanned_at: f32::NAN,
+        }
+    }
+
+    /// Using the key must take its claim on the press with it. It asked on the step before the
+    /// press, and if that answer outlived the use, the engine went on handing every E to a key
+    /// that had removed itself and nothing could be picked up for the rest of the run.
+    #[test]
+    fn a_used_key_stops_asking_for_the_press() {
+        let input = crate::input::Input::new();
+        let ctx = UpdateCtx {
+            input: &input,
+            cam_to_world: Matrix4::identity(),
+            player_pos: Vector3::zero(),
+            player_p_scale: 1.0,
+            scene: &[],
+        };
+
+        let mut used = bare_key(true, true);
+        offer_use(true); // as its last step with a lock in reach left it
+        used.update(&ctx);
+        assert!(!wants_use(), "a used key still wants the press");
+
+        let mut dropped = bare_key(false, false);
+        offer_use(true);
+        dropped.update(&ctx);
+        assert!(!wants_use(), "a key out of the hand still wants the press");
+    }
+
+    /// The step that uses the key is the one that has to withdraw the offer, because it is the
+    /// key's last: it asks for its own removal in the same breath, and the test above -- which
+    /// updates a used key once more -- is a step the real thing never gets.
+    #[test]
+    fn the_step_that_uses_the_key_withdraws_the_offer_itself() {
+        let input = crate::input::Input::new();
+        let ctx = UpdateCtx {
+            input: &input,
+            cam_to_world: Matrix4::identity(),
+            player_pos: Vector3::zero(),
+            player_p_scale: 1.0,
+            scene: &[],
+        };
+
+        let mut key = bare_key(true, false);
+        // As the step before the press left it: a lock in reach, scanned this frame, so the
+        // update below uses that answer rather than rescanning an empty scene.
+        key.lock_near = true;
+        key.scanned_at = crate::ext::view::time();
+        offer_use(true);
+        press();
+
+        key.update(&ctx);
+        assert!(key.used, "the press was not taken");
+        assert!(!wants_use(), "the key used itself and kept asking for the next E");
     }
 
     /// The press channel: the key's answer stands until the key itself changes it -- reading

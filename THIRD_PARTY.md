@@ -1,14 +1,14 @@
 # Third-party material
 
-Everything DayDreams ships that was not written for it, with its source and licence as
+Everything Hide 'N Dream ships that was not written for it, with its source and licence as
 recorded in this repository. Where nothing is recorded, this file says so rather than guessing;
 those entries are marked **ACTION REQUIRED** and are collected at the end.
 
 The project's own code is MIT (`Cargo.toml`; the text is the root [`LICENSE`](LICENSE)).
-**The copyright holder named there, "DayDreams contributors", is a placeholder** until the
+**The copyright holder named there, "Hide 'N Dream contributors", is a placeholder** until the
 project decides who holds it -- a person, a company or that phrase on purpose. The in-game
-Credits screen (`src/ext/menu.rs`, `CREDITS_TEXT`) names the engine, Escher Relativity,
-Backrooms VR, the elevator and the two Blenderust rooms.
+Credits screen (`src/ext/menu.rs`, the scrolling `ROLL`) names the engine and every credited
+model author; the test `every_cc_by_author_is_credited` holds it to that.
 
 ## Engine: HackerPoet/NonEuclidean
 
@@ -47,14 +47,25 @@ Required credit, as the licence file gives it: *This work is based on "Escher Re
 Benoit Gagnier (<https://sketchfab.com/BenoitGagnier>) licensed under CC-BY-4.0
 (<http://creativecommons.org/licenses/by/4.0/>).*
 
-## Roboto Condensed — `assets/fonts/RobotoCondensed[wght].ttf`
+## Playpen Sans — `assets/fonts/PlaypenSans[wght].ttf`
 
 | | |
 |---|---|
-| Source | The Roboto Project, <https://github.com/googlefonts/roboto-classic> |
-| Author | © 2011 The Roboto Project Authors |
-| Licence | SIL Open Font License 1.1 — [`assets/fonts/RobotoCondensed.LICENSE.txt`](assets/fonts/RobotoCondensed.LICENSE.txt), which ships beside the font. |
-| Notes | `tools/gen_ui.py` rasterises it into `Textures/ui_font.bmp`; that atlas is a derived work of the font and ships under the same licence. The OFL permits bundling with software and forbids selling the font on its own. |
+| What | The interface face: every heading, row, value, hint and credit the menus set. |
+| Source | The Playpen Sans Project, <https://github.com/TypeTogether/Playpen-Sans> |
+| Author | © 2023 The Playpen Sans Project Authors (TypeTogether — Laura Meseguer, Veronika Burian, José Scaglione, Kostas Bartsokas, Vera Evstafieva, Tom Grace, Yorlmar Campos) |
+| Licence | SIL Open Font License 1.1 — [`assets/fonts/PlaypenSans.LICENSE.txt`](assets/fonts/PlaypenSans.LICENSE.txt), which ships beside the font. |
+| Notes | `tools/gen_ui.py` pins the Bold instance of its 100..800 weight axis and rasterises it into `Textures/ui_font.bmp`; that atlas is a derived work of the font and ships under the same licence. The OFL permits bundling with software and forbids selling the font on its own. |
+
+## Henny Penny — `assets/fonts/HennyPenny-Regular.ttf`
+
+| | |
+|---|---|
+| What | The title face: the game's name on the title screen, and nothing else in the game. |
+| Source | Brownfox, <https://fonts.google.com/specimen/Henny+Penny> |
+| Author | © 2012 Brownfox — drawn by Olga Umpeleva |
+| Licence | SIL Open Font License 1.1 — [`assets/fonts/HennyPenny.LICENSE.txt`](assets/fonts/HennyPenny.LICENSE.txt), which ships beside the font. |
+| Notes | `tools/gen_ui.py` rasterises the eleven characters of the game's name into `Textures/ui_title.bmp`; that atlas is a derived work of the font and ships under the same licence. "Henny Penny" is a Reserved Font Name under the OFL and a Brownfox trademark: the font is shipped unmodified and under its own filename, so neither is engaged, and any *modified* copy would have to be renamed. |
 
 ## The portraits — `assets/paintings/src/*.png` → `Textures/portrait_*.bmp`
 
@@ -130,18 +141,106 @@ by Blenderust (<https://sketchfab.com/narighillya>) licensed under CC-BY-4.0
 
 **ACTION REQUIRED:** verify on Sketchfab, as for Backrooms VR above.
 
-## Classic Interior Door — `Meshes/Classic_Interior_Door.glb`
+## Abandoned House — `Meshes/abandoned_house.glb`
 
 | | |
 |---|---|
-| Source | Sketchfab, per [`Meshes/intro_door.ATTRIBUTION.txt`](Meshes/intro_door.ATTRIBUTION.txt); the model's page URL is not recorded. |
-| Author | Not recorded. |
-| Licence | **UNCONFIRMED.** The GLB's metadata (`generator: OpenSceneGraph 3.5.6`) carries no licence block. |
-| Notes | Supplied by the project owner. Its embedded textures were resized from 4096 to 512 square by `tools/shrink_glb.py`; geometry and materials are the file as supplied. |
+| Source | <https://sketchfab.com/3d-models/abandoned-house-a876537d2ef24ac1b3108a7fd6ae3b4c> |
+| Author | Elbolillo (<https://sketchfab.com/Elbolilloduro>) |
+| Licence | CC-BY-4.0 — [`Meshes/abandoned_house.LICENSE.txt`](Meshes/abandoned_house.LICENSE.txt), which ships beside the mesh. |
+| Where recorded | The licence file is a transcription of the GLB's `asset.extras` block (Sketchfab exporter `Sketchfab-16.12.0`). Shipped as downloaded: 70k triangles, 74 JPEG/PNG maps, 77 PBR materials. Credited on the in-game Credits screen. |
 
-**ACTION REQUIRED:** find the model's Sketchfab page, record the author and licence in
-`Meshes/intro_door.ATTRIBUTION.txt`, and credit it. If the licence turns out to be CC-BY-NC
-or a Sketchfab Standard licence, the model cannot ship in a commercial build.
+Required credit: *This work is based on "Abandoned_House"
+(<https://sketchfab.com/3d-models/abandoned-house-a876537d2ef24ac1b3108a7fd6ae3b4c>)
+by Elbolillo (<https://sketchfab.com/Elbolilloduro>) licensed under CC-BY-4.0
+(<http://creativecommons.org/licenses/by/4.0/>).*
+
+**ACTION REQUIRED:** verify on Sketchfab, as for Backrooms VR above.
+
+## Exploration objects — `Meshes/exploration_tools.glb`
+
+| | |
+|---|---|
+| Source | <https://sketchfab.com/models/fa99705c1afa4e7da5186938709f0231>, and the page the licence is quoted from, <https://elbolilloduro.itch.io/exploration-objects> |
+| Author | Elbolillo (<https://sketchfab.com/Elbolilloduro>) |
+| Licence | CC0 1.0 (<https://creativecommons.org/publicdomain/zero/1.0/>) — a public domain dedication, the one asset here under it: no attribution is required for any use, commercial included. [`Meshes/exploration_tools.LICENSE.txt`](Meshes/exploration_tools.LICENSE.txt) ships beside the mesh. |
+| Where recorded | The pack's itch.io page states it verbatim — "The models in this package are under the CC0 license, you can find more information about the license here" — read there at import (2026-08). Nothing to transcribe: the GLB is built here from the pack's FBX by `tools/build_props.py`, so it carries no Sketchfab `asset.extras` block; the licence file is the record, and no page check remains owed. |
+| Notes | **Not shipped as downloaded.** `tools/build_props.py` (headless Blender) converts the pack's FBX into this GLB: the one unnamed mesh (`Cone.001`, the spirit box) is renamed `Spirit_Box`, every material is set metallic 0 / roughness 1 (PSX diffuse textures — glTF's default metallic 1 would render them as dark metal), and four materials get the pack's `*_Emissor.png` wired as the glTF emissive texture (the EMF detector ships five display states; the mid `_Emissor_02` is the one wired — a fixed mid reading for a prop that cannot swap maps at runtime). Geometry, UVs and the pack's own layout are otherwise as authored. Reproduce with `/Applications/Blender.app/Contents/MacOS/Blender --background --python tools/build_props.py`. |
+| What is used | All 8 handheld tools — EMF_Detector, Flashlight, Flashlight_Poquet, Photo_Camera, Spirit_Box, Thermal_Camera, Thermometer, Voice_Recorder — as takeable, usable items in the scene derived from Liminal Neighborhood. |
+
+No credit is required — CC0 waives it. One is given anyway: the in-game Credits screen carries
+**EXPLORATION TOOLS - ELBOLILLO** as a courtesy, placed below the note that says the model lines
+above it are CC-BY-4.0, so that note stays true.
+
+## Objects Interior(Village) Alpha — `Meshes/village_objects.glb`
+
+| | |
+|---|---|
+| Source | <https://sketchfab.com/3d-models/objects-interiorvillage-alpha-c640f60b970a48648a158c91c1c45b2b> (also on itch.io, <https://elbolilloduro.itch.io/objects-interiorvillage-alpha>, and Fab). Published 2023-01-30. |
+| Author | Elbolillo (<https://sketchfab.com/Elbolilloduro>) |
+| Licence | CC-BY-4.0 — [`Meshes/village_objects.LICENSE.txt`](Meshes/village_objects.LICENSE.txt), which ships beside the mesh. |
+| Where recorded | The licence was read on the Sketchfab page at import (2026-08), where it shows as "CC Attribution" — not transcribed from embedded metadata: the GLB is built here from the pack's FBX files by `tools/build_props.py` and carries no `asset.extras` block. The licence file is the record, and the page check the meshes above still owe has already been done for this one. Credited on the in-game Credits screen. |
+| Notes | **Not shipped as downloaded.** `tools/build_props.py` (headless Blender) converts the pack's FBX into this GLB: four empty stub meshes (0 vertices) are dropped, the fridge shelf that shipped named bare `House_Demo` is renamed `Fridge_Shelf` (so `House_Demo_*` stays an unambiguous shell prefix), every material is set metallic 0 / roughness 1, base-colour textures are re-wired by material name (the FBX references them at authoring-machine paths), eleven lamp and clock materials get their `*_Emissor` maps wired as emissive, and ONE mesh is added — `Lot_Ground`, a 38.6 x 26.7 m grass quad whose texture is pulled byte-for-byte out of `Meshes/abandoned_house.glb` (same author, CC-BY-4.0, covered by that file's own licence record) to patch the lot the game carves out of that stage. Geometry, UVs and the pack's own layout positions are otherwise as authored. Reproduce with the same command as above. |
+| What is used | The complete PSX demo house (`House_Demo_*` shell, roof, windows, door) and some 150 furniture, food and clutter objects: the scene derived from Liminal Neighborhood carves the stage's baked house out and builds seeded procedural houses from this pack. |
+
+Required credit: *This work is based on "Objects Interior(Village) Alpha"
+(<https://sketchfab.com/3d-models/objects-interiorvillage-alpha-c640f60b970a48648a158c91c1c45b2b>)
+by Elbolillo (<https://sketchfab.com/Elbolilloduro>) licensed under CC-BY-4.0
+(<http://creativecommons.org/licenses/by/4.0/>).*
+
+## Moon — `Meshes/moon.glb`
+
+| | |
+|---|---|
+| Source | <https://sketchfab.com/3d-models/moon-2b2374581162435a95753b9053ffefe4> |
+| Author | luckass333 (<https://sketchfab.com/luckass333>) |
+| Licence | CC-BY-4.0 — [`Meshes/moon.LICENSE.txt`](Meshes/moon.LICENSE.txt), which ships beside the mesh. |
+| Where recorded | The licence file is a transcription of the GLB's `asset.extras` block (Sketchfab exporter `Sketchfab-16.61.0`). Shipped as downloaded: 960 triangles, one 1024x512 PNG, one PBR material. Credited on the in-game Credits screen. |
+
+Required credit: *This work is based on "Moon"
+(<https://sketchfab.com/3d-models/moon-2b2374581162435a95753b9053ffefe4>)
+by luckass333 (<https://sketchfab.com/luckass333>) licensed under CC-BY-4.0
+(<http://creativecommons.org/licenses/by/4.0/>).*
+
+**ACTION REQUIRED:** verify on Sketchfab, as for Backrooms VR above.
+
+## Low-Poly PSX Style Essential Doors Pack — `Meshes/psx_essential_doors_pack.glb`
+
+| | |
+|---|---|
+| Source | <https://sketchfab.com/3d-models/low-poly-psx-style-essential-doors-pack-20d55059056044b885a5267c2de1ec18> (short link <https://skfb.ly/pFOP7>) |
+| Author | Icevanilla — `vanillao03` (<https://sketchfab.com/vanillao03>) |
+| Licence | CC-BY-4.0 — [`Meshes/psx_essential_doors_pack.LICENSE.txt`](Meshes/psx_essential_doors_pack.LICENSE.txt), which ships beside the mesh. |
+| Where recorded | The source and credit line are the ones the project owner supplied at import; the GLB's own `asset.extras` block (Sketchfab exporter `Sketchfab-16.99.0`) carries the same source and licence and gives the author as `vanillao03`. "Icevanilla" is the display name on the model's page. Credited on the in-game Credits screen. |
+| Notes | **Not shipped as downloaded.** `tools/turn_white_door.py` bakes a half-turn about Y onto the two nodes the game uses, and nothing else: every door in the pack is modelled with its knob at the low-x end, so its hinge is the high-x edge, and `Anchor::Hinge` (`src/ext/gltf_model.rs`) hangs a leaf by its low-x edge — imported as it comes, the door would swing about its own doorknob. A rotation rather than a mirror, so winding, normals and tangents survive; free to look at because the door is symmetric front to back. Geometry, materials, UVs and the shared 1024x256 colour map are untouched. Re-run the tool on a fresh download to reproduce the file. |
+| What is used | One of the seven pairs: the white `Bathroom Door_002.001` with its knob (`Circle.002`) and `Bathroom Doorframe_001.001`, as the intro meadow's door and the Backrooms' (`src/ext/door.rs`). The other six ship unused — the colour map is shared by all of them, so cutting them would save kilobytes of geometry and no texture. |
+
+Required credit, as the licence gives it: *"Low-Poly PSX Style Essential Doors Pack"
+(<https://skfb.ly/pFOP7>) by Icevanilla is licensed under Creative Commons Attribution
+(<http://creativecommons.org/licenses/by/4.0/>).*
+
+**ACTION REQUIRED:** verify on Sketchfab, as for Backrooms VR above.
+
+## Mannequin and its animation — `Meshes/mannequin.glb`
+
+| | |
+|---|---|
+| What | The game's one rigged character and everything it can do: Mixamo's own stock character "Mannequin" (internal id `Ch36_nonPBR`, 65-bone `mixamorig1:` skeleton, 1.77 m, four maps), and 31 animation clips Mixamo had already fitted to it. |
+| Source | Adobe Mixamo, <https://www.mixamo.com>. Downloaded by the project owner while signed in to their own Adobe account — the character once, and each clip as an animation-only ("Without Skin") FBX with the Mannequin selected. |
+| Author | Adobe Inc. (Mixamo). Stock content, not a community upload: there is no Sketchfab page behind this file and no third-party author to credit. |
+| Licence | **Not Creative Commons — the one asset here that is not.** Adobe Mixamo content, used under the owner's Mixamo/Adobe account. What is known is that Mixamo provides its characters and animation clips to account holders for use in their projects. What is *not* recorded is whether redistribution inside a shipped game is permitted, whether crediting Adobe is required, allowed or forbidden, and what changes if the game is sold. [`Meshes/mannequin.LICENSE.txt`](Meshes/mannequin.LICENSE.txt) ships beside the mesh and says exactly that, without quoting terms nobody has read. |
+| Where recorded | Nothing to transcribe: this file is built here rather than downloaded whole, so its `asset` block carries only the exporter (`Khronos glTF Blender I/O v5.0.21`) and the character's Mixamo id survives only in the texture names (`Ch36_1001_*`). The licence file is the record, from what the owner supplied at import. Credited on the in-game Credits screen as **MANNEQUIN AND ANIMATION - ADOBE MIXAMO**, placed after the line that says the models above it are CC-BY so that line stays true. |
+| Notes | **Not shipped as downloaded.** `tools/build_mannequin.py` (headless Blender) merges the character FBX and the 31 animation-only FBXs into one GLB — one mesh, one skeleton, 31 clips named after their files — and downscales the four 4096px maps to 1024px, which is the only change to any pixel and most of why the file is 14.6 MB rather than far more. Geometry, UVs, materials and keyframes are otherwise untouched, and nothing is retargeted: every clip was fitted by Mixamo to this same character, so merging is a direct action copy with no rigging step. Reproduce with `/Applications/Blender.app/Contents/MacOS/Blender --background --python tools/build_mannequin.py`. |
+| What is used | One clip of the 31: `walking`, in the Mannequin Test scene (`src/level32.rs`), through the CPU skinner (`src/ext/skinned.rs`). The other 30 ship unused — they are keyframes on a skeleton the file already carries, and cost little beside the four maps. |
+
+No required credit is recorded, because no licence text was read at import. The Credits line above
+is offered rather than owed: it costs nothing if attribution turns out to be optional, and covers
+the case where it is not.
+
+**ACTION REQUIRED:** verify the current Mixamo/Adobe terms before distributing. This is a wider
+question than the Sketchfab checks above — there the licence is known and only the page needs
+confirming; here the terms themselves have never been read against this use, and the asset is
+14.6 MB of Adobe content in a shipped build.
 
 ## Audio — `assets/sfx/*.flac`, `assets/music/*.flac`
 
@@ -202,7 +301,7 @@ Made for this project by its tools; no third-party content, nothing to credit.
 | `Meshes/bounds.obj`, `gallery_bounds.obj`, `intro_door_collide.obj`, `room.obj` | Hand-written collision and room geometry |
 | `Textures/grass_noise.bmp` | `tools/gen_meadow.py` |
 | `Textures/cube_sticker.bmp` | `tools/bake_cube.py` |
-| `Textures/ui_font.bmp`, `Textures/ui_cursors.bmp` | `tools/gen_ui.py` (derived from the font and cursor art above) |
+| `Textures/ui_font.bmp`, `Textures/ui_title.bmp`, `Textures/ui_cursors.bmp` | `tools/gen_ui.py` (derived from the two faces and the cursor art above) |
 | `Textures/portrait_mona.bmp`, `portrait_mona_parts.bmp`, `portrait_vermeer.bmp`, `portrait_vermeer_parts.bmp`, `portrait_cavalier.bmp`, `portrait_cavalier_parts.bmp` | `tools/gen_portraits.py` (derived from the portrait sheets — see "The portraits" above) |
 | `assets/sfx/*.flac` (42 effects), `assets/music/*.flac` (5 ambience loops) | `tools/gen_sfx.py` — synthesised from nothing, see above |
 | `Shaders/*` other than the five listed under the engine | Written for this project |
@@ -247,18 +346,28 @@ cargo tree --format "{p} {l}" --prefix none | sort -u
 
 ## ACTION REQUIRED — summary
 
-1. **`Meshes/Classic_Interior_Door.glb`** — licence unconfirmed, author unrecorded. Find the
-   Sketchfab page; record both in `Meshes/intro_door.ATTRIBUTION.txt`; credit or remove.
-2. **`Meshes/backrooms_vr.glb`**, **`Meshes/elevator_with_animation_lowpoly.glb`**,
+1. **`Meshes/backrooms_vr.glb`**, **`Meshes/elevator_with_animation_lowpoly.glb`**,
    **`Meshes/backrooms_room_with_plants_overgrown.glb`**,
-   **`Meshes/level_37_flooded_tiled_complex.glb`** — CC-BY-4.0 per each file's own
-   metadata (carlcapu9, EFX, Blenderust, Blenderust). The licence files and the credit
-   lines are in place; the Sketchfab check of each page is what remains.
+   **`Meshes/level_37_flooded_tiled_complex.glb`**, **`Meshes/abandoned_house.glb`**,
+   **`Meshes/moon.glb`**, **`Meshes/psx_essential_doors_pack.glb`** — CC-BY-4.0 per each
+   file's own metadata (carlcapu9, EFX, Blenderust, Blenderust, Elbolillo, luckass333,
+   Icevanilla). The licence files and the credit lines are in place; the Sketchfab check of
+   each page is what remains. The two Elbolillo object packs `tools/build_props.py` converts
+   (`exploration_tools.glb`, CC0; `village_objects.glb`, CC-BY-4.0) are not in this list:
+   their pages were read at import, so no check remains for them. Elbolillo's five character
+   packs (Characters_psx, Characters_Extras, Character Ghost/Pumpkin/Witch) are being rigged
+   externally via Mixamo and are not currently shipped; record their licences again at
+   re-import — hard rule.
+2. **`Meshes/mannequin.glb`** — Adobe Mixamo's stock Mannequin and 31 Mixamo clips, from the
+   owner's own Adobe account. Not CC-BY, not covered by any licence text in this repository:
+   what Mixamo's terms permit for a game that is distributed, or sold, has never been read
+   against this use. Verify the current Mixamo/Adobe terms before distributing, and record the
+   answer in `Meshes/mannequin.LICENSE.txt`, which currently says only what is known.
 3. **`Shaders/grassblade.frag`** — ideas credited to a CC BY-NC-SA 3.0 Shadertoy. Needs a
    legal read for a commercial build, or the three borrowed constants re-derived.
 4. **`assets/ui/cursors_src.png`** and **`Textures/cube_projection.bmp`** — provenance not
    recorded. Confirm original (and drop the unreferenced texture, or say what it is).
-5. **`LICENSE`** — the copyright holder reads "DayDreams contributors", a placeholder.
+5. **`LICENSE`** — the copyright holder reads "Hide 'N Dream contributors", a placeholder.
    Confirm the name (and the year) before a build leaves this machine.
 6. **`assets/music/ost.mp3`** — a *Demon's Souls* track, kept **on purpose** as a demo
    placeholder and not distributable. Delete the file (the generated `ambient.flac` takes over

@@ -49,6 +49,9 @@ mod level15;
 mod level16;
 mod level17;
 mod level18;
+mod level30;
+mod level31;
+mod level32;
 mod level7;
 mod level8;
 mod level9;
@@ -222,6 +225,12 @@ struct App {
     cursor_locked: bool,
     // PORT: replaces reading VK_MENU state for the WM_SYSKEYDOWN path (Engine.cpp:305-310).
     modifiers: ModifiersState,
+    // EXT: whether `S` is down as part of the developer save chord (Cmd/Ctrl + S + C,
+    // src/ext/debug.rs). Tracked here rather than read out of `Input::key` because while
+    // the chord's modifier is held the movement keys are swallowed and never reach it --
+    // which is the point: `S` is walk-backwards, and arming the chord must not walk the
+    // camera out of the shot being framed.
+    chord_s: bool,
 
     // PORT: `LONG iWidth / iHeight` (Engine.h:44-45), which WM_SIZE keeps up to date
     // (Engine.cpp:289-293). These are PHYSICAL pixels: glutin's macOS surface sets
@@ -256,6 +265,7 @@ impl App {
             is_fullscreen: start_fullscreen(&args),
             cursor_locked: false,
             modifiers: ModifiersState::empty(),
+            chord_s: false,
             i_width: GH_SCREEN_WIDTH as i32,
             i_height: GH_SCREEN_HEIGHT as i32,
             // EXT:
@@ -270,6 +280,16 @@ impl App {
     // winit's borderless fullscreen; the windowed branch restores the original size and
     // position. iWidth/iHeight are NOT written here -- winit reports the new size through
     // WindowEvent::Resized, which is also where the GL surface gets resized.
+    /// EXT: the modifier the developer save chord uses -- Command on macOS, Control
+    /// elsewhere, matching what each platform's screenshot keys already use.
+    fn debug_modifier(&self) -> bool {
+        if cfg!(target_os = "macos") {
+            self.modifiers.super_key()
+        } else {
+            self.modifiers.control_key()
+        }
+    }
+
     fn toggle_fullscreen(&mut self) {
         self.is_fullscreen = !self.is_fullscreen;
         let Some(state) = self.state.as_ref() else {
@@ -388,6 +408,18 @@ impl ApplicationHandler for App {
             ext::window::set_preset(self.args.window_preset());
             let engine = Engine::new(self.gl.as_ref().unwrap());
             engine.start_run();
+            // EXT: dev flag -- open with the developer overlay showing (src/ext/debug.rs).
+            if self.args.debug {
+                engine.set_debug(true);
+            }
+            // EXT: dev flag -- open on the boom rather than in the eye (src/ext/thirdperson.rs).
+            if self.args.third_person {
+                ext::thirdperson::set_enabled(true);
+            }
+            // EXT: dev flag -- a torch nobody is holding (src/ext/view.rs).
+            if self.args.torch {
+                ext::view::set_force_torch(true);
+            }
             // EXT: dev flags -- direct scene start and/or screenshot-and-quit.
             if let Some(run) = self.args.direct_run() {
                 engine.start_direct(run);
@@ -457,7 +489,28 @@ impl ApplicationHandler for App {
                 }
             }
 
-            WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
+            WindowEvent::ModifiersChanged(modifiers) => {
+                let was_debug = self.debug_modifier();
+                self.modifiers = modifiers.state();
+                // EXT: the instant the save chord's modifier goes down, let go of whatever
+                // movement keys are held. Pressing Cmd while already walking would otherwise
+                // keep walking for as long as it takes to reach for `S` and `C`, and the frame
+                // that gets saved is not the one that was being framed.
+                if !was_debug && self.debug_modifier() {
+                    if let Some(engine) = self.engine.as_ref() {
+                        engine.with_input(|inp| {
+                            for k in [b'W', b'A', b'S', b'D', b' '] {
+                                inp.key[k as usize] = false;
+                            }
+                        });
+                    }
+                }
+                // And releasing it disarms the chord: `S` goes back to being a movement key,
+                // so a later `C` on its own can never fire a save.
+                if !self.debug_modifier() {
+                    self.chord_s = false;
+                }
+            }
 
             // case WM_KEYDOWN / WM_SYSKEYDOWN / WM_KEYUP:   (Engine.cpp:295-314)
             WindowEvent::KeyboardInput { event, .. } => {
@@ -487,6 +540,39 @@ impl ApplicationHandler for App {
                             }
                             return;
                         }
+                        // EXT: F3 toggles the developer overlay (src/ext/debug.rs). Handled
+                        // here rather than through `key_index` because the function row is not
+                        // in the ported 256-slot key map, and putting it there would give the
+                        // scenes a key they never asked for.
+                        if code == KeyCode::F3 {
+                            if let Some(engine) = self.engine.as_ref() {
+                                engine.toggle_debug();
+                            }
+                            return;
+                        }
+                        // EXT: the save chord -- Cmd+S+C on macOS, Ctrl+S+C elsewhere. Read off
+                        // the raw key events instead of through `Input`, and every movement key
+                        // swallowed while the modifier is down, so arming it cannot move the
+                        // player. `S` only arms; `C` fires; the frame is written after the next
+                        // render (`Engine::request_debug_shot`).
+                        if self.debug_modifier() {
+                            match code {
+                                KeyCode::KeyS => {
+                                    self.chord_s = true;
+                                    return;
+                                }
+                                KeyCode::KeyC if self.chord_s => {
+                                    if let Some(engine) = self.engine.as_ref() {
+                                        engine.request_debug_shot();
+                                    }
+                                    return;
+                                }
+                                KeyCode::KeyW | KeyCode::KeyA | KeyCode::KeyD | KeyCode::Space => {
+                                    return
+                                }
+                                _ => {}
+                            }
+                        }
                         // case WM_SYSKEYDOWN: if (wParam == VK_RETURN) { ToggleFullscreen(); }
                         // (Engine.cpp:305-310) -- WM_SYSKEYDOWN means alt is held.
                         if (code == KeyCode::Enter || code == KeyCode::NumpadEnter)
@@ -502,6 +588,11 @@ impl ApplicationHandler for App {
                         }
                     }
                     ElementState::Released => {
+                        // EXT: `S` coming up disarms the save chord, whether it was armed as
+                        // part of one or was just a step backwards.
+                        if code == KeyCode::KeyS {
+                            self.chord_s = false;
+                        }
                         if let (Some(ix), Some(engine)) = (key_index(code), self.engine.as_ref()) {
                             engine.input().borrow_mut().key[ix] = false;
                         }
@@ -585,20 +676,14 @@ impl ApplicationHandler for App {
                     engine.with_input(|input| pads.poll(input))
                 };
                 // EXT: gameplay-only pad effects are gated on the menu being closed. South is
-                // bound to both the jump and `menu_confirm`, and the D-pad to both scene
-                // cycling and menu navigation; the menu's own copy of these events arrives via
-                // set_pad_events below and is the only path that may act while it is open. The
+                // bound to both the jump and `menu_confirm`; the menu's own copy of these
+                // events arrives via set_pad_events below and is the only path that may act
+                // while it is open. The
                 // jump needs no gate of its own: it travels as a level in `Input`, and a menu
                 // frame returns before the fixed-step loop that would read it.
                 if !engine.menu_is_open() {
                     if pad.grab {
                         engine.set_pad_grab();
-                    }
-                    if pad.next_scene {
-                        engine.cycle_scene(1);
-                    }
-                    if pad.prev_scene {
-                        engine.cycle_scene(-1);
                     }
                     if pad.toggle_mute {
                         engine.with_audio(|a| a.toggle_mute());
@@ -674,6 +759,15 @@ fn main() {
         env!("CARGO_PKG_VERSION"),
         app::logging::file_path().map_or_else(|| "none".to_string(), |p| p.display().to_string())
     );
+    // EXT: the procedural house reads its pinned seed from here (src/ext/prochouse.rs).
+    ext::prochouse::set_cli_seed(args.house_seed);
+    // EXT: the Open House round's phase lengths (src/ext/hunt.rs).
+    if let Some(n) = args.hide_seconds {
+        ext::hunt::set_hide_seconds(n);
+    }
+    if let Some(n) = args.seek_seconds {
+        ext::hunt::set_seek_seconds(n);
+    }
     let root = app::assets::init(args.assets.clone());
     log::info!("asset root: {}", root.display());
 

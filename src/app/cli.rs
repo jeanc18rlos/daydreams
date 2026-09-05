@@ -28,11 +28,38 @@ pub struct Args {
     #[arg(long)]
     pub mute: bool,
 
+    /// EXT: start with the camera on the third-person boom, behind the player's shoulder,
+    /// with their body drawn (src/ext/thirdperson.rs). `V` toggles it at any time; this is
+    /// how a screenshot gets it without a hand on the keyboard.
+    #[arg(long)]
+    pub third_person: bool,
+
+    /// EXT: light the scene as though a switched-on flashlight were in hand, whether or not
+    /// one is. Dev tooling for photographing dark interiors. Hidden.
+    #[arg(long)]
+    pub torch: bool,
+
+    /// EXT: seconds the hider gets before the seekers wake, in scene "Open House"
+    /// (src/ext/hunt.rs). Default 40.
+    #[arg(long, value_name = "N")]
+    pub hide_seconds: Option<u32>,
+
+    /// EXT: seconds the seekers get to find the hider. Default 150.
+    #[arg(long, value_name = "N")]
+    pub seek_seconds: Option<u32>,
+
     /// Ignore every connected controller for this run. Automated screenshot and benchmark
     /// runs pass it: a pad on the desk with a little stick drift injects look input and makes
     /// their frames non-deterministic (found while verifying the portraits).
     #[arg(long)]
     pub no_gamepad: bool,
+
+    /// EXT: start with the developer overlay showing -- scene, camera position, and the
+    /// `--scene ... --pos ... --yaw ...` line that reproduces the current view. `F3` toggles
+    /// it at any time. The save key (Cmd+S+C on macOS, Ctrl+S+C elsewhere) works with or
+    /// without it: it writes a PNG to the Documents folder (src/ext/debug.rs).
+    #[arg(long)]
+    pub debug: bool,
 
     /// Directory holding Shaders/, Meshes/, Textures/ and assets/ (also: DAYDREAMS_ASSETS).
     #[arg(long, value_name = "DIR")]
@@ -61,6 +88,11 @@ pub struct Args {
     /// Camera yaw in degrees (with --scene). Default 0.
     #[arg(long, allow_negative_numbers = true, value_name = "DEG")]
     pub yaw: Option<f32>,
+
+    /// EXT: pin the procedural house's furnishing seed (scene "Open House"). Without it
+    /// every visit rolls a new one; the log prints the number either way.
+    #[arg(long, value_name = "N")]
+    pub house_seed: Option<u64>,
 
     /// Camera pitch in degrees (with --scene). Default 0.
     #[arg(long, allow_negative_numbers = true, value_name = "DEG")]
@@ -114,11 +146,14 @@ pub struct Args {
     #[arg(long, hide = true, requires = "scene")]
     pub hold_key: bool,
 
-    /// With `--scene`: on rendered frame N, press E once as the keyboard would -- the press is
-    /// seen by that frame's first fixed step (a held key's use test) and latched for the grab.
-    /// `--ride-at` is the elevator's own, narrower version. Hidden: dev tooling.
-    #[arg(long, hide = true, requires = "scene", value_name = "FRAME")]
-    pub e_at: Option<u32>,
+    /// With `--scene`: on each of these rendered frames, press E once as the keyboard would --
+    /// the press is seen by that frame's first fixed step (a held key's use test) and latched
+    /// for the grab. `--ride-at` is the elevator's own, narrower version. A list (`--e-at
+    /// 200,900`), because what E does depends on what came before it: using the key on the
+    /// window and then picking something up is two presses, and it is the second that shows
+    /// the key let go of the binding. Hidden: dev tooling.
+    #[arg(long, hide = true, requires = "scene", value_name = "FRAMES", value_delimiter = ',')]
+    pub e_at: Vec<u32>,
 
     /// With `--scene`: on rendered frame N, hold Space for thirty frames -- one jump, whatever a
     /// headless frame's share of fixed steps turns out to be, and short of the 0.71 s a jump is
@@ -143,12 +178,34 @@ pub struct Args {
     #[arg(long, hide = true, requires = "scene", value_name = "FRAMES", value_delimiter = ',')]
     pub drop_at: Vec<u32>,
 
+    /// With `--scene`: press a number-row key on a rendered frame, written slot@frame
+    /// (`--slot-at 3@120,1@240`) -- the inventory's direct selection, next to `--wheel-at`'s
+    /// step along the row (src/ext/inventory.rs). Slots are numbered from 1, as the keys are.
+    /// Hidden: dev tooling.
+    #[arg(long, hide = true, requires = "scene", value_name = "SLOT@FRAME",
+          value_delimiter = ',', value_parser = slot_at)]
+    pub slot_at: Vec<(u32, u32)>,
+
     /// With `--scene`: on each of these rendered frames, roll the mouse wheel one notch toward
     /// you -- one slot along the inventory row, the way a hotbar reads (src/ext/inventory.rs).
     /// The only way to drive the selection headlessly, and the only evidence the whole path from
     /// the window event to the gold ring is connected. Hidden: dev tooling.
     #[arg(long, hide = true, requires = "scene", value_name = "FRAMES", value_delimiter = ',')]
     pub wheel_at: Vec<u32>,
+
+    /// With `--scene`: on each of these rendered frames, fire the developer save chord as the
+    /// keyboard would -- write that frame as a PNG into the Documents folder
+    /// (src/ext/debug.rs). The headless twin of Cmd+S+C, so the binding can be checked without
+    /// a hand on the keyboard, exactly as `--e-at` checks E. Hidden: dev tooling.
+    #[arg(long, hide = true, requires = "scene", value_name = "FRAMES", value_delimiter = ',')]
+    pub save_at: Vec<u32>,
+
+    /// With `--scene`: stand the player at this `p_scale`, as a scaling portal would have left
+    /// them (src/physical.rs). Without it a run always starts at 1, so the command the
+    /// developer overlay prints for a half-size view came back full size -- which is why the
+    /// overlay now prints this flag whenever the scale is not 1. Hidden: dev tooling.
+    #[arg(long, hide = true, requires = "scene", value_name = "S", value_parser = player_scale)]
+    pub p_scale: Option<f32>,
 
     /// Panic after the first frame, to exercise the crash dialog. Hidden: it is a test of the
     /// platform layer, not a feature.
@@ -205,8 +262,8 @@ pub struct DirectRun {
     pub drop_props: Option<f32>,
     /// `--hold-key`: the key in hand at scene start.
     pub hold_key: bool,
-    /// The rendered frame on which E is pressed once, as a key press (`--e-at`).
-    pub e_at: Option<i32>,
+    /// The rendered frames on which E is pressed once each, as key presses (`--e-at`).
+    pub e_at: Vec<i32>,
     /// The rendered frame on which Space goes down (`--jump-at`).
     pub jump_at: Option<i32>,
     /// The rendered frames on which F is pressed once each, as key presses (`--stow-at`).
@@ -215,6 +272,26 @@ pub struct DirectRun {
     pub drop_at: Vec<i32>,
     /// The rendered frames on which the wheel turns one notch toward the player (`--wheel-at`).
     pub wheel_at: Vec<i32>,
+    /// Slot (from 1) and rendered frame for each number-row press (`--slot-at`).
+    pub slot_at: Vec<(u32, i32)>,
+    /// The rendered frames on which the developer save chord fires (`--save-at`).
+    pub save_at: Vec<i32>,
+    /// The player's physical scale at start (`--p-scale`).
+    pub p_scale: Option<f32>,
+}
+
+/// `--slot-at`'s parser: `slot@frame`, the slot numbered from 1 as the key row is. Both halves
+/// are checked here rather than at press time, so a typo is a usage error and not a run that
+/// quietly presses nothing.
+fn slot_at(s: &str) -> Result<(u32, u32), String> {
+    let (slot, frame) = s.split_once('@').ok_or("expected slot@frame, as in 3@120")?;
+    let slot: u32 = slot.parse().map_err(|e| format!("{slot:?} is not a slot: {e}"))?;
+    let frame: u32 = frame.parse().map_err(|e| format!("{frame:?} is not a frame: {e}"))?;
+    let slots = crate::ext::inventory::CAPACITY as u32;
+    if slot == 0 || slot > slots {
+        return Err(format!("slot {slot} is outside the row's 1..={slots}"));
+    }
+    Ok((slot, frame))
 }
 
 /// `--window-scale`'s parser: a scale the grab itself could produce.
@@ -241,6 +318,19 @@ pub enum DirectScene {
 /// error (exit 2) naming the range, rather than a run that silently stayed on the intro because
 /// `Engine::start_direct` skipped the load. A custom parser instead of
 /// `value_parser!(usize).range(..)` so the message can say what the range is the index of.
+/// `--p-scale`'s parser. A scale of zero has no inverse and would warp every matrix built from
+/// it through NaNs, and a negative one mirrors the player; the bounds are the grab's own
+/// (`ext::grab::MIN_P_SCALE` / `MAX_P_SCALE`), which is the range the rest of the game already
+/// keeps a physical scale inside.
+fn player_scale(s: &str) -> Result<f32, String> {
+    let v: f32 = s.parse().map_err(|e| format!("'{s}': {e}"))?;
+    let (lo, hi) = (crate::ext::grab::MIN_P_SCALE, crate::ext::grab::MAX_P_SCALE);
+    if !v.is_finite() || v < lo || v > hi {
+        return Err(format!("{v} is not a scale; the range is {lo} to {hi}"));
+    }
+    Ok(v)
+}
+
 fn parse_scene(s: &str) -> Result<usize, String> {
     let last = crate::ext::scenes::SCENES.len() - 1;
     let n: usize = s.parse().map_err(|e| format!("'{s}': {e}"))?;
@@ -333,11 +423,14 @@ impl Args {
             ride_at: self.ride_at.map(count),
             drop_props: self.drop_props,
             hold_key: self.hold_key,
-            e_at: self.e_at.map(count),
+            e_at: self.e_at.iter().copied().map(count).collect(),
             jump_at: self.jump_at.map(count),
             stow_at: self.stow_at.iter().copied().map(count).collect(),
             drop_at: self.drop_at.iter().copied().map(count).collect(),
             wheel_at: self.wheel_at.iter().copied().map(count).collect(),
+            slot_at: self.slot_at.iter().map(|&(s, f)| (s, count(f))).collect(),
+            save_at: self.save_at.iter().copied().map(count).collect(),
+            p_scale: self.p_scale,
         })
     }
 
@@ -399,8 +492,9 @@ mod tests {
         assert_eq!(run.scene, Some(DirectScene::Index(14)));
         assert_eq!((run.frames, run.yaw, run.pitch), (120, Some(30.0), Some(-5.0)));
         assert!(run.hold.is_empty() && !run.arrive && run.ride_at.is_none());
-        assert!(!run.hold_key && run.e_at.is_none() && run.jump_at.is_none());
+        assert!(!run.hold_key && run.e_at.is_empty() && run.jump_at.is_none());
         assert!(run.stow_at.is_empty() && run.drop_at.is_empty() && run.wheel_at.is_empty());
+        assert!(run.slot_at.is_empty());
         // `--shot` alone is a run too: the title screen's photograph.
         let a = Args::try_from_tokens(&["--shot", "title.bmp"]).unwrap();
         let run = a.direct_run().expect("a dev run");
@@ -521,10 +615,27 @@ mod tests {
         assert!(Args::try_from_tokens(&["--hold-key"]).is_err());
         assert!(Args::try_from_tokens(&["--e-at", "30"]).is_err());
         let a = Args::try_from_tokens(&["--scene", "16", "--hold-key", "--e-at", "30"]).unwrap();
-        assert!(a.hold_key && a.e_at == Some(30));
+        assert!(a.hold_key && a.e_at == [30]);
         let run = a.direct_run().unwrap();
-        assert!(run.hold_key && run.e_at == Some(30));
+        assert!(run.hold_key && run.e_at == [30]);
+        // Two presses: use the key, then pick something up with the same binding.
+        let a = Args::try_from_tokens(&["--scene", "16", "--e-at", "200,900"]).unwrap();
+        assert_eq!(a.direct_run().unwrap().e_at, [200, 900]);
         assert!(Args::try_from_tokens(&["--scene", "16", "--e-at", "-1"]).is_err());
+    }
+
+    /// `--slot-at` names the slot as well as the frame, and refuses one the row has not got.
+    #[test]
+    fn slot_at_needs_a_scene_and_a_slot_in_the_row() {
+        assert!(Args::try_from_tokens(&["--slot-at", "3@120"]).is_err());
+        let a = Args::try_from_tokens(&["--scene", "16", "--slot-at", "3@120,1@240"]).unwrap();
+        assert_eq!(a.direct_run().unwrap().slot_at, [(3, 120), (1, 240)]);
+        for bad in ["120", "3@", "@120", "x@120", "3@x", "0@120", "99@120", "-1@120"] {
+            assert!(
+                Args::try_from_tokens(&["--scene", "16", "--slot-at", bad]).is_err(),
+                "{bad:?} was accepted"
+            );
+        }
     }
 
     #[test]

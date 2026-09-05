@@ -30,6 +30,27 @@ uniform float alpha_cutoff; // discard below this map alpha; negative = no test
 in vec2 ex_uv;
 in vec3 ex_world;
 
+// EXT: the flashlight's cone (src/ext/view.rs publishes these; ext/tool.rs aims it).
+// This shader draws a BAKED interior and has no normals by design ("the place is its own
+// weather", above) -- so the torch is applied flat: it brightens what the beam finds without
+// pretending to relight it. That is deliberately a reversal of this shader's own rule, and it
+// is the one light the bake cannot already contain, because the player is carrying it.
+uniform vec4 spot_pos;   // xyz world origin, w = range in metres (0 = off, and GL's default)
+uniform vec4 spot_dir;   // xyz unit direction, w = cos(outer angle)
+uniform vec4 spot_col;   // rgb radiance, w = cos(inner angle)
+
+vec3 spot_flat(vec3 P) {
+	if (spot_pos.w <= 0.0) return vec3(0.0);
+	vec3 d = spot_pos.xyz - P;
+	float r = length(d);
+	if (r >= spot_pos.w) return vec3(0.0);
+	vec3 L = d / max(r, 1e-4);
+	float cone = smoothstep(spot_dir.w, spot_col.w, dot(-L, spot_dir.xyz));
+	if (cone <= 0.0) return vec3(0.0);
+	float atten = pow(max(1.0 - r / spot_pos.w, 0.0), 2.2);
+	return spot_col.rgb * cone * atten;
+}
+
 out vec4 fragColor;
 
 void main(void) {
@@ -47,6 +68,10 @@ void main(void) {
 	// Squared-distance falloff rather than linear: nothing within arm's reach is touched
 	// (1% at 5 units), the 23-unit hall end is softened (19%), and the far end of the maze
 	// is mostly gone (92% at 80) before the far plane would have cut it.
+	// The torch, before the fog: a beam does not punch through haze, it lights what is in it.
+	vec3 sp = spot_flat(ex_world);
+	col += col * sp * 1.35 + sp * 0.055;
+
 	float d = length(ex_world - cam_pos.xyz) * 0.0195;
 	float fog = 1.0 - exp(-d * d);
 	col = mix(col, fog_color.rgb, fog);

@@ -773,6 +773,33 @@ class Loop:
     peak_db: tuple[float, float] = (-18.0, -5.0)
 
 
+def tool_click(rng: np.random.Generator, v: int) -> np.ndarray:
+    """A plastic instrument switch: two dry clicks a thumb's width apart, boxy resonance."""
+    n = int(0.16 * SR)
+    out = np.zeros(n)
+    for start, gain, fc in ((0.0, 1.0, 1800.0), (0.045, 0.55, 1300.0)):
+        m = int(0.05 * SR)
+        tick = bandpass(rng.standard_normal(m), SR, fc, 3.0) * env(m, SR, 0.001, 0.028)
+        place(out, tick * gain, int(start * SR))
+    out = resonate(out, SR, 950, 4.0, 5.0)
+    return dc_block(out * 0.8, SR)
+
+
+def camera_snap(rng: np.random.Generator, v: int) -> np.ndarray:
+    """A compact camera's shutter: a sharp mechanical snap and a tiny motor whirr after."""
+    n = int(0.34 * SR)
+    out = np.zeros(n)
+    m = int(0.06 * SR)
+    snap_click = highpass(rng.standard_normal(m), SR, 1400, 2) * env(m, SR, 0.001, 0.02)
+    place(out, snap_click * 1.1, 0)
+    w = int(0.22 * SR)
+    t = secs(w, SR)
+    whirr = bandpass(rng.standard_normal(w), SR, 2400, 6.0)
+    whirr *= (0.25 + 0.75 * np.sin(2 * np.pi * 140 * t) ** 2) * env(w, SR, 0.01, 0.16)
+    place(out, whirr * 0.35, int(0.07 * SR))
+    return dc_block(out, SR)
+
+
 EFFECTS: list[Effect] = [
     Effect("footstep_carpet", footstep_carpet, 4, (0.15, 0.25), (150, 700)),
     Effect("footstep_tile", footstep_tile, 4, (0.25, 0.40), (700, 2600)),
@@ -801,6 +828,8 @@ EFFECTS: list[Effect] = [
     Effect("ui_back", ui_back, 1, (0.17, 0.26), (350, 1000)),
     Effect("door_open", door_open, 1, (0.84, 0.96), (300, 900)),
     Effect("door_close", door_close, 1, (0.66, 0.80), (80, 400)),
+    Effect("tool_click", tool_click, 1, (0.10, 0.20), (700, 2200)),
+    Effect("camera_snap", camera_snap, 1, (0.20, 0.36), (1200, 3400)),
 ]
 
 LOOPS: list[Loop] = [

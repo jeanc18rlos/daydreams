@@ -56,7 +56,8 @@
 //! # Bindings
 //!
 //! `F` stows what is in hand, or takes the selected slot's item into the hand when the hand is
-//! empty; `G` drops the selected item straight into the world; the mouse wheel changes the
+//! empty; `G` drops the selected item straight into the world; the number row and the mouse
+//! wheel both change the
 //! selection. They were chosen against a crowded keyboard: the number row and the punctuation
 //! keys are the scene registry's, `E` is grab/use, `M` mute, `R` rotate, `Shift` sprint,
 //! `Space` jump. The pad is deliberately left out -- its D-pad left/right already cycles
@@ -141,6 +142,8 @@ pub struct Edges {
     pub drop: bool,
     /// Mouse wheel since the last frame, in notches.
     pub wheel: f32,
+    /// A number-row key pressed this frame, as a slot index. The row used to load scenes.
+    pub select: Option<usize>,
 }
 
 /// One filled slot: the object, the word the HUD prints, and the carry's pin.
@@ -212,6 +215,17 @@ impl Inventory {
     /// Scrolling away from you goes to the previous slot, the way a hotbar reads. The
     /// remainder is kept: a trackpad delivers a notch as a dozen fractions, and truncating
     /// each on its own would never reach one.
+    /// Select a slot outright, by its number. The number row's keys, which used to load
+    /// scenes: SWITCH LEVEL in the pause menu does that, and a number over a row of slots
+    /// means the slot under it in every game that has one.
+    pub fn select(&mut self, slot: usize) {
+        if slot < CAPACITY {
+            self.selected = slot;
+            // A pending wheel notch belongs to the selection it was aimed at, not this one.
+            self.wheel = 0.0;
+        }
+    }
+
     pub fn scroll(&mut self, wheel: f32) {
         if !wheel.is_finite() {
             return;
@@ -428,6 +442,9 @@ pub fn update(
     grab: &mut GrabState,
     inv: &mut Inventory,
 ) {
+    if let Some(slot) = edges.select {
+        inv.select(slot);
+    }
     inv.scroll(edges.wheel);
     inv.resolve_pending(objects, grab);
     // A retrieve in flight owns the hand and the slot it came from; both keys wait one frame.
@@ -444,6 +461,28 @@ pub fn update(
         }
     }
     inv.show_notice();
+}
+
+#[cfg(test)]
+mod slot_keys {
+    use super::*;
+
+    /// The number row picks a slot outright. It used to load scenes, which is what made
+    /// reaching for slot 2 in the Backrooms drop the player into the Pillar Rooms.
+    #[test]
+    fn a_number_picks_its_slot_and_nothing_out_of_range_moves_it() {
+        let mut inv = Inventory::default();
+        inv.select(3);
+        assert_eq!(inv.selected(), 3);
+        inv.select(CAPACITY); // a seventh slot on a six-slot row
+        assert_eq!(inv.selected(), 3, "out of range must not move the selection");
+        // And a number outranks a wheel notch part-way through: the notch was aimed at the
+        // selection the player has just left.
+        inv.scroll(0.5);
+        inv.select(0);
+        inv.scroll(0.6);
+        assert_eq!(inv.selected(), 0, "half a notch either side of a number press");
+    }
 }
 
 #[cfg(test)]

@@ -11,6 +11,11 @@ precision highp float;
 // projected onto a flat cloud layer, and a domain-warped FBM sampled there gives cumulus
 // shapes. Lighting is a single scatter approximation -- compare the density here with the
 // density one step toward the sun; where the cloud thins toward the sun its edge is lit.
+//
+// RGB is that daylight sky. ALPHA is the coverage on its own -- how much cloud is in front of
+// the gradient at this pixel, before any of it is coloured. The runtime sky shader's evening
+// grades want the SHAPE of the cloud field and none of its colour (src/ext/skybake.rs, "Why
+// the panorama has an alpha channel"), and this is the only place that knows it exactly.
 
 #define LIGHT vec3(0.36, 0.80, 0.48)
 #define PI 3.14159265
@@ -62,23 +67,43 @@ void main(void) {
 
 	if (dir.y <= 0.0) {
 		// Below the horizon: ground haze. Terrain covers this; the edge of the world blends.
-		fragColor = vec4(mix(haze, vec3(0.62, 0.70, 0.62), min(-dir.y * 4.0, 1.0)), 1.0);
+		// No cloud down here, hence the zero alpha.
+		fragColor = vec4(mix(haze, vec3(0.62, 0.70, 0.62), min(-dir.y * 4.0, 1.0)), 0.0);
 		return;
 	}
 
 	// ── Cumulus layer ─────────────────────────────────────────────────────────────────
 	float h = 1.0 / (dir.y + 0.10);             // flat layer projection, softened at horizon
-	vec2 p = dir.xz * h * 1.9 + vec2(time * 0.35, time * 0.12);
+	// 1.45, not 1.9: a lower frequency means BIGGER clouds for the same field. The evening
+	// grade in Shaders/sky.frag paints each cloud as a lit shape rather than fading it into
+	// haze, so a field of small ones reads as a scatter of wisps where the sunset wants
+	// masses.
+	vec2 p = dir.xz * h * 1.45 + vec2(time * 0.35, time * 0.12);
 	vec2 q = vec2(fbm(p * 0.6), fbm(p * 0.6 + vec2(5.2, 1.3)));
 	vec2 w = p + q * 1.1;                        // domain warp: lumpy, cauliflower edges
 	float d = fbm(w);
-	float cov = smoothstep(0.50, 0.70, d);
+
+	// WEATHER. A very low frequency field that decides how much cloud there is HERE, before
+	// any of the shapes are cut out of it. Without it the coverage threshold is the same
+	// everywhere and the sky comes out evenly speckled -- the giveaway of every procedural
+	// cloud layer. With it there are banks and there are clearings, and the cumulus only grow
+	// where the weather allows, which is the order the real thing happens in.
+	float weather = fbm(p * 0.11 + vec2(3.7, 8.1));
+	float floor_ = mix(0.60, 0.36, smoothstep(0.35, 0.75, weather));
+	float cov = smoothstep(floor_, floor_ + 0.20, d);
 	cov = pow(cov, 0.8);
 
-	// Single-scatter lighting: thinner toward the sun => lit.
-	vec2 toSun = normalize(sun.xz) * 0.07;
-	float d2 = fbm(w + toSun);
-	float lit = clamp((d - d2) * 7.0 + 0.45, 0.0, 1.0);
+	// Lighting: a three-step march toward the sun rather than one. Each step asks how much
+	// cloud is still between this point and the light, and the answers accumulate -- so a
+	// deep flank stays dark while a thin edge lights up along its whole length, which one
+	// sample cannot tell apart. Three is where the flanks stop looking like a bevel.
+	vec2 toSun = normalize(sun.xz) * 0.055;
+	float shade_sum = 0.0;
+	for (int k = 1; k <= 3; ++k) {
+		shade_sum += max(fbm(w + toSun * float(k)) - d, 0.0) / float(k);
+	}
+	float lit = clamp(1.0 - shade_sum * 4.2, 0.0, 1.0);
+	lit = mix(lit, 1.0, 0.18);   // never fully black: clouds scatter light around themselves
 	// Tops lit, bottoms shadowed: the density itself approximates depth.
 	float thick = smoothstep(0.55, 0.9, d);
 	vec3 shadow = vec3(0.58, 0.63, 0.74);
@@ -92,12 +117,21 @@ void main(void) {
 	cov *= smoothstep(0.0, 0.22, dir.y);
 
 	// ── Thin high cirrus ──────────────────────────────────────────────────────────────
+	// Stretched hard along one axis, which is what makes it read as fibre rather than as more
+	// cumulus, and drifting the other way from the layer below -- two decks moving against
+	// each other is most of what gives a sky depth.
 	vec2 pc = dir.xz * h * 0.8 + vec2(-time * 0.2, time * 0.05);
 	float ci = fbm(vec2(pc.x * 0.7, pc.y * 3.0));
 	float cirrus = smoothstep(0.55, 0.75, ci) * 0.35 * smoothstep(0.05, 0.4, dir.y);
+	// A second deck, higher and finer, at right angles to the first.
+	vec2 pc2 = dir.xz * h * 0.5 + vec2(time * 0.11, -time * 0.24);
+	float ci2 = fbm(vec2(pc2.x * 2.6, pc2.y * 0.6));
+	cirrus = max(cirrus, smoothstep(0.60, 0.80, ci2) * 0.22 * smoothstep(0.10, 0.5, dir.y));
 
 	col = mix(col, vec3(0.96, 0.97, 1.0), cirrus);
 	col = mix(col, cloud, cov);
 
-	fragColor = vec4(col, 1.0);
+	// Coverage, for the evening grades. The cirrus counts for part of its own opacity: it is
+	// thin, and a sunset paints it as a wisp rather than as a cumulus flank.
+	fragColor = vec4(col, clamp(cov + cirrus * 0.55, 0.0, 1.0));
 }

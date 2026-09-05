@@ -347,7 +347,7 @@ impl Scene for Level16 {
                 &level18::load_spec(),
                 &level18::placement(),
                 openings,
-                0.0,
+                interior::Floor::at(0.0),
                 respawn,
                 FAR2,
             );

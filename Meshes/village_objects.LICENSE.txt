@@ -1,0 +1,55 @@
+Model Information:
+* title:	Objects Interior(Village) Alpha
+* source:	https://sketchfab.com/3d-models/objects-interiorvillage-alpha-c640f60b970a48648a158c91c1c45b2b
+* also:	https://elbolilloduro.itch.io/objects-interiorvillage-alpha (and on Fab)
+* author:	Elbolillo (https://sketchfab.com/Elbolilloduro)
+* published:	2023-01-30
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Objects Interior(Village) Alpha"
+(https://sketchfab.com/3d-models/objects-interiorvillage-alpha-c640f60b970a48648a158c91c1c45b2b)
+by Elbolillo (https://sketchfab.com/Elbolilloduro) licensed under CC-BY-4.0
+(http://creativecommons.org/licenses/by/4.0/)
+
+Provenance of this file: the licence was read on the Sketchfab page at import (2026-08), where it
+shows as "CC Attribution" -- not transcribed from embedded metadata, because this GLB is built
+here from the pack's FBX files and carries no Sketchfab `asset.extras` block. The page at the
+source URL is the authority, and it has been read.
+
+CHANGES MADE TO THIS FILE (CC-BY-4.0 asks that modifications be indicated):
+
+  This copy is NOT the file as downloaded. `tools/build_props.py` (headless Blender) converts
+  the pack's FBX (`.../Models/Objects_Interior(Village)_Demo.fbx`) into this GLB:
+
+  * Four empty stub meshes (0 vertices) are dropped.
+  * The fridge shelf that shipped named bare `House_Demo` is renamed `Fridge_Shelf`, so
+    `House_Demo_*` stays an unambiguous prefix for the demo house's shell.
+  * Every material is set metallic 0 / roughness 1: these are PSX diffuse textures, and
+    glTF's default metallic 1 would render them as dark metal.
+  * Base-colour textures are re-wired by material name: the FBX references them at
+    authoring-machine paths, while the files themselves sit in the pack's Textures/ named
+    after their material (the stove is the one plural: material "Stoves", file "Stove").
+  * Eleven lamp and clock materials get their `*_Emissor` maps wired as the glTF emissive
+    texture, so lampshades and dials glow unlit in the night scene.
+  * ONE mesh is added, `Lot_Ground`: a 38.6 x 26.7 m grass quad sized to the lot the game
+    carves out of Liminal Neighborhood's stage (the baked lawn does not continue under the
+    baked house). Its texture is the stage's own "Pasto" grass, pulled byte-for-byte out of
+    `Meshes/abandoned_house.glb` so the patch matches the lawn around it -- same author
+    (Elbolillo), same licence (CC-BY-4.0), covered by that file's own record,
+    `Meshes/abandoned_house.LICENSE.txt`.
+
+  Nothing else is altered: geometry, UVs, and the pack's own layout positions ship as
+  authored. The engine re-anchors parts by their bounds at spawn.
+
+  Reproduce with:
+      /Applications/Blender.app/Contents/MacOS/Blender --background --python tools/build_props.py
+
+What the file holds: a complete PSX demo house (the `House_Demo_*` shell, roof, windows and
+door) plus some 150 furniture, food and clutter objects -- beds, armchairs, chests of drawers,
+bookcases, wardrobes, kitchen sets, lamps, fans, radios, phones, paintings, food. The scene
+derived from Liminal Neighborhood carves the stage's baked house out and builds seeded
+procedural houses from this pack.

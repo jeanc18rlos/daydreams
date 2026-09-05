@@ -9,7 +9,7 @@ edition = "2021"
 # re-resolve; CI builds on stable.
 rust-version = "1.85"
 authors = ["Jean Rojas <jeanc16rlos@gmail.com>"]
-description = "DayDreams -- a game built on a Rust port of CodeParade's NonEuclidean rendering engine (HackerPoet/NonEuclidean)"
+description = "Hide 'N Dream -- a game built on a Rust port of CodeParade's NonEuclidean rendering engine (HackerPoet/NonEuclidean)"
 license = "MIT"
 
 [dependencies]

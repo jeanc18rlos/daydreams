@@ -56,13 +56,31 @@
 //! `mouse_ddx/ddy` are raw pixels this frame; `pad_look_x/y` are already radians per fixed
 //! step (gamepad.rs `LOOK_RATE`), scaled by `PAD_ROT_SENS` and applied once per rendered frame.
 
+use crate::game_header::GH_DT;
 use crate::input::Input;
 
 /// Mouse rotation sensitivity in radians per pixel of raw motion.
 /// A 500 px drag turns the object a little under 180 degrees.
 pub const MOUSE_ROT_SENS: f32 = 0.006;
-/// Pad rotation rate as a fraction of the camera look rate (`pad_look_*` are already scaled).
-pub const PAD_ROT_SENS: f32 = 0.8;
+
+/// How fast the pad turns a held object, as a fraction of how fast it turns the camera.
+const PAD_ROT_FRACTION: f32 = 0.8;
+/// The rendered frame rate [`PAD_ROT_SENS`] is calibrated at.
+const NOMINAL_FPS: f32 = 60.0;
+/// [`PAD_ROT_FRACTION`], converted for the cadence this module runs at.
+///
+/// `pad_look_*` are radians per 500 Hz fixed step (gamepad.rs `LOOK_RATE`), and the camera
+/// spends one of them per step; this runs once per *rendered* frame, so the fraction has to
+/// carry the difference -- a nominal 60 Hz frame is `1 / (60 * GH_DT)` steps. Stating it this
+/// way rather than as the bare number it multiplies out to keeps the two paths tied: the
+/// camera's rate is the thing being calibrated (gamepad.rs `LOOK_RATE_PER_SEC`) and this
+/// follows it.
+///
+/// The cost of running per frame is that object rotation is calibrated at 60 Hz and turns
+/// proportionally faster on a faster display. The camera's own path does not, being spent per
+/// fixed step; squaring that up would mean handing this module the frame's step count, which is
+/// more plumbing than a held object's spin is worth.
+pub const PAD_ROT_SENS: f32 = PAD_ROT_FRACTION / (NOMINAL_FPS * GH_DT);
 
 #[derive(Default)]
 pub struct Rotate {
@@ -133,6 +151,22 @@ mod tests {
         assert_eq!(i.mouse_dy, -2.0);
         assert_eq!(i.pad_look_x, px);
         assert_eq!(i.pad_look_y, py);
+    }
+
+    /// The pad's object rotation reads the camera's own `pad_look_*` at a different cadence --
+    /// once per rendered frame, not once per fixed step -- so the two constants have to stay
+    /// tied. At the nominal 60 Hz a held object turns at [`PAD_ROT_FRACTION`] of the camera's
+    /// rate; if `gamepad::LOOK_RATE` is recalibrated and this is not, that ratio drifts.
+    #[test]
+    fn pad_rotation_is_a_fraction_of_the_camera_rate_at_the_nominal_frame_rate() {
+        // Full deflection: the camera turns LOOK_RATE per step, this turns PAD_ROT_SENS times
+        // that per frame, and a nominal frame is 1 / (NOMINAL_FPS * GH_DT) steps.
+        let steps_per_frame = 1.0 / (NOMINAL_FPS * GH_DT);
+        let (yaw, _) = Rotate::deltas(&input_with_look(0.0, 0.0, 1.0, 0.0));
+        assert!(
+            (yaw / steps_per_frame - PAD_ROT_FRACTION).abs() < 1e-5,
+            "the object turns {yaw} per frame against the camera's {steps_per_frame} per frame"
+        );
     }
 
     #[test]

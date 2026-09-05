@@ -111,6 +111,13 @@ pub fn request_respawn(r: Respawn) {
     RESPAWN.with(|c| c.set(Some(r)));
 }
 
+/// Take the pending request without a `Player` to apply it to, for the tests of the rules that
+/// make one (`level31`'s wrap net). `apply_respawn` is the same take with the player attached.
+#[cfg(test)]
+pub fn take_respawn() -> Option<Respawn> {
+    RESPAWN.with(|c| c.take())
+}
+
 /// Carry out a pending request. Called by `Engine::update` after the portal pass, exactly
 /// once per step. `set_position` moves `prev_pos` with `pos`, so the next step's portal test
 /// sees no segment; the velocity is zeroed so nothing of the fall survives; and the body's own

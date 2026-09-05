@@ -513,6 +513,11 @@ pub fn update(
     // the one from whatever lies beyond it (a window's, with the key in hand).
     let picked = pick(objects, origin, dir, state.held);
     state.hover = state.held.is_some() || picked.is_some();
+    // EXT: and say so on a standing channel, so a verb that claims E BEFORE the grab can
+    // stand down when the grab has something to do with it (src/ext/disguise.rs). One frame
+    // stale by construction -- this runs after the claim chain -- which is the right side to
+    // err on: it costs a hide one press, never a pickup.
+    set_busy(state.hover);
     if let Some((i, _, _)) = picked {
         if let Some(text) = objects[i].try_borrow().ok().and_then(|o| o.pick_hint()) {
             crate::ext::hint::set(text);
@@ -528,6 +533,56 @@ pub fn update(
     let Ok(mut held) = handle.try_borrow_mut() else {
         return;
     };
+
+    // ── The instrument's carry: held, not placed (`ObjectT::carry_fixed`). ───────────────────
+    //
+    // Taken before the perspective solve below, because none of it applies: there is no ray to
+    // rest against, no distance to read a size from, and nothing for the room to shrink. The
+    // pose comes straight off the camera, so it neither swells with the corridor behind it nor
+    // tumbles as the player turns.
+    if let Some(carry) = held.carry_fixed() {
+        // The player's own scale, read off the camera: `Object::local_to_world` folds
+        // `scale * p_scale`, so a unit direction through it comes back that long. Saves
+        // threading a parameter through a ported signature for one caller.
+        let p_scale = cam_to_world.mul_direction(Vector3::new(1.0, 0.0, 0.0)).mag().max(1e-4);
+        let base = held.base_mut();
+        base.pos = cam_to_world.mul_point(carry * p_scale);
+        // Face the way the player faces. `euler.y` is the engine's yaw convention (the one
+        // `Physical::try_portal` writes on a crossing) and pitch follows the look, so the torch
+        // points where the beam goes.
+        base.euler.y = (-dir.x).atan2(-dir.z);
+        base.euler.x = dir.y.asin();
+        base.euler.z = 0.0;
+        base.rot = None;
+        let fixed = CARRY_P_SCALE * p_scale;
+        let rescaled = base.p_scale != fixed;
+        base.p_scale = fixed;
+        state.eased_scale = fixed;
+        state.fit_shrunk = false;
+        let pos = base.pos;
+        if rescaled {
+            held.on_rescale(fixed);
+        }
+        // The hand's velocity still matters: letting go of a tool mid-turn should throw it.
+        let now = crate::ext::view::time();
+        if state.just_grabbed {
+            state.hand_vel = Vector3::zero();
+        } else {
+            let dt = now - state.hand_time;
+            if dt > 0.0 {
+                state.hand_vel = (pos - state.hand_pos) / dt;
+            }
+        }
+        state.hand_pos = pos;
+        state.hand_time = now;
+        if let Some(phys) = held.as_physical_mut() {
+            phys.gravity.set_zero();
+            phys.velocity.set_zero();
+            phys.prev_pos = phys.base.pos;
+        }
+        state.just_grabbed = false;
+        return;
+    }
 
     // Where would the object come to rest if pushed straight down the crosshair? With no hit
     // it hangs at the reach limit, facing the player.
@@ -779,15 +834,31 @@ fn try_grab(
     );
 }
 
+/// EXT: the physical size a `carry_fixed` instrument is held at -- 1.0 is the size it was
+/// authored, times whatever scale the player themself currently is.
+const CARRY_P_SCALE: f32 = 1.0;
+
+/// EXT-pivot: cap on the hand velocity a simple grabbable keeps at release, matching the
+/// rigid props' MAX_THROW (ext/rigid.rs) so both families throw alike.
+const SIMPLE_THROW_CAP: f32 = 12.0;
+
 fn release(objects: &[Rc<RefCell<dyn ObjectT>>], state: &mut GrabState) {
     if let Some(idx) = state.held {
         if let Some(handle) = objects.get(idx) {
             if let Ok(mut obj) = handle.try_borrow_mut() {
                 if let Some(phys) = obj.as_physical_mut() {
-                    // Restore gravity (suspended while carried) and drop it dead rather than
-                    // letting it inherit the camera's motion.
+                    // Restore gravity (suspended while carried). EXT-pivot: the object
+                    // inherits the hand's velocity, capped -- releasing while panning is a
+                    // throw. The throw is a seeker's free testing tool in Hide 'N Dream
+                    // (docs/hide-n-dream.md), so simple grabbables no longer drop dead the
+                    // way the campaign's did; rigid props already threw via `on_release`.
                     phys.gravity = Vector3::new(0.0, crate::game_header::GH_GRAVITY, 0.0);
-                    phys.velocity.set_zero();
+                    let mag = state.hand_vel.mag();
+                    phys.velocity = if mag > SIMPLE_THROW_CAP {
+                        state.hand_vel * (SIMPLE_THROW_CAP / mag)
+                    } else {
+                        state.hand_vel
+                    };
                     phys.prev_pos = phys.base.pos;
                 }
                 // The object itself may want the throw (`ObjectT::on_release`).
@@ -888,6 +959,28 @@ fn as_grabbable(obj: &dyn ObjectT) -> Option<f32> {
     } else {
         None
     }
+}
+
+thread_local! {
+    /// Whether the grab would act on the next press: something held, or something
+    /// grabbable under the crosshair. Written once per rendered frame by [`update`].
+    static BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn set_busy(on: bool) {
+    BUSY.with(|c| c.set(on));
+}
+
+/// Whether the grab would act on the next E press. A standing answer: read it before
+/// claiming E for anything that is NOT a pickup, or picking a thing up becomes impossible
+/// wherever the other verb is also offered.
+pub fn busy() -> bool {
+    BUSY.with(std::cell::Cell::get)
+}
+
+/// Scene-load hygiene: nothing is held or hovered in a scene that has not drawn yet.
+pub fn reset_busy() {
+    set_busy(false);
 }
 
 /// Conservative bounding radius of an object at `p_scale == 1`: the mesh's max vertex

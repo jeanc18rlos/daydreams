@@ -13,6 +13,9 @@ in vec2 in_uv;
 in vec3 in_normal;
 
 out vec2 ex_uv;
+// Position within the QUAD, top-left origin, independent of which part of the atlas is being
+// sampled. Only the gradient fill uses it (ext/ui.rs `fill_rect_grad`).
+out vec2 ex_quad;
 
 void main(void) {
 	gl_Position = mvp * vec4(in_pos, 1.0);
@@ -20,4 +23,5 @@ void main(void) {
 	// flip v once here and map into the requested rectangle.
 	vec2 q = vec2(in_uv.x, 1.0 - in_uv.y);
 	ex_uv = mix(uv_rect.xy, uv_rect.zw, q);
+	ex_quad = q;
 }

@@ -20,6 +20,16 @@
 //! The bake assumes the sun at `LIGHT` (Shaders/texture.frag), so cloud lighting stays
 //! consistent with every other material; the scroll is slow enough that the lit edges never
 //! visibly drift away from the sun.
+//!
+//! # Why the panorama has an alpha channel
+//!
+//! RGB is the daylight sky the bake draws, and that is all the daylight and storm grades need.
+//! The evening grades want something else: WHERE the clouds are, so they can paint their own
+//! colours into that shape (`Shaders/sky.frag`). Deriving it from the RGB is possible and
+//! wrong -- the bake fades its clouds into a bright horizon haze, and any luminance threshold
+//! reads that whole band as solid overcast, which is what put a flat cream stripe across the
+//! sunset above the sea. So the bake writes its own `cov` term into A, where it is exact and
+//! free: the coverage is already computed, and the fourth channel was being padded anyway.
 
 use crate::mesh::Mesh;
 use crate::resources::Resources;
@@ -85,11 +95,12 @@ impl SkyBake {
             gl.tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
-                glow::RGB8 as i32,
+                // RGBA, not RGB: A carries the cloud coverage the evening grades mask with.
+                glow::RGBA8 as i32,
                 PANO_W,
                 PANO_H,
                 0,
-                glow::RGB,
+                glow::RGBA,
                 glow::UNSIGNED_BYTE,
                 glow::PixelUnpackData::Slice(None),
             );

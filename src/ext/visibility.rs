@@ -71,6 +71,21 @@ pub fn is_observed(
         && has_line_of_sight(objects, cam_to_world, point, skip)
 }
 
+/// EXT-pivot: the multi-viewer form of [`is_observed`] -- watched if ANY of the given eyes
+/// observes the point.
+///
+/// Hide 'N Dream's core query: a hidden dreamer may act only while unobserved by *every*
+/// seeker (the Chameleon Rule, docs/hide-n-dream.md). With one camera this is exactly
+/// [`is_observed`]; netplay hands it every seeker's reconstructed eye.
+pub fn is_observed_by_any(
+    objects: &[Rc<RefCell<dyn ObjectT>>],
+    cams: &[Matrix4],
+    point: Vector3,
+    skip: Option<usize>,
+) -> bool {
+    cams.iter().any(|cam| is_observed(objects, cam, point, skip))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,6 +117,20 @@ mod tests {
         let cam = Matrix4::rot_y(std::f32::consts::PI);
         assert!(in_view_cone(&cam, Vector3::new(0.0, 0.0, 10.0), WATCH_HALF_ANGLE));
         assert!(!in_view_cone(&cam, Vector3::new(0.0, 0.0, -10.0), WATCH_HALF_ANGLE));
+    }
+
+    /// Two eyes facing opposite ways leave nowhere on the axis unwatched.
+    #[test]
+    fn any_of_two_opposed_eyes_sees_both_sides() {
+        let ahead = Matrix4::identity();
+        let behind = Matrix4::rot_y(std::f32::consts::PI);
+        let both = [ahead, behind];
+        // No blockers: an empty object list means line of sight always passes.
+        let none: Vec<Rc<RefCell<dyn ObjectT>>> = Vec::new();
+        assert!(is_observed_by_any(&none, &both, Vector3::new(0.0, 0.0, -10.0), None));
+        assert!(is_observed_by_any(&none, &both, Vector3::new(0.0, 0.0, 10.0), None));
+        assert!(!is_observed_by_any(&none, &both[..1], Vector3::new(0.0, 0.0, 10.0), None));
+        assert!(!is_observed_by_any(&none, &[], Vector3::new(0.0, 0.0, -10.0), None));
     }
 
     #[test]

@@ -47,7 +47,7 @@ allow = [
 ]
 # Not listed because no crate carries them and cargo-deny warns about unused entries:
 # Unicode-DFS-2016 (superseded by Unicode-3.0 in unicode-ident) and OFL-1.1, which is the
-# licence of the Roboto Condensed face under assets/ -- a shipped asset, not a crate; see
+# licence of the two faces under assets/fonts/ -- shipped assets, not crates; see
 # THIRD_PARTY.md.
 confidence-threshold = 0.8
 exceptions = []

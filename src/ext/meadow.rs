@@ -68,42 +68,81 @@ pub struct MeadowSide {
     pub here: Rc<RefCell<Portal>>,
 }
 
+/// EXT: the field of view the title screen is shot at, in degrees, against `GH_FOV`'s 60 for
+/// play.
+///
+/// A menu backdrop is a photograph, and 60 degrees vertical is a first-person *playing* FOV:
+/// wide, so that nothing creeps up on you, and with the perspective exaggeration that comes
+/// with it -- a door six metres away is a small rectangle in the middle of a lot of meadow.
+/// Pulling in to 36 does two things at once. The door reads twice as large without the
+/// camera having to walk into it, and the compression flattens the hills behind it into bands,
+/// which is what a real long lens does to a landscape at dusk and most of why the reference
+/// image reads as a photograph rather than as a screenshot.
+///
+/// `Engine::step_title_backdrop` sets it every title frame and `load_scene` restores `GH_FOV`
+/// (`ExtState::on_scene_loaded` -> `view::reset_fov`), so NEW GAME opens at the playing FOV
+/// and nothing has to remember to put it back.
+pub const TITLE_FOV: f32 = 36.0;
+
 /// The vantage the title screen watches the meadow from, as (eye, yaw, pitch).
 ///
 /// The menu draws the intro level live behind it (engine.rs `render_menu_frame`), so unlike
-/// the spawn -- which is a place to stand -- this is a shot to be composed. Two things decide
-/// it:
+/// the spawn -- which is a place to stand -- this is a shot to be composed. Three things
+/// decide it:
 ///
-/// * The door sits **off centre**, because the menu's own column of options is centred and a
-///   door dead ahead would end up behind the text with its sunset showing through the letters.
-///   Standing to the door's right and turning back toward it puts the opening in the left third
-///   and leaves the middle of the frame as plain meadow for the words to sit on.
-/// * The eye is **further back than the spawn** (about nine strides out rather than four), for
-///   the meadow and the storm above it, which the spawn's close-up crops away. That is past the
-///   door's own opening radius, which is why the title holds doors open explicitly
-///   (`ext::door::set_hold_open`) instead of relying on the camera to trigger this one.
+/// * The door sits **off centre, to the right**, because the menu's title and its column of
+///   options are set against the left margin (`ext/menu.rs`) and a door in the middle would
+///   end up behind the text with its sunset showing through the letters. Which side of the
+///   frame the door lands on is set by the yaw offset alone, not by where the camera stands --
+///   turning left carries it right, from either side.
+/// * Which side the camera **stands** on is a separate decision, and it is the leaf that makes
+///   it. The hinge is the opening's local -x edge and the leaf swings out past 90 degrees, so
+///   at any open angle it ends up on the far side of the hinge from the opening. Stand on that
+///   same side and the leaf is between you and the sunset, and the door reads as a slab with a
+///   sliver of light beside it; stand on the OTHER side, as here, and the leaf swings clear --
+///   the opening is unobstructed and the leaf's panelled face is seen at forty degrees, lit.
+/// * The eye stands **four units out**, which with the lens below puts the door at nearly two
+///   thirds of the frame's height -- the subject of the picture rather than a detail in it.
+///   That is inside the door's own opening radius, so the leaf would swing for this camera
+///   anyway; the title still holds doors open explicitly (`ext::door::set_hold_open`) rather
+///   than depending on that, because the vantage is composed for the shot and not for the
+///   trigger.
+/// * The lens is [`TITLE_FOV`], not the playing one, which is what lets the first two hold at
+///   a comfortable distance instead of forcing the camera onto the doorstep.
 ///
-/// Eye height is standing height above the knoll rather than anything cinematic: the horizon it
-/// puts behind the door is the one the player will see a second later when the game starts.
+/// Eye height is NOT standing height -- see `EYE_H`.
 pub fn title_view() -> (Vector3, f32, f32) {
-    /// Strides back from the door's face and to its right. The pair sets both how big the door
-    /// reads and how obliquely the opening is seen -- keep SIDE well under BACK or the sunset
-    /// through it foreshortens to a slot.
-    const BACK: f32 = 6.6;
-    const SIDE: f32 = 3.0;
-    /// How far right of the door the shot then aims, in radians. Screen position, not distance:
-    /// an angular offset holds the door in the left third however close the camera stands.
-    const OFF_CENTRE: f32 = 0.38;
-    /// A few degrees down, so the meadow carries the option list rather than the sky.
-    const PITCH: f32 = -0.05;
+    /// Strides back from the door's face and to its RIGHT (its local +x, the side the leaf
+    /// swings away from). The pair sets both how big the door reads and how obliquely the
+    /// opening is seen -- keep SIDE well under BACK or the sunset through it foreshortens to
+    /// a slot.
+    const BACK: f32 = 4.4;
+    const SIDE: f32 = 1.35;
+    /// How far LEFT of the door the shot then aims, in radians. Screen position, not distance:
+    /// an angular offset holds the door in the right third however close the camera stands.
+    /// Larger than it looks, because [`TITLE_FOV`] is narrow -- the same offset pushes a door
+    /// further across a 42 degree frame than across a 60 degree one.
+    const OFF_CENTRE: f32 = 0.245;
+    /// Eight degrees down. It is what puts the skyline at two fifths of the frame's height,
+    /// leaving the lower three fifths to the meadow the option column stands on.
+    const PITCH: f32 = -0.075;
+    /// Eye height above the knoll -- LOW, at under two thirds of standing height
+    /// (`GH_PLAYER_HEIGHT` is 1.5, which is nearly the top of a door only 1.7 tall).
+    ///
+    /// It decides what the doorway shows, and that is the whole picture. From a standing eye
+    /// you look DOWN through the opening and see water; the sea's horizon and the sun sitting
+    /// on it come into the gap only once the eye is well below the lintel. It also brings the
+    /// near grass up toward the lens, which is where the foreground comes from -- but not so
+    /// far that the blades swallow the frame, which is what 0.8 did.
+    const EYE_H: f32 = 1.05;
 
-    let eye =
-        Vector3::new(DOOR_POS.x + SIDE, terrain::DOOR_Y + GH_PLAYER_HEIGHT, DOOR_POS.z + BACK);
-    // Aim at the door, then turn further right so it falls out of the centred option list.
+    let eye = Vector3::new(DOOR_POS.x + SIDE, terrain::DOOR_Y + EYE_H, DOOR_POS.z + BACK);
+    // Aim at the door, then turn further left so it falls clear of the option column.
     // The yaw convention is the engine's own: `Physical::try_portal` re-aims a warped object
-    // with exactly this atan2, and `Player::look` decreases the angle when the view turns right.
+    // with exactly this atan2, and `Player::look` decreases the angle when the view turns right
+    // -- so ADDING the offset turns left and carries the door to the right of frame.
     let to_door = DOOR_POS - eye;
-    let yaw = -to_door.x.atan2(-to_door.z) - OFF_CENTRE;
+    let yaw = -to_door.x.atan2(-to_door.z) + OFF_CENTRE;
     (eye, yaw, PITCH)
 }
 
@@ -196,25 +235,45 @@ mod tests {
         // far world through. Behind it there would be nothing to see but a blank back.
         assert!(eye.z > DOOR_POS.z, "title camera is behind the door");
 
-        // Far enough out that proximity alone would let the leaf shut, which is the whole
-        // reason the title screen holds doors open instead of trusting the camera to do it.
+        // Close enough that the door is the subject and far enough that the frame still holds
+        // meadow either side of it. The lower bound is the door's own collider: the camera is
+        // parked, not simulated, so nothing would push it out of a doorpost it was standing in.
         let mut flat = DOOR_POS - eye;
         flat.y = 0.0;
-        assert!(
-            flat.mag() > crate::ext::door::CLOSE_DIST,
-            "vantage is {} out, inside the door's own opening radius",
-            flat.mag()
-        );
+        assert!(flat.mag() > 1.5, "vantage is {} out, inside the door frame", flat.mag());
+        assert!(flat.mag() < 5.0, "vantage is {} out and the door is a detail", flat.mag());
 
-        // Off the view axis on purpose -- the menu's option list owns the middle of the frame.
-        // Measured in the horizontal plane, because that is the direction being composed for;
-        // the pitch is a couple of degrees and says nothing about where the door lands.
+        // Off the view axis on purpose, and to the RIGHT -- the menu's title and option column
+        // own the left of the frame. Measured in the horizontal plane, because that is the
+        // direction being composed for; the pitch is a couple of degrees and says nothing about
+        // where the door lands.
         let forward = Vector3::new(-yaw.sin(), 0.0, -yaw.cos());
         let off = forward.dot(flat.normalized()).acos();
         assert!(off > 0.20, "door is near centred, and the option list will sit on it");
-        // GH_FOV is the VERTICAL 60 degrees; at any widescreen aspect the horizontal half-angle
-        // is past 0.75 rad, so this leaves the door a wide margin from the edge of the frame.
-        assert!(off < 0.50, "door is {off} rad off axis and drifting out of frame");
+        // The horizontal half-angle at TITLE_FOV and 16:9 is atan(tan(21 deg) * 16/9) = 0.59
+        // rad, so this leaves the door a clear margin from the edge of the frame.
+        assert!(off < 0.42, "door is {off} rad off axis and drifting out of frame");
+        // Which side of the frame: project the door's bearing onto the camera's right axis,
+        // which for a Y-up camera looking along `forward` is `cross(forward, up)`.
+        let right = Vector3::new(-forward.z, 0.0, forward.x);
+        assert!(
+            right.dot(flat.normalized()) > 0.15,
+            "door is not clearly to the right of frame, where the title and options are not"
+        );
+
+        // And on the side of the door the leaf swings AWAY from, so the opening is not behind
+        // it. The hinge is the opening's local -x edge (`ext::door::Door::hinge_world`) and the
+        // leaf opens past 90 degrees, so it always ends up beyond that edge: an eye at local
+        // +x sees past it, an eye at local -x sees the back of it.
+        assert!(eye.x > DOOR_POS.x, "camera is on the leaf's side and the doorway is blocked");
+    }
+
+    /// The title is shot on a longer lens than the game is played on, and a plausible one:
+    /// wide enough to keep the meadow, narrow enough to make the door the subject.
+    #[test]
+    fn the_title_lens_is_longer_than_the_playing_one() {
+        const { assert!(TITLE_FOV < crate::game_header::GH_FOV) }
+        const { assert!(TITLE_FOV > 25.0) }
     }
 
     /// The one-way door's trigger: on the meadow -- at the spawn, at the title's vantage,

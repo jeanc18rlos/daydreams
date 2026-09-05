@@ -122,7 +122,7 @@ pub fn fence_and_respawn(
         Vector3::new(hi.x + FENCE_MARGIN, hi.y, hi.z + FENCE_MARGIN),
     );
     objs.push(Rc::new(RefCell::new(RoomLogic::new(move |ctx| {
-        if fell_out(ctx.player_pos, floor_y, footprint) {
+        if fell_out(ctx.player_pos, ctx.player_p_scale, floor_y, footprint) {
             request_respawn(arrival);
         }
     }))) as Rc<RefCell<dyn ObjectT>>);
@@ -134,6 +134,36 @@ pub fn union((alo, ahi): (Vector3, Vector3), (blo, bhi): (Vector3, Vector3)) -> 
         Vector3::new(alo.x.min(blo.x), alo.y.min(blo.y), alo.z.min(blo.z)),
         Vector3::new(ahi.x.max(bhi.x), ahi.y.max(bhi.y), ahi.z.max(bhi.z)),
     )
+}
+
+/// The two heights [`load`] needs, which are only the same height by luck.
+///
+/// `floor_y` used to be one number doing both jobs, and for a room with a flat floor it can be:
+/// the dark cap goes `backrooms::CAP_DROP` under it and `backrooms::fell_out` calls anyone half
+/// a metre below it fallen out. The two pull apart the moment a level's ground is not flat.
+///
+/// The Liminal Neighborhood's is not: its road lies 0.81 m below its lawns, so the fall line has
+/// to sit just under the road (any higher and walking the road is a fall; any lower and the
+/// empty pool in the back garden stops being one). That puts the cap 5 cm under the tarmac --
+/// and 5 cm is under the depth buffer's resolution at 60 m once the engine collapses the near
+/// plane to a centimetre, which it does whenever the player is up against a portal
+/// (`Engine::render`, `nearest_portal_dist`). The near-black cap then punches through the road
+/// in bands, and it does it *only* near a cut, so the road appears to break up as you approach
+/// one and heal as you step through. Which is the one thing a seam cannot do.
+#[derive(Clone, Copy, Debug)]
+pub struct Floor {
+    /// Where the level's ground is: what a fall is measured from.
+    pub walk: f32,
+    /// What the dark cap is hung under. Anything comfortably below every surface the player
+    /// can see; it only has to be under the world, not near it.
+    pub cap: f32,
+}
+
+impl Floor {
+    /// Both jobs at one height: a room with a flat floor and no portal to stand against.
+    pub fn at(y: f32) -> Floor {
+        Floor { walk: y, cap: y }
+    }
 }
 
 /// What a level has built outside its model before the model is loaded: the elevator.
@@ -157,12 +187,12 @@ pub fn load(
     spec: &Load,
     placement: &Object,
     openings: Openings,
-    floor_y: f32,
+    floor: Floor,
     arrival: Respawn,
 ) -> (Vector3, Vector3) {
     // An interior from the first step: every eye grades as one (no meadow split to cross).
     view::set_scene_mood(view::MOOD_INTERIOR);
-    let bounds = build(gl, res, objs, spec, placement, openings, floor_y, arrival, Vector3::zero());
+    let bounds = build(gl, res, objs, spec, placement, openings, floor, arrival, Vector3::zero());
     player.base.set_position(arrival.pos);
     player.set_look(arrival.yaw, 0.0);
     bounds
@@ -186,7 +216,7 @@ pub fn build(
     spec: &Load,
     placement: &Object,
     openings: Openings,
-    floor_y: f32,
+    floor: Floor,
     respawn: Respawn,
     shift: Vector3,
 ) -> (Vector3, Vector3) {
@@ -212,12 +242,11 @@ pub fn build(
     // The cap first, then the model: a translucent surface blends over what was drawn
     // before it, and the cap is the dark the water would otherwise show the sky through
     // where a wall lets the outside in.
-    objs.push(
-        Rc::new(RefCell::new(GroundCap::under(res, (lo, hi), floor_y))) as Rc<RefCell<dyn ObjectT>>
-    );
+    objs.push(Rc::new(RefCell::new(GroundCap::under(res, (lo, hi), floor.cap)))
+        as Rc<RefCell<dyn ObjectT>>);
     objs.push(Rc::new(RefCell::new(prop)) as Rc<RefCell<dyn ObjectT>>);
 
-    fence_and_respawn(res, objs, (lo, hi), floor_y, respawn);
+    fence_and_respawn(res, objs, (lo, hi), floor.walk, respawn);
     (lo, hi)
 }
 

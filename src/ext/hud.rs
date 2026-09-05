@@ -34,6 +34,12 @@ const HAND_PX: f32 = 44.0;
 const HINT_Y: f32 = 0.86;
 const HINT_SIZE: f32 = 0.022;
 
+/// EXT: the round's status line (`ext/hunt.rs`), at the TOP of the screen -- the hint line's
+/// 0.86 and the inventory row's 0.913 own the bottom, and a clock has to be readable at a
+/// glance while the bottom line is busy telling you what you are holding.
+const STATUS_Y: f32 = 0.055;
+const STATUS_SIZE: f32 = 0.030;
+
 /// The inventory row, all as fractions of the drawable's height so the row keeps its
 /// proportions on any window: one slot's size, the gap between two, where the row's bottom
 /// edge sits, how much of a corner is taken off, the label's size and the border's thickness.
@@ -82,6 +88,14 @@ pub fn draw(ui: &Ui, cursor: Cursor) {
 pub fn draw_hint(ui: &Ui, text: &str) {
     let (w, h) = ui.size();
     ui.draw_text(text, w * 0.5, h * HINT_Y, h * HINT_SIZE, WHITE, Align::Center);
+}
+
+/// EXT: the round's clock and result, centred at the top of the screen in the menu's gold --
+/// a different colour and a different place from the hint line, so the two never read as one
+/// sentence.
+pub fn draw_status(ui: &Ui, text: &str) {
+    let (w, h) = ui.size();
+    ui.draw_text(text, w * 0.5, h * STATUS_Y, h * STATUS_SIZE, GOLD, Align::Center);
 }
 
 /// One quarter of a rounded corner of radius `r`, as horizontal strips: for each, how far its

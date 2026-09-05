@@ -50,14 +50,15 @@
 //! DualSense. An unconfirmed instant exit on the wake button is a trap, so PS took over the
 //! toggle Options gave up.
 //!
-//! # Why the bumpers are modifiers and not scene keys
+//! # Why the bumpers are modifiers and nothing else
 //!
-//! L1/R1 originally doubled the D-pad as previous/next scene. Object rotation (src/ext/rotate.rs)
-//! wants R1 as a *held* modifier, Superliminal-style, and a button cannot be both a held
-//! modifier and an edge-triggered action without a "consumed" flag and an awkward ordering
-//! dependency between this module and `Rotate::begin_frame`. So scene switching now lives on
-//! the D-pad only, and the bumpers are pure modifiers: R1's level is published through
-//! `Input::pad_rotate_mod` every poll and nothing here ever raises an event from it.
+//! L1/R1 once cycled scenes, as the D-pad did. Object rotation (src/ext/rotate.rs) wants R1 as
+//! a *held* modifier, Superliminal-style, and a button cannot be both a held modifier and an
+//! edge-triggered action without a "consumed" flag and an awkward ordering dependency between
+//! this module and `Rotate::begin_frame`. Scene switching has since left the pad altogether --
+//! SWITCH LEVEL in the pause menu is where a level is chosen -- so the bumpers are pure
+//! modifiers: R1's level is published through `Input::pad_rotate_mod` every poll and nothing
+//! here ever raises an event from it.
 //!
 //! # Analog vs the ported input model
 //!
@@ -68,13 +69,42 @@
 //! So the gamepad writes into two extra `Input` fields rather than faking key presses, and the
 //! ported movement code needs only a two-line addition.
 
+use crate::game_header::GH_DT;
 use crate::input::Input;
 
 /// Sticks report small non-zero values at rest; below this we treat them as centred.
 const STICK_DEADZONE: f32 = 0.18;
-/// Right-stick look speed, in radians per fixed step, at full deflection.
-/// Tuned against `GH_MOUSE_SENSITIVITY` so the two input paths feel comparable.
-const LOOK_RATE: f32 = 0.055;
+
+/// Right-stick look speed at full deflection, in **radians per second**, at the middle
+/// sensitivity notch.
+///
+/// Per second, not per step, and that is the whole of the calibration. `Input::pad_look_*` are
+/// spent by `Player::update_player` on every 500 Hz fixed step ([`GH_DT`]) rather than once per
+/// rendered frame, and `Input::end_frame` -- which decays the mouse's own delta on its way past
+/// -- does not touch them, so a number that reads like a sane nudge for one frame is paid out
+/// five hundred times a second. The 0.055 rad/step this replaced turned the camera at 27.5
+/// rad/s: 1576 degrees a second, a full circle in under a quarter of a second, with the lowest
+/// of the ten sensitivity notches still leaving 645 -- which is why the menu could not rescue
+/// it. Stated per second there is nothing left to get wrong, and [`LOOK_RATE`] converts once.
+///
+/// 150 deg/s at the default notch. The settings ladder spans 0.41x to 3.05x
+/// (`ext::settings::scale_of`), so the ten notches cover 61 to 458 deg/s: slower than a walk
+/// at one end, faster than most console shooters at the other.
+const LOOK_RATE_PER_SEC: f32 = 2.618;
+/// [`LOOK_RATE_PER_SEC`] as radians per fixed step, which is what `Input::pad_look_*` carry.
+const LOOK_RATE: f32 = LOOK_RATE_PER_SEC * GH_DT;
+
+/// Exponent on the look stick's deflection (see [`look_stick`]).
+///
+/// A stick is a rate control with about 12 mm of throw, and a linear map spends most of that
+/// throw in speeds nobody aims with: the first millimetre past the deadzone is already a tenth
+/// of full speed. Squaring it makes half deflection a quarter of the rate, which puts the slow
+/// end -- the end a player looks *with* -- across most of the travel, and leaves the top speed
+/// where the notch says. It also takes the sting out of a drifting stick, whose deflection is
+/// small by definition: the drift that made `--no-gamepad` necessary for reproducible runs now
+/// arrives squared.
+const LOOK_CURVE: f32 = 2.0;
+
 /// Analog triggers read as an axis on some backends; past this they count as pressed.
 const TRIGGER_THRESHOLD: f32 = 0.5;
 
@@ -90,8 +120,6 @@ pub struct PadEvents {
     pub menu_right: bool,
     pub menu_confirm: bool,
     pub menu_back: bool,
-    pub next_scene: bool,
-    pub prev_scene: bool,
     /// EXT: open the pause menu, or close it again -- the pad's equivalent of Escape.
     pub pause: bool,
     pub toggle_fullscreen: bool,
@@ -105,12 +133,7 @@ pub struct PadEvents {
 #[allow(dead_code)] // EXT: convenience API.
 impl PadEvents {
     pub fn any(&self) -> bool {
-        self.grab
-            || self.next_scene
-            || self.prev_scene
-            || self.pause
-            || self.toggle_fullscreen
-            || self.toggle_mute
+        self.grab || self.pause || self.toggle_fullscreen || self.toggle_mute
     }
 }
 
@@ -124,8 +147,6 @@ struct ButtonState {
     menu_right: bool,
     menu_confirm: bool,
     menu_back: bool,
-    next_scene: bool,
-    prev_scene: bool,
     pause: bool,
     fullscreen: bool,
     mute: bool,
@@ -221,8 +242,12 @@ impl Gamepads {
         for (_id, pad) in gilrs.gamepads() {
             let lx = deadzone(pad.value(gilrs::Axis::LeftStickX));
             let ly = deadzone(pad.value(gilrs::Axis::LeftStickY));
-            let rx = deadzone(pad.value(gilrs::Axis::RightStickX));
-            let ry = deadzone(pad.value(gilrs::Axis::RightStickY));
+            // The look stick gets its deadzone and curve as a vector, not per axis -- see
+            // `look_stick`.
+            let (rx, ry) = look_stick(
+                pad.value(gilrs::Axis::RightStickX),
+                pad.value(gilrs::Axis::RightStickY),
+            );
 
             move_x += lx;
             move_y += ly;
@@ -239,10 +264,6 @@ impl Gamepads {
                 || pressed(gilrs::Button::RightTrigger2)
                 || analog(gilrs::Button::RightTrigger2);
             jump |= pressed(gilrs::Button::South);
-            // EXT: scene switching is D-pad only -- see the module docs for why the bumpers
-            // were taken off these bindings.
-            cur.next_scene |= pressed(gilrs::Button::DPadRight);
-            cur.prev_scene |= pressed(gilrs::Button::DPadLeft);
             rotate_mod |= pressed(gilrs::Button::RightTrigger);
             cur.menu_up |= pressed(gilrs::Button::DPadUp);
             cur.menu_down |= pressed(gilrs::Button::DPadDown);
@@ -294,8 +315,6 @@ impl Gamepads {
         events.menu_right = cur.menu_right && !self.prev.menu_right;
         events.menu_confirm = cur.menu_confirm && !self.prev.menu_confirm;
         events.menu_back = cur.menu_back && !self.prev.menu_back;
-        events.next_scene = cur.next_scene && !self.prev.next_scene;
-        events.prev_scene = cur.prev_scene && !self.prev.prev_scene;
         events.pause = cur.pause && !self.prev.pause;
         events.toggle_fullscreen = cur.fullscreen && !self.prev.fullscreen;
         events.toggle_mute = cur.mute && !self.prev.mute;
@@ -306,6 +325,33 @@ impl Gamepads {
     }
 }
 
+/// The look stick's deflection: one **radial** deadzone and one response curve, applied to the
+/// pair rather than to each axis.
+///
+/// Radial because look is a direction where movement is two independent amounts. Gate the axes
+/// separately, as [`deadzone`] does for the left stick, and the dead region is a square: a
+/// stick pushed exactly diagonally reads 0.17 on both axes -- a real deflection of 0.24 -- and
+/// does nothing at all, while the same push a few degrees off the diagonal moves one axis and
+/// not the other, so a slow diagonal pan arrives as a stair. One circle around the centre fixes
+/// both, and it is also the shape the hardware's dead region actually has.
+///
+/// Returns the deflection in -1..1 per axis, of magnitude at most 1: rescaled so the curve
+/// starts at zero at the deadzone's edge rather than jumping, raised to [`LOOK_CURVE`], and
+/// pointed back along the direction the stick was pushed.
+fn look_stick(x: f32, y: f32) -> (f32, f32) {
+    let mag = x.hypot(y);
+    if mag < STICK_DEADZONE {
+        return (0.0, 0.0);
+    }
+    // A square-gated stick can report (1, 1), a magnitude of 1.41; the clamp keeps the corners
+    // of the gate from reading as more than full deflection.
+    let live = ((mag - STICK_DEADZONE) / (1.0 - STICK_DEADZONE)).min(1.0);
+    let scale = live.powf(LOOK_CURVE) / mag;
+    (x * scale, y * scale)
+}
+
+/// The movement stick's deadzone, per axis: `Player::Move` takes forward and left as two
+/// independent amounts and clamps their combined magnitude itself (Player.cpp:92-96).
 fn deadzone(v: f32) -> f32 {
     if v.abs() < STICK_DEADZONE {
         0.0
@@ -323,6 +369,7 @@ fn clamp_unit(v: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ext::settings;
 
     #[test]
     fn deadzone_suppresses_drift_and_rescales() {
@@ -339,6 +386,78 @@ mod tests {
     fn deadzone_is_symmetric() {
         for v in [0.3f32, 0.5, 0.75, 1.0] {
             assert!((deadzone(v) + deadzone(-v)).abs() < 1e-6);
+        }
+    }
+
+    /// The regression this file exists to hold: `pad_look_*` are spent once per fixed step, so
+    /// the turn rate is `LOOK_RATE / GH_DT`, and the constant has to be written knowing that.
+    /// It was not, and full deflection turned the camera 1576 degrees a second.
+    #[test]
+    fn full_deflection_is_a_turn_speed_a_thumb_can_aim_with() {
+        let deg_per_sec = |scale: f32| (LOOK_RATE * scale / GH_DT).to_degrees();
+        let default = deg_per_sec(settings::scale_of(settings::DEFAULT_LEVEL));
+        assert!((100.0..=200.0).contains(&default), "{default} deg/s at the default notch");
+        // And the ladder's ends stay useful rather than unusable: the slowest notch still
+        // turns you round, the fastest is fast without being the 645 deg/s the slowest used
+        // to be.
+        let slowest = deg_per_sec(settings::scale_of(1));
+        let fastest = deg_per_sec(settings::scale_of(settings::LEVELS));
+        assert!((40.0..=90.0).contains(&slowest), "{slowest} deg/s at notch 1");
+        assert!(
+            (300.0..=600.0).contains(&fastest),
+            "{fastest} deg/s at notch {}",
+            settings::LEVELS
+        );
+    }
+
+    /// The curve is what makes the slow end aimable: half deflection is a quarter rate, not a
+    /// half, and full deflection still reaches the notch's top speed.
+    #[test]
+    fn look_stick_is_curved_but_reaches_full_deflection() {
+        let mag = |x: f32, y: f32| {
+            let (a, b) = look_stick(x, y);
+            a.hypot(b)
+        };
+        assert_eq!(mag(0.0, 0.0), 0.0);
+        assert_eq!(mag(0.1, 0.05), 0.0, "inside the deadzone should read as centred");
+        assert!(mag(0.19, 0.0) < 0.02, "just past the edge is near zero, not a jump");
+        assert!((mag(1.0, 0.0) - 1.0).abs() < 1e-6, "full deflection must reach full rate");
+        // Halfway along the live travel gives a quarter of the rate (LOOK_CURVE = 2).
+        let half = STICK_DEADZONE + 0.5 * (1.0 - STICK_DEADZONE);
+        assert!((mag(half, 0.0) - 0.25).abs() < 1e-5, "half travel gave {}", mag(half, 0.0));
+        // Monotonic all the way out, so nothing ever slows down as the stick is pushed further.
+        let mut prev = 0.0;
+        for i in 0..=40 {
+            let m = mag(i as f32 / 40.0, 0.0);
+            assert!(m >= prev - 1e-6, "rate fell from {prev} to {m}");
+            prev = m;
+        }
+    }
+
+    /// Radial, not per-axis: a stick pushed exactly diagonally is a real deflection and must
+    /// move the camera, and it must move it at the same rate as the same push along an axis.
+    #[test]
+    fn look_stick_deadzone_is_a_circle_not_a_square() {
+        let d = STICK_DEADZONE;
+        // Both axes inside the per-axis deadzone, but the vector is well outside it.
+        let (x, y) = look_stick(d * 0.9, d * 0.9);
+        assert!(x.hypot(y) > 0.0, "a diagonal push inside the square deadzone did nothing");
+        // Same magnitude, any direction, same rate.
+        let along = look_stick(0.7, 0.0);
+        let diag = look_stick(0.7 / 2f32.sqrt(), 0.7 / 2f32.sqrt());
+        let (m1, m2) = (along.0.hypot(along.1), diag.0.hypot(diag.1));
+        assert!((m1 - m2).abs() < 1e-5, "{m1} along the axis, {m2} on the diagonal");
+        // The corner of a square gate is not more than full deflection.
+        let corner = look_stick(1.0, 1.0);
+        assert!(corner.0.hypot(corner.1) <= 1.0 + 1e-6);
+    }
+
+    #[test]
+    fn look_stick_is_symmetric() {
+        for (x, y) in [(0.3f32, 0.0f32), (0.5, 0.5), (0.0, 0.75), (-0.4, 0.9)] {
+            let (a, b) = look_stick(x, y);
+            let (c, d) = look_stick(-x, -y);
+            assert!((a + c).abs() < 1e-6 && (b + d).abs() < 1e-6, "({x}, {y}) is not symmetric");
         }
     }
 

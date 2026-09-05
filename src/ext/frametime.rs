@@ -38,6 +38,23 @@ impl FrameClock {
         self.last = Some(now);
     }
 
+    /// EXT: mean milliseconds over the last few frames, for the developer overlay
+    /// (src/ext/debug.rs). A short window rather than `stats`'s whole record, because a
+    /// readout is asked "what is it costing me now?", and an average taken over a session
+    /// that began in another scene answers a different question. `None` until the warm-up
+    /// frames are behind us, so the number never opens on a shader compile.
+    pub fn recent_ms(&self) -> Option<f32> {
+        /// Frames in the window. A third of a second at 60 Hz: long enough that the last
+        /// digit is not a flicker, short enough to react while you are still standing there.
+        const WINDOW: usize = 20;
+        let past = self.times.get(WARMUP..)?;
+        let tail = past.get(past.len().saturating_sub(WINDOW)..)?;
+        if tail.is_empty() {
+            return None;
+        }
+        Some(tail.iter().sum::<f32>() / tail.len() as f32 * 1000.0)
+    }
+
     /// `(avg ms, p95 ms, frames counted)` over everything after the warm-up, or `None` if
     /// nothing has been recorded past it.
     pub fn stats(&self) -> Option<(f32, f32, usize)> {

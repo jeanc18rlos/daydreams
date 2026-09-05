@@ -1,11 +1,17 @@
-# DayDreams
+# Hide 'N Dream
 
-**DayDreams** is the game. Underneath it is a faithful Rust port of
+**Hide 'N Dream** is the game. Underneath it is a faithful Rust port of
 **[HackerPoet/NonEuclidean](https://github.com/HackerPoet/NonEuclidean)**, CodeParade's
 non-Euclidean rendering engine (MIT, © 2018 CodeParade). All credit for the engine, the level design,
 the meshes, the textures and the shaders belongs to the original author — this repository
 translates the C++/Win32/OpenGL source into Rust on top of winit + glutin + glow, and builds a game
 on top of that.
+
+The game's name is what a player sees: the title screen, the window bar, this document. The
+*crate* is still `daydreams` — so is the binary, the `DAYDREAMS_*` environment variables, the
+bundle identifier and the per-user settings and log directories, and every command below spells
+it that way. Renaming those moves a released game's saved settings and rewrites every recipe
+here, so it is a separate decision from naming the game.
 
 The original's `LICENSE` is preserved verbatim as [`LICENSE-ORIGINAL-MIT`](LICENSE-ORIGINAL-MIT).
 The video that introduced the project: [*Non-Euclidean Worlds Engine*](https://www.youtube.com/watch?v=kEB11PQ9Eo8).
@@ -182,9 +188,10 @@ logs are to name source lines, keep `debug = 1` in `dist` (and drop the strip), 
 
 ### Git LFS
 
-The files the LFS patterns below match come to about 70 MB across 26 files (the 47 MB Escher
-mesh, the 20 MB Backrooms GLB, the door GLB, the other meshes, the font; `git ls-files -z |
-xargs -0 du -ch` filtered by the patterns), and the history holds more: the door GLB was
+The files the LFS patterns below match come to about 119 MB across 35 files (the 47 MB Escher
+mesh, the 20 MB Backrooms GLB, the 10 MB abandoned-house GLB, the door GLB, the other meshes,
+the font; `git ls-files -z | xargs -0 du -ch` filtered by the patterns), and the history holds
+more: the door GLB was
 committed at 79 MB before its textures were shrunk, and `assets/music/ost.mp3` — the demo's
 placeholder soundtrack, which is not distributable and goes before release — is 20 MB more
 (THIRD_PARTY.md). `.gitattributes` already routes `*.glb`, `*.mp3`, `*.ttf` and
@@ -222,11 +229,18 @@ no crate-wide allows, and the tests pass (see [Status](#status)).
 | `W` `A` `S` `D` | Walk |
 | `Shift` (hold) | Run — see [Running](#running--extsprintrs) |
 | `Space` | Jump — see [Jumping](#jumping--extjumprs) |
-| `1` – `7` | Load scene 1–7 |
+| `E` | Grab / release, use the held key, ride the elevator |
+| `F` / `G` | Stow or take out / put down — see [Inventory](#inventory--extinventoryrs) |
+| `R` (hold) | Rotate the held object |
+| `1` – `6`, wheel | Pick the inventory slot |
+| `M` | Mute |
+| `F3` | Developer overlay — see [Developer mode](#developer-mode--extdebugrs) |
+| `Cmd`/`Ctrl` + `S` + `C` | Save the frame to Documents — same section |
 | `Alt` + `Enter` | Toggle fullscreen |
-| `Esc` | Quit |
+| `Esc` | Pause menu (which owns Exit) |
 
-The seven scenes, in key order and in the registration order of `Engine.cpp:41-47`:
+The seven scenes, in the registration order of `Engine.cpp:41-47` (chosen from SWITCH LEVEL in
+the pause menu; the number keys that once loaded them are the inventory's slots now):
 
 | Key | Scene | Rust type |
 | --- | --- | --- |
@@ -301,7 +315,8 @@ with one exception noted below.
 
 | Path | What |
 |------|------|
-| `assets/fonts/RobotoCondensed[wght].ttf` | The UI face, Roboto Condensed (SIL OFL — the licence sits beside it). Vendored rather than taken from the system, because `tools/gen_ui.py` bakes it into `Textures/ui_font.bmp` and that atlas has to be reproducible. |
+| `assets/fonts/PlaypenSans[wght].ttf` | The interface face, Playpen Sans (SIL OFL — the licence sits beside it), pinned to its Bold instance. Vendored rather than taken from the system, because `tools/gen_ui.py` bakes it into `Textures/ui_font.bmp` and that atlas has to be reproducible. |
+| `assets/fonts/HennyPenny-Regular.ttf` | The title face (SIL OFL, licence beside it): the game's name on the title screen, and nothing else. Baked into `Textures/ui_title.bmp`, which holds only the eleven characters that name uses. |
 | `assets/music/` | Five 30 s ambience loops, one per room. Streamed, not decoded up front — see Audio below. |
 | `assets/sfx/` | 42 one-shot effects, by name. Both directories are written by `tools/gen_sfx.py` and contain nothing recorded. |
 | `assets/paintings/src/` | The portrait variation sheets — the user's edits of public-domain paintings; `tools/gen_portraits.py` cuts them into `Textures/portrait_*.bmp` (see the README beside them and THIRD_PARTY.md). |
@@ -863,10 +878,12 @@ carries *physical* pixels, so the window's scale factor is divided out before th
 conversion — otherwise the same flick of the same fingers spends two slots on a retina panel and
 one on an external 1x monitor.
 
-The keys were chosen against a crowded keyboard: the number row and the punctuation keys are the
-[scene registry's](#scene-registry), `E` is grab/use, `M` mute, `R` rotate, `Shift` sprint. The
-**gamepad is deliberately left out**: D-pad ←→ already cycles scenes, and a button that means two
-things depending on how long you have been playing is worse than no button. Capacity is six
+The keys were chosen against a crowded keyboard: `E` is grab/use, `M` mute, `R` rotate, `Shift`
+sprint. The number row is the slots' own — it used to load scenes, which made reaching for a slot
+in the Backrooms drop you into the Pillar Rooms; a level is chosen from SWITCH LEVEL in the pause
+menu now, and nothing loads a scene from a bare keypress. The **gamepad is deliberately left
+out**: a button that means two things depending on how long you have been playing is worse than
+no button. Capacity is six
 because the row has to be readable at a glance without crowding the hint line, and because six is
 enough that *which* slot is a real choice and few enough that scrolling to one is never a chore.
 
@@ -939,6 +956,14 @@ it into `stow` / `retrieve` / `drop` / `refuse` (`inventory::sfx`).
 # 6. Across a level: key stowed in the cabin (F at 30), E rides, "[load] scene 17", and F at
 #    3200 takes the same key out in the Pool Rooms, at the Pool Rooms' own coordinates
 --scene 16 --hold-key --pos 995.25,1.5,-8.0 --yaw 180 --stow-at 30,3200 --ride-at 60 --frames 3600
+
+# 7. The number row picks a slot outright (`--slot-at slot@frame`): the king is stowed in slot
+#    1 (F at 400), 6 selects an empty pocket -- "[inv] refused: THAT SLOT IS EMPTY" at 600 --
+#    and 1 selects it back, so F at 800 is "[inv] king out of slot 1, into the hand". The run
+#    stays in the Backrooms throughout, which is the point: a number used to load its scene
+#    and take the pockets with it
+--scene 16 --pos 999.6,1.5,-0.9 --yaw 90 --pitch=-47 --e-at 300 --stow-at 400,600,800 \
+  --slot-at 6@500,1@700 --frames 1000
 ```
 
 A seventh stow into a full inventory, and the wheel's wrap, are pinned by the tests rather than
@@ -1283,7 +1308,16 @@ emergence and the arm test are unit tested with scripted positions.
 Using it: once per rendered frame the held key looks down the crosshair for the nearest
 object that answers `ObjectT::accepts_key` within 2.5 m, by bounding sphere as the grab
 picks, and with one there offers E  USE THE KEY and asks for the frame's E press
-(`key::take_wants_use`). The press itself goes through the one latch every E goes through --
+(`key::wants_use`). That answer *stands* until the key itself changes it, rather than being
+taken by the engine's read: the fixed-step loop runs no step at all on a frame shorter than
+2 ms, which is most frames of an uncapped build, and a key with no step in which to renew the
+offer lost the press to the grab, which dropped it. The other half of that is the withdrawal,
+and every way of stopping has to perform it -- `on_release`, `on_stow`, a step whose crosshair
+has left the lock, and, the one that is easy to miss, *the step that uses the key*: it asks for
+its own removal in the same breath and so has no later step to speak from. Left standing, that
+answer outlived the key, and the engine went on handing every E to an object no longer in the
+scene -- after the window was unlocked nothing could be picked up for the rest of the run.
+The press itself goes through the one latch every E goes through --
 the keyboard's key, the gamepad's button and `--e-at` all set it -- and `Engine::ext_update`
 hands it out in order of claim: the elevator's when the player stands in its cabin, then the
 held key's (`key::press`), and only otherwise the grab's, as a pickup or a release. So a
@@ -1320,6 +1354,11 @@ daydreams --windowed --mute --scene 16 --pos 994.4,1.5,1.55 --yaw=-100.4 --pitch
 #    a frame is under a millisecond, and the key's first look for a lock happens after the
 #    scene has settled -- press too early and the grab takes the press as a release instead.
 daydreams --windowed --mute --scene 16 --hold-key --pos 987,1.5,1.2 --yaw 180 --pitch=-10 --e-at 200 --frames 400 --shot use.bmp
+# 2b. And E again afterwards, which is what proves the used key let go of the binding
+#    (`--e-at` takes a list): "[grab] picked up object #27" -- the unlocked window itself.
+#    Before the withdrawal above, this second press went to a key that had already removed
+#    itself and nothing at all could be picked up again.
+daydreams --windowed --mute --scene 16 --hold-key --pos 987,1.5,1.2 --yaw 180 --pitch=-10 --e-at 200,900 --frames 1300 --shot after.bmp
 # 3. Unlocked and grown to a door, walk through: `[load] scene 18 in 3 ms` and the `[shot]`
 #    at (-3.82, 1.50, -9.13), the Overgrown level's own coordinates, walked on from the
 #    partner at (-8.86, 1.35, -9.3).
@@ -1481,7 +1520,7 @@ The same table is in the game, under **Options → Controls**, alongside the key
 | Right stick | Look |
 | Square / R2 | Grab / release |
 | R1 (hold) | Rotate the held object with the right stick |
-| D-pad ←→ | Previous / next scene (in a menu: change the setting under the cursor) |
+| D-pad ←→ | Menu: change the setting under the cursor |
 | D-pad ↑↓, Cross, Circle | Menu: move, confirm, back |
 | Options | Open the pause menu / close it again |
 | Create | Mute |
@@ -1500,6 +1539,33 @@ Options and PS both moved. Without a pause binding a pad could start a game and 
 freed quitting to live where it belongs (pause → MAIN MENU → EXIT) and got it off the PS button,
 which is also the button you press to wake a sleeping DualSense: an unconfirmed instant exit on the
 wake button is a trap.
+
+**Look calibration.** `Input::pad_look_x/y` are spent by `Player::update_player` on every
+**fixed step** — 500 Hz, `GH_DT` — not once per rendered frame, and `Input::end_frame` decays the
+mouse's delta on its way past but never touches the stick's. So the constant behind them is a
+*rate*, and a number that reads like a sane nudge for one frame is paid out five hundred times a
+second. It was written as one: 0.055 rad/step turned the camera 27.5 rad/s — **1576 °/s**, a full
+circle in under a quarter second — and the lowest of the ten sensitivity notches still left
+645 °/s, so **Options → Gamepad sensitivity** could not rescue it. `gamepad::LOOK_RATE_PER_SEC`
+now states the rate per second and converts once: **150 °/s** at full deflection on the default
+notch, the ladder covering 61 to 458 °/s.
+
+The stick also gets a **radial** deadzone and a squared response curve (`gamepad::look_stick`),
+where the movement stick keeps its per-axis one. Radial because look is a direction and movement
+is two independent amounts: gate the axes separately and the dead region is a square, so a stick
+pushed exactly diagonally reads 0.17 on each axis — a real deflection of 0.24 — and does nothing,
+while the same push a few degrees off the diagonal moves one axis and not the other and a slow
+diagonal pan arrives as a stair. Squared because a linear map spends most of a stick's 12 mm of
+throw in speeds nobody aims with; half deflection is now a quarter of the rate, which puts the
+slow end across most of the travel and leaves the top speed where the notch says. It takes the
+sting out of a drifting stick too, drift being small by definition — the drift `--no-gamepad`
+exists for now arrives squared.
+
+`ext/rotate.rs` reads the same two fields once per *rendered* frame to spin a held object, so its
+`PAD_ROT_SENS` carries the cadence conversion explicitly (`0.8 / (60 · GH_DT)`) and a test ties
+the two constants together: a held object turns at 0.8× the camera's rate at 60 Hz. Object
+rotation is therefore calibrated at 60 Hz and is proportionally faster on a faster display; the
+camera is not, being spent per fixed step.
 
 One detail worth knowing if a controller ever seems invisible: a pad already connected when the
 process starts is **not** in `gilrs.gamepads()` yet. gilrs learns of it from a queued `Connected`
@@ -1559,9 +1625,9 @@ is `src/level16.rs`. That off-by-one is easy to get wrong from the filename alon
 `music_names_bind_to_their_scenes` asserts every shipped name against the registry. A name
 that starts with anything else is the fallback. Scene changes crossfade.
 
-**The title screen overrides the scene's track.** Its backdrop *is* the INTRO scene, so binding
-by scene alone played the Backrooms' 100 Hz fluorescent buzz over what the title actually shows:
-a night meadow with a white door in the middle distance. `Audio::set_on_title`, which
+**The title screen overrides the scene's track.** Its backdrop *is* a level -- `scenes::TITLE`,
+the Intro -- so binding by scene alone played that level's ambience over what the title actually
+shows: a night meadow with a white door in the middle distance. `Audio::set_on_title`, which
 `Engine::run_frame` calls every frame, takes the meadow scene's own track instead — the fallback
 if that file is not installed — and hands the scene's back when the title closes. The startup
 sets it before the first load, so a launch never briefly binds the backdrop's track and fades off
@@ -1641,6 +1707,17 @@ call sites fired and which set each footfall resolved to. The pure halves (`pick
 file is decoded by one of them, with no output device involved.
 
 ## Settings — `ext/settings.rs`
+
+**Credits roll.** They scroll, rather than sitting in a fixed column, and the reason is a licence
+one as much as a presentational one: the column they replaced held eleven lines against a budget
+of exactly eleven — a twelfth failed a `const` assert and broke the *build* — so the last two
+assets added to the game had to be merged onto one line to fit. CC-BY-4.0 asks for attribution by
+name, and a screen that can only hold so many names is a screen that will eventually drop one. The
+roll has no such ceiling, and `every_cc_by_author_is_credited` holds it to naming every author
+whose licence requires it. It is driven from the clock (`Menu::goto` stamps the start, `draw`
+takes the offset from it) rather than stepped per frame, so it cannot drift with the frame rate
+and needs nothing mutable at draw time; lines fade in at the foot of the band and out at its head,
+and the pass comes round about every 34 seconds.
 
 **Options** carries mouse sensitivity, gamepad sensitivity, mute, and a link to the **Controls**
 key map. Up/down moves between rows, left/right changes the row you are on — D-pad included, so
@@ -1774,11 +1851,25 @@ Where it went, in order of effect:
   nine tiles cull by box, every `Object` by bounding sphere, the door by a sphere around its
   foot. The oblique-clipped portal cameras work unchanged: the planes extracted from their
   matrix are exactly the ones the GPU clips against.
-* **The door GLB is pre-shrunk** (`tools/shrink_glb.py`): its PNGs were 4096², and the loader
-  was decoding ~400 MB of RGBA on three threads to resize them to its 512² `MAP` on every
-  load. They are stored at 512² now, resized once with the same filter, and the file went
-  from 79 MB to 1.3 MB. The geometry bufferViews are copied byte for byte; the JSON is
-  re-serialised with identical values (only the float spellings may differ).
+* **A door GLB was pre-shrunk** (`tools/shrink_glb.py`): the door the intro started with had
+  4096² PNGs, and the loader was decoding ~400 MB of RGBA on three threads to resize them to its
+  512² `MAP` on every load. They were stored at 512² instead, resized once with the same filter,
+  and the file went from 79 MB to 1.3 MB. The geometry bufferViews are copied byte for byte; the
+  JSON is re-serialised with identical values (only the float spellings may differ). That door
+  has since been replaced (below) and the tool now has no shipped asset to its name, but the
+  measurement is why `Load::max_map` exists.
+* **The door is Icevanilla's white PSX one** (`Meshes/psx_essential_doors_pack.glb`, CC-BY-4.0),
+  in the intro meadow and the Backrooms alike. One catch, and it is worth knowing before
+  importing any door: `Anchor::Hinge` hangs a leaf by the **low-x edge of its own bounding box**,
+  and every door in that pack is modelled knob-first — so imported as it came, the leaf would
+  have swung about its own doorknob. `tools/turn_white_door.py` composes a half-turn about Y onto
+  the two nodes the game uses, which puts the hinge where the loader expects it. A rotation, not
+  a mirror, so winding, normals and tangents survive; and invisible in play, because the door is
+  symmetric front to back. `the_model_is_the_door_the_constants_describe` picks the knob out of
+  the leaf's geometry — it is the only part standing proud of the panel — and fails if it is ever
+  on the hinge side again. The leaf is narrower for its height than the door it replaced
+  (`LEAF_ASPECT` 0.468 → 0.4186), so `HALF_W`, `POST_DEPTH` and the eight numbers in
+  `Meshes/intro_door_collide.obj` were all re-derived with it.
 * **The old scene's objects outlive the load.** `Engine::load_scene` used to clear the object
   and portal vectors before `Scene::load`, which expired every `Weak` in the resource caches;
   the title → NEW GAME transition therefore re-parsed the terrain, re-built the grass and
@@ -1808,7 +1899,7 @@ Small additions, each tagged `// EXT:`:
 | File | Hook |
 |------|------|
 | `collider.rs` | read-only `mat()` accessor, so rays can transform the rectangle to world space; `Collider::rect(centre, half_u, half_v)`, the three-corner constructor with the sorting already done |
-| `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`R`/`F`/`G` and the scene keys `8`–`.` (`8` `9` `0` `-` `=` `[` `]` `\` `;` `'` `,` `.`); `Shift` into the `VK_SHIFT` slot and the resolved sprint multipliers; the pad's rotate, sprint and jump *levels*; a `wheel` accumulator in notches, cleared with the other edges by `EndFrame` |
+| `input.rs` | four analog fields, filling the `//Joystick //TODO:` slot; `E`/`M`/`R`/`F`/`G` and the number row the inventory's slots read; `Shift` into the `VK_SHIFT` slot and the resolved sprint multipliers; the pad's rotate, sprint and jump *levels*; a `wheel` accumulator in notches, cleared with the other edges by `EndFrame` |
 | `player.rs` | stick axes added to the keyboard move and look vectors; sprint multipliers on the speed cap, acceleration and bob rate, and a footfall counter; the `#if 0` jump switched on (`ext/jump.rs`) — moved above the physics step, which is the only ported *ordering* that changed and the reason it never worked where it was — plus the touchdown speed sampled in `OnCollide` and the two take-once jump events |
 | `object.rs` | `UpdateCtx` carries the player's eye transform, so room logic can see where you look, and the scene's object vector (`scene`), for an object that reads the others during its step (the held key); `RenderCtx` carries the pass frustum, eye and the shared portal framebuffers, and `draw_impl` culls by bounding sphere; `ObjectT::trimesh()` for triangle-mesh scenery; `Object::rot`, a rotation matrix that stands in for `euler` in `local_to_world`/`world_to_local`/`forward` when set (a rigid body's orientation does not round-trip through Euler angles); the prop hooks on `ObjectT`, all defaulted: `engine_collision()` (false: the collision pass never pushes it and the portal pass never warps it -- something else owns its motion), `on_grab()`, `on_release(velocity)`, `on_rescale(p_scale)` (called by `ext/grab.rs`), `place_flat()` (the grab lays it on the surface it hits instead of standing it off by its sphere), `pick_hint()` (a HUD line while the crosshair is on it), `accepts_key()` (the held key can be used on it: the window, while locked), `on_stow()`/`on_unstow()`, `can_stow()` and `stow_label()` (the inventory takes it out of the world into a slot and puts it back; see [Inventory](#inventory--extinventoryrs)) and `static_collision()` (whether its colliders go into the rigid-body world's load-time snapshot: false for the elevator's leaves and the window) |
 | `frame_buffer.rs` | sized attachments instead of `GH_FBO_SIZE` square |
@@ -1860,7 +1951,7 @@ the original demo's portal-recursive first level. Every expensive thing happens 
 
 | What | Where the cost went |
 |------|---------------------|
-| Cloud shapes (6-octave domain-warped FBM, single-scatter lighting, cirrus layer) | Baked **once** into a 1536x768 panorama by a GLSL pass (`src/ext/skybake.rs`, `Shaders/cloudbake.*`), re-baked every 6 s with advanced noise time so the field evolves, on the title screen as well as in play. The runtime sky (`Shaders/sky.frag`) is one texture fetch + the original sun term -- which matters because the ported renderer draws the sky inside every portal pass. |
+| Cloud shapes (6-octave domain-warped FBM, a low-frequency *weather* field that decides where cloud may grow at all, a three-step light march for the flanks, two cirrus decks crossing) | Baked **once** into a 1536x768 RGBA panorama by a GLSL pass (`src/ext/skybake.rs`, `Shaders/cloudbake.*`), re-baked every 6 s with advanced noise time so the field evolves, on the title screen as well as in play. RGB is the daylight sky; **A is the coverage on its own**, which is what the sunset grade masks with -- deriving it from the luminance instead reads the bake's bright horizon haze as solid overcast and lays a flat cream stripe across the sea. The runtime sky (`Shaders/sky.frag`) is one texture fetch + the original sun term -- which matters because the ported renderer draws the sky inside every portal pass. |
 | Grass detail | Baked offline into a tileable noise atlas (`tools/gen_meadow.py` -> `Textures/grass_noise.bmp`). The shader does two or three taps and zero noise math. |
 | Rolling hills | One heightfield mesh with smooth normals smuggled through the engine's 3-component `vt` channel (the parser discards `vn`), plus a gradient-tilted collider shell -- same scheme as the Relativity walk shell. |
 | "Realism" | Three illusions in `Shaders/grass.frag`: drifting **cloud shadows** (a scrolled low-frequency tap), **valley occlusion** (world height as free AO), and **atmospheric perspective** toward the sky's horizon colour. Plus a backlit sun sheen and a wind ripple that moves no vertices. |
@@ -1873,20 +1964,154 @@ cull cells so a pass only draws what it can see; `Shaders/grassblade.vert` does 
 and stands each blade on the terrain's height field. See [Load time and frame
 cost](#load-time-and-frame-cost) for what that costs.
 
+Two more things the field does, both in every scene that uses it:
+
+**Clumping.** `Shaders/grassblade.vert` scales each blade's length by a low-frequency
+world-space field, so the grass stands in tussocks a metre or two across. The generator already
+varies length per blade, but per-blade randomness is invisible at any distance -- what the eye
+reads is the low-frequency envelope, and a field without one is a carpet with a texture on it.
+`grassblade.frag` and `grass.frag` sample the same field at the same frequency for colour, so
+the patches that stand taller are also the greener ones and the two read as one plant rather
+than as two unrelated noise fields laid over each other.
+
+**Ground mist.** On top of the distance haze, a second term keyed to world height: thick in the
+hollows between the hills, thinning to nothing over the crests. It is capped short of reaching
+the haze colour outright, so the far meadow stays a hair *darker* than the sky it meets -- let
+it arrive exactly and the horizon inverts, with the ground brighter than the overcast above it,
+which reads as a pale band laid across the frame rather than as distance.
+
 The new sky applies to every scene; the ported gradient-only sky is kept as
 `Shaders/sky_plain.frag.txt`.
 
+## The title screen
+
+The menu is drawn over a **live scene**, not a still: `Engine::render_menu_frame` steps the
+backdrop, renders it, and puts the type on top (`ext/menu.rs`, `ext/postfx.rs`). Everything
+below is in service of one frame.
+
+**Which scene.** `scenes::TITLE` -- the Intro, scene `;` -- not `scenes::INTRO`, which is where
+NEW GAME opens. Two indices because they are two jobs: one is where the game is played, the
+other is a photograph. Both are the same meadow and the same white door (`ext/meadow.rs`); what
+differs is what lies through it, and the Intro's door opens on a sunset sea.
+
+**The meadow stays overcast.** The *sunset* belongs to the portal and to nothing else. `mood`
+is chosen per render pass by where that pass's camera is (`ext/view.rs`), so the portal pass
+looking through the doorway grades itself as the sunset while the main pass around it stays
+under cloud -- both in the same frame, on the same baked panorama, for the cost of one uniform.
+Give the meadow a sunset too and the door stops being a way out of anywhere.
+
+That cloud is `view::MOOD_DUSK`, a *near*-side mood the intro asks for and the Backrooms does
+not: the same baked panorama an hour later, grey and unbroken, with a hand's breadth of the
+deck's underside still catching the sun low on its own bearing and nothing warm anywhere else.
+Two things about it are worth the words:
+
+* **The deck is floored, not sampled.** The bake is fair-weather cumulus -- about one okta,
+  scattered puffs with sky between them. *Overcast* is eight oktas by definition: an unbroken
+  sheet whose structure is variation in optical thickness, not holes. So the coverage is
+  floored at 0.85 and the bake's alpha keeps only the last fifteen per cent of the say. Floored
+  in the grade rather than in the bake, because `pano.a` is shared with the portal's sunset,
+  where extending coverage below the bake's horizon would lay a bar of cloud across the sea.
+* **The deck multiplies the sky rather than replacing it.** A cloud is not a grey object hung
+  in front of the sky; it is a translucent layer, and what reaches the eye is the light behind
+  it times how much gets through. Its own light and shade has to be *un-composited* out of the
+  bake first: `lum` is the bake's finished RGB, so wherever coverage is partial it is mostly
+  backdrop, and a thick shadowed flank and clear horizon haze arrive at the same luminance --
+  which inverts the deck, painting the bake's clear sky as the darkest part of it. That was
+  what made the sky read as cut paper.
+
+The point of getting this right is exposure, not weather. A real overcast **out-brightens the
+ground it lights by five to twenty times**; before this the sky was about as dark as the grass,
+and that one mismatch is most of why the shot read as night rather than as an overcast
+afternoon.
+
+The ground under it is still lit coldly. **Every warm thing in the frame comes out of the
+doorway** -- the sea through it, the light it throws (a nineteen-unit pool, because it is the
+only light source there is and one that stopped a few metres out read as a spotlight on a
+stage), the dust in that light, and the warm haze the far grass fades into inside it.
+
+**The shot.** `meadow::title_view` composes it and `Engine::step_title_backdrop` parks the player
+there every frame:
+
+* the door lands in the **right third**, set by an angular offset rather than by distance, so it
+  holds its place at any aspect while the title and the option column own the left;
+* the camera stands on the door's **local +x** side -- the side the leaf swings away from. The
+  hinge is the opening's -x edge and the leaf opens past 90 degrees, so it always ends up beyond
+  that edge: stand on the same side and the leaf is between you and the sunset, stand on the
+  other and the opening is clear with the leaf's panelled face seen at forty degrees;
+* the lens is `meadow::TITLE_FOV`, **36 degrees** against `GH_FOV`'s 60. A playing FOV is wide
+  and exaggerates perspective; pulling in makes the door read twice as large without walking the
+  camera into it, and flattens the hills behind it the way a long lens does. `load_scene`
+  restores `GH_FOV`, so NEW GAME opens at the playing field of view with nothing to remember;
+* the eye is **low** -- `EYE_H`, two thirds of standing height. It decides what the doorway
+  shows, and that is the whole picture: from a standing eye you look *down* through an opening
+  1.7 units tall and see water, and the sea's horizon with the sun sitting on it only comes into
+  the gap once the eye is well below the lintel.
+
+**What the door throws out** -- `ext/doorlight.rs`, this scene only:
+
+* **Shafts.** Not ray tracing: this engine renders straight to the window and has no depth
+  texture to march. It is the oldest volumetric trick there is -- sixteen transparent *slices*
+  through the beam, parallel to the door, stepped outward along the sun's direction, each wider
+  and fainter than the last, added together. Looking along the beam you see the whole stack at
+  once and the sum is the depth of air the light crossed; looking across it you see a cone. They
+  take the depth test, so the grass cuts the far end off, and write no depth, so they never
+  occlude each other or the portal quad drawn after them.
+* **Motes.** One `GL_POINTS` draw of 900 specks. Each vertex is a *seed*, not a position:
+  everything about where a mote is now is computed in `Shaders/mote.vert` from `time`, so there
+  is no simulation, no buffer to update and nothing to reset on a scene load. They start on a
+  Halton pair across the opening -- evenly spread, where a small random sample clumps -- drift
+  out along the same beam and rise, wandering, brightest mid-life.
+
+Both fade with the door's own openness, which they read from the published glow rather than
+being wired to the leaf.
+
+**The post chain** -- `ext/postfx.rs`, `Shaders/post_*`. The backdrop renders into a texture
+instead of the window; then a bright pass at quarter resolution, one separable Gaussian, and a
+resolve that adds the bloom **twice**: once as light, and once as a *veil* -- the scene lifted
+toward the bloom's colour, most where it is darkest. That second use is the dreamlike part and
+it is physical, since light scattering off the air between you and a bright thing washes the
+shadows out rather than brightening them evenly. Then a vignette and a dither. Title frames
+only: gameplay keeps its direct-to-window path untouched. At 2560x1440 the title frame measures
+**1.8 ms**, which measures the same as the frame did without the chain at all -- rendering the
+world into a texture and resolving once costs nothing over drawing it straight to the window's
+own drawable.
+
+**The type.** The title screen is set against the left margin -- name high on the left, options
+in a column under it, EXIT alone in the far corner -- and washed by a *gradient* rather than a
+flat dim, dark where the words are and clear over the door (`Ui::fill_rect_grad`, one draw:
+a strip-wise approximation of a smooth ramp bands visibly at 8 bits, which is what the gradient
+was brought in to avoid). Every other screen stays centred under an even wash; nothing there is
+composed against anything, and centring is what makes a list of settings read as one.
+
+Two things about the lettering itself:
+
+* the name is set in its **own face**. `tools/gen_ui.py` bakes two atlases: the interface face,
+  Playpen Sans Bold at 176 px, for every word the menus say, and Henny Penny at 224 px for the
+  name alone (`Ui::draw_title`). A poster title is set in a display face, and that is most of
+  what makes it read as a title rather than as a large label. The title atlas carries only the
+  eleven characters `TITLE_TEXT` uses, which is why it is a 1024x512 file rather than a second
+  full ASCII sheet — `gen_ui.py` writes the name and the glyph table together, so the two
+  cannot come apart, and `the_title_face_covers_the_name` fails if they ever do;
+* both bakes are sized so nothing is magnified on the panels the game is played on. The largest
+  thing the interface face draws is a screen heading at 0.11 of the drawable height — 158 px at
+  1440p, under the 176 px bake — and the name is drawn at 0.126 of it against a 224 px bake.
+  An earlier 72 px bake was magnified several times over and the letters came out soft, with
+  visibly stepped diagonals.
+
+There is deliberately **no glow on the type**. It is the one element in the frame that is not
+part of the photograph, and anything that makes it glow makes it look like an effect applied to
+a picture rather than like a title over one.
+
 ## Backrooms (scene `'`)
 
-**NEW GAME starts here**, and the title screen is this level seen from the meadow: the intro
-again -- same meadow, same white door, both built by `ext/meadow.rs`, which the two scenes
-share along with the far world's origin and the title screen's vantage -- except that through
-the door is
+**NEW GAME starts here**: the intro again -- same meadow, same white door, both built by
+`ext/meadow.rs`, which the two scenes share along with the far world's origin and the title
+screen's vantage -- except that through the door is
 `Meshes/backrooms_vr.glb`: a Sketchfab light-bake of the Backrooms, 29 primitives, 70k
-triangles, 27 maps, every material `KHR_materials_unlit`. (`scenes::INTRO` is looked up by
-name, so the Intro proper -- the sunset sea, scene `;` -- is still in the level list, just no
-longer where the game begins.) Three things had to exist for it to be a place rather than a
-picture:
+triangles, 27 maps, every material `KHR_materials_unlit`. (The **title screen** stands in the
+Intro proper instead -- the sunset sea, scene `;` -- see [The title screen](#the-title-screen);
+`scenes::INTRO` and `scenes::TITLE` are separate indices, both looked up by name.) Three things
+had to exist for it to be a place rather than a picture:
 
 | What | Where |
 |------|-------|
@@ -2127,6 +2352,237 @@ Screenshots, for the record of the look: `--scene 17` and `--scene 18` at the fo
 shows the whole maze from above (the pool's roof is not; its plan was a throwaway occupancy
 raster, not shipped -- the tests re-measure every number the level is placed by).
 
+## Liminal Neighborhood
+
+`src/level31.rs`: the fourth Sketchfab asset as a level, the first that is outdoors, and an
+**isolated** one -- no elevator, no door, nothing to carry in or out. It is reached from SWITCH
+LEVEL in the pause menu and left the same way. Elbolillo's "Abandoned_House"
+(`Meshes/abandoned_house.glb`, CC-BY-4.0, licence beside it and the credit line in
+`THIRD_PARTY.md`) is one derelict brick house modelled room by room down to the cobwebs,
+standing on a lot in half a kilometre of suburb: two rows of identical shells either side of one
+straight road, lawns gone to seed, power lines, a black van at the kerb. It loads through
+`ext/interior.rs` all the same -- a solid prop, a triangle collider from the solid triangles, a
+fence, a dark ground cap and the fall-out respawn is the shape a one-file level wants whether or
+not the file has a ceiling, and `view::MOOD_INTERIOR` is what a night exterior wants too: no
+weather grade, a black sky, the hemisphere in `Shaders/gltfpbr.frag`. Nothing here is lit but
+the sky, and the sky is out. The `Openings` it hands over are both empty, because nothing is set
+into this model and nothing stands outside it.
+
+**Where zero goes.** The two indoor levels put their arrival's own floor at world y = 0. This
+one cannot: the ground is not flat. The road's tarmac lies 0.81 m below the lawns and the lawns
+0.29 m below the houses' floors, and `interior::load` uses `floor_y` for two things that pull in
+opposite directions -- the ground cap goes just under it, and `backrooms::fell_out` respawns
+anyone whose feet get `FALL_DEPTH` (0.5 m) below it. Put the spawn's lawn at zero and simply
+walking into the road is a fall. So **world y = 0 is the tarmac**, the lowest ground in the file
+a player can stand on; the lawn the player starts on is a step up at `level31::LAWN_Y`, and the
+only thing left under the line is the empty swimming pool in the back garden, 1.4 m below the
+road -- which makes sliding into it wake you up back at the spawn, the closest thing this level
+has to a hazard. A test measures all three heights back out of the file.
+
+**Where the spawn goes.** The house's facade is two wings with a recess between them, and that
+recess's brick wall is a single plane 10.75 m wide at model z = -121.78, with four metres of flat
+lawn in front of it before the ground starts falling toward the road. The player stands in the
+middle of that, two metres out from the brick; the model is turned a half turn so that out of the
+house is world -z, the engine's default heading, which puts their back to the house and a dead
+suburban street in the first frame. A test casts the rays: flat lawn a metre in every direction,
+open sky overhead, the brick two metres behind and fifteen clear metres ahead.
+
+**The moon.** The only thing in the sky, and there is no sky: luckass333's "Moon"
+(`Meshes/moon.glb`, CC-BY-4.0) is a 960-triangle sphere whose one photograph is its base colour
+map and, again at `KHR_materials_emissive_strength` 1.9, its emissive one — so
+`Shaders/gltfpbr.frag` adds it after the interior hemisphere and the sphere lights itself,
+needing neither a sun nor a shader of its own. `ext/moon.rs` hangs it 80 units out and 22° up
+and then **keeps it at that offset from the eye**, once per fixed step: the far plane is 100
+units and this neighbourhood is 500 m across, so a moon left at a fixed world point would swell,
+swing and vanish as you walked the street. Held to the eye it has a fixed distance and a fixed
+direction — no parallax, never clipped, which is what a body at infinity looks like.
+
+It is not a skybox, though: it is an ordinary opaque object in the depth buffer, and the 22° is
+chosen so that nothing can ever be between the eye and it — at that angle the moon is 30 m up and
+the tallest thing in the file is a 10 m ridge, so it is correctly hidden by a ceiling indoors and
+by nothing at all outdoors. The distance does double duty: the interior grade's haze
+(`1 - exp(-dist · 0.008)`, mixed 0.9 toward a dark warm tone) is constant because the distance is,
+and it is what turns a white sphere **pale**. The model's own 4.43-unit radius then fixes the
+apparent size at 6.3° — roughly twelve times the real moon, stylised as every game moon is.
+
+**The street loops.** Two portals stand across the street near its two ends — `LOOP_WEST_X =
+-230` and 450 m east of it — connected. Both face +x and neither is turned, tilted or resized
+against the other, so `Physical::try_portal` applies a pure translation along the street and
+nothing else: walk east off the end of it and you arrive at the other end still walking east, at
+the same speed, the same height, the same distance from the kerb and the same size. The street
+never ends. The engine's oldest trick — `level1.rs` has had it since the port — pointed at the
+one subject it was made for.
+
+The loop has to close where its two ends match or the join shows, and the lots repeat on a 50 m
+pitch only *approximately*: the abandoned house's lot is unique and its neighbours are not
+identical either. The ground along the road runs `x[-264, 233]`, and sweeping the candidates a
+metre at a time — comparing ground height and skyline every half metre down the whole 130 m of
+walkable depth — the longest clean pair that fits is **-230 and +220**: 3 cm of worst mismatch,
+nothing of the model within half a metre of either plane, and only 34 m of street left over past
+the west cut and 13 m past the east one. Nine lots of it, with the house and the spawn near the
+middle. Neighbouring candidates ran from 2.5 m of mismatch to a house sitting across the cut.
+
+A portal only hides what its quad covers, so a cut spanning the road alone would let the unlooped
+street show over and around it, and a player who stepped onto the lawn would walk around the end
+of the world. These span the whole cross-section: 132 m across, from under the tarmac to 20 m up,
+clearing the ground (`z[-81.8, 42.2]`) and the skyline with metres to spare.
+
+**Making the join invisible was three fixes, and none of them was geometry.** A portal pass
+normally shades cheaply — `Shaders/gltfpbr.frag` drops normal mapping and the whole specular
+lobe when `view::detail` says the pass is a portal's. That is the right trade for a
+doorway-sized quad paid for four times over and the wrong one for a seam that fills the screen,
+where it means the brick and the kerbs change the instant you step across;
+`view::set_seamless_portals` turns it off per scene. A crossing is also normally audible in a
+level that declares its ground (`audio::portal_audible`), on the reasoning that such a portal is
+a thing you can see and mean to walk through — not true here, so
+`audio::set_portal_audible(false)` overrides it without giving up the footsteps.
+
+The loud one was the **ground cap**. `interior::Floor` now splits what used to be a single
+`floor_y`, because its two jobs pull apart on ground that is not flat: the fall line has to sit
+just under the road (any higher and walking the road is a fall, any lower and the empty pool
+stops being one), which put the near-black cap 5 cm under the tarmac. Five centimetres is finer
+than the depth buffer resolves at 60 m once the engine collapses the near plane to a centimetre
+— which it does whenever the player is up against a portal (`nearest_portal_dist`). The cap
+punched through the road in bands, *only* near a cut, so the street broke up as you walked into
+one and healed as you stepped through: the seam drawing itself, courtesy of the one object in
+the scene that is never meant to be seen. Hanging it two metres down fixes it, and incidentally
+puts it under the empty pool, which had been reading as a black plate rather than a hole.
+
+**The fog is the dark.** The street runs past the far plane (`GH_FAR` = 100) in every
+direction, and the engine's haze was never built to hide that — `1 - exp(-dist · 0.008)` capped
+at 90% of the way to the weather's tone is only half applied at 100 units, so the cut showed as a
+hard edge and geometry crossing it appeared into a scene that still had most of its colour.
+`view::Fog` lets a scene replace it, and this one asks for **dark, dense and squared**. Dark, not
+*black*: Silent Hill's fog was white because Silent Hill had a daylit sky, and over a night suburb
+the same trick is the dark closing in — but `sky.frag` fades this mood to `vec3(0.030, 0.024,
+0.016)` at the horizon, so a world converging on zero dissolves into something **darker than what
+is behind it**. Measured at the horizon that was a step from 8/255 to 3/255 across the whole
+frame, with distant rooflines as black cut-outs against a lighter sky — the far-plane pop
+inverted, not removed. The fog takes the sky's own horizon tone, which is `CAP_COLOR`, pinned to
+it byte for byte for exactly this reason. Squared — `1 - exp(-t²)`, the falloff `gltfunlit.frag` has always used — because a plain
+exponential thick enough to close at 100 m is already a third of the way in at 20, where this one
+is 18%; and all the way to the colour, since the engine's 0.9 cap leaves every surface a tenth of
+itself at any distance, and that tenth is exactly what would still pop at the far plane.
+
+The switch is one uniform pair on `gltfpbr.frag` with the enable in `fog_over.a`, and every
+branch is a `mix` on it — so `a = 0`, which is also GL's value for a uniform nobody wrote, is the
+old line instruction for instruction. Verified rather than argued: with the camera pinned, the
+Overgrown room renders **bit-identical** before and after the change and the Pool Rooms differ in
+**one byte of eleven million**. (Pin the camera, or the comparison measures how many fixed steps
+fit in a frame instead.)
+
+Two things follow the fog. The **ground cap** takes its colour (`GroundCap::under`) so that any
+scene fog keeps the cap == sky invariant its comment is about — read once at construction, not at
+draw time, because `ext/moon.rs` clears the fog for the length of its own draw. The **moon** is
+that exception: it hangs 80 units out, exactly where this fog closes, and it is not in the air to
+be fogged, so it opts out and keeps the engine's thin haze — which is what makes it a pale disc
+rather than a white hole.
+
+Recorded rather than fixed: `gltfunlit.frag` has no such override, so a scene fog does not reach
+an unlit glTF material. Nothing in this level has one, but the first one added would fade on that
+shader's own curve with no diagnostic.
+
+**And the distance is what makes it free.** A full-screen portal is a whole extra pass, and a
+chain of them is a whole extra pass each. An earlier version put the cuts one 50 m block apart,
+which meant looking down a stack of four of them from anywhere on the street: 2.4 ms a frame
+became 9. At 450 m neither cut is inside the far plane (`GH_FAR` = 100) from anywhere near the
+middle, so the engine's frustum pre-test drops both and the level costs what it did before the
+portals existed — **2.31 ms at the spawn against a 2.37 ms baseline**. Walk up to one and it
+starts drawing, at 4.7 ms: one pass, not four, because the other cut is 450 m beyond it and
+clipped away. The loop pays for itself only where you can see it.
+
+This is also why `ext/moon.rs` hangs off `RenderCtx::eye` rather than a world position: a portal
+pass renders from a camera 450 m along the street, and a moon standing anywhere in the world
+would be seen from there in a different part of the sky, so the sky through the portal would not
+be the sky beside it.
+
+## Open House
+
+`src/level32.rs`: Liminal Neighborhood, with every empty house made real, somebody's
+exploration kit scattered through them, sleepwalkers on the pavement, and four ways to stop
+being a person.
+
+The stage models one true house -- the brick two-storey behind the spawn, furnished down to
+the cobwebs -- and lines the rest of the street with hollow facade fronts, nothing behind the
+windows. This scene keeps the original house exactly as authored and replaces the seventeen
+shells: each lot is carved out of the stage with one world-space cut box (draw and collision
+alike; the lawn continues underneath -- measured, unlike under the real house), and a small
+procedural house is built in its place from Elbolillo's village pack.
+
+`ext/prochouse.rs` is the estate agent: from one seed per lot it draws up the furnishing --
+which bed in which bedroom against which wall, whose sofa faces the lounge window, where the
+paintings hang, what got left on the tables, front door open or gone -- by recipes and
+rejection sampling against room walls and doorway clearances measured off the pack's shell.
+`ext/pack.rs` draws each house as ONE scene object: one shared parse of the GLB, one
+`draw_part` per piece with per-part sphere culling, one merged triangle collider, and a
+distance gate so the lots the fog has shut are never drawn. `--house-seed N` pins the street
+and the log prints the night's number.
+
+### The kit
+
+Eight instruments from Elbolillo's CC0 exploration pack (`ext/tool.rs`), ONE hidden per
+house, the flashlight always in the house straight across the road. Take one (`E`), pocket
+it (`F`), switch it on (`E` again -- a held tool claims the press on the same standing-offer
+channel the key uses, below the key and above the grab). The flashlights light wherever the
+crosshair lands; the camera flashes and counts its photos; and the EMF reader, thermometer,
+spirit box and thermal camera all read one real signal -- the mannequin walking the pavement,
+reporting its position every step.
+
+### The sleepwalkers
+
+`ext/npc.rs`: five mannequins on closed waypoint rounds, walking, pausing, and noticing. They
+see through the engine's own observation kernel (`ext/visibility.rs`) -- a 120-degree cone
+plus a line-of-sight raycast, the same test the statues and the Duel's Dreamer are judged by
+-- with the two things that kernel does not do added here: a range gate (`is_observed` has no
+far limit, so without one a patrol watches the length of a 450 m street) and a stagger, so
+the cast costs one raycast every few steps rather than one each per step.
+
+Noticing is the whole of their aggression, and that is deliberate. `docs/hide-n-dream.md` is
+emphatic that this game's presences are not monsters: the seeker's only verb is the tag, a
+lost life is "waking up a bit", and the campaign rule was that the presence never pursues.
+A sleepwalker stops, turns, walks over -- and stops a room's width short, and stands there
+looking at you. What it costs you is the hide.
+
+### The hide
+
+`ext/disguise.rs`, two of the design doc's hiding verbs, each with the counterplay that
+section's one law demands -- **every hide has a find**:
+
+| Verb | The hide | The find |
+|---|---|---|
+| Prop disguise | `E` on any piece of furniture and you render as it -- whatever the seed put in that room, so a worn chair is always a chair that belongs there | hold still or be seen: furniture does not walk. And a sleepwalker at arm's length knows this room has no such chair |
+| Anamorphic flattening | at one of three pegged wall stations, `E` flattens you onto the wall | it is only a picture from the station: step off the tube and it is a smear |
+
+Nothing draws the player in this engine, and hanging a mesh on the player object leaks into
+the next scene, so the state lives on a channel and a separate object draws the prop at the
+player's soles. Global back-face culling does the rest: a closed prop drawn around the camera
+shows nothing from inside, so first person is unchanged while every other pass sees a chair.
+
+### The fittings
+
+`ext/warphouse.rs`. Everything non-Euclidean here is one portal pair and one product of
+matrices, and the whole trick is how the two quads differ:
+
+* **The scale mouth.** An opening in the near house's lounge whose far end is exactly half
+  its size. Crossing multiplies your `p_scale` by the ratio, and because `p_scale` is the
+  engine's entire notion of how big you are, your walk speed, jump, gravity, eye height, head
+  bob and collision spheres all follow from that one number. Nothing is scaled up: you get
+  smaller, so the ordinary living room you step out into is twice the room it was.
+* **Two pillar pockets**, at opposite ends of the block, both opening into a house that is
+  nowhere -- furnished like any other, standing three kilometres off the street, reachable
+  only through them. It has exactly two exits, which is the design doc's rule for a hidden
+  room. It is moved out along **z**, not x, and that is not arbitrary: the street loop wraps
+  anyone whose *x* leaves the block, and a ghost house to the east was hauled home 450 m at a
+  time the instant a player arrived in it.
+
+The portal budget is hard and worth stating: `GH_MAX_PORTALS` is 16 and the render path
+indexes fixed-size arrays by portal index, so a seventeenth is an out-of-bounds panic every
+frame in release, not a debug assert. The street loop spends 2 and these spend 6.
+
+![The street, the sleepwalkers and the hide](docs/img/open-house.jpg)
+
+*`--scene 21 --house-seed 7`.*
+
 ## The window
 
 `ext/window.rs`: a small framed window hangs on the Backrooms' hall wall between the second
@@ -2295,6 +2751,69 @@ shipped GLBs checking triangle counts, bounds, the elevator's clip and its door 
 foliage's alpha test, the moss and marble tiling, the water, the solid subset a collider
 takes, and the metalness override.
 
+## Developer mode — `ext/debug.rs`
+
+Two halves of one question: **what command reproduces this shot?** Every screenshot in this
+README is a `--scene N --pos X,Y,Z --yaw D --pitch D` run, and until now those numbers had to be
+guessed at, walked to, and read back off the `[shot]` line afterwards. `F3` (or `--debug` at
+startup) puts a readout in the top-left corner — scene index and name, position, yaw and pitch,
+`p_scale`, FOV, the recent frame cost, and the index of whatever is in hand — with the pasteable
+command line under it. A vantage found by hand becomes a command that still works after the
+level changes.
+
+Three details in it are load-bearing:
+
+* the yaw is **folded into one turn**. `Player::look` subtracts from `cam_ry` on every mouse step
+  and nothing ever wraps it, so after a few spins the raw value is several thousand degrees. It
+  aims the camera identically, but `--yaw 3787.4` in a pasteable line reads as a bug in the
+  readout;
+* a negative angle is written `--yaw=-90`, not `--yaw -90`. Clap reads a bare leading `-` as the
+  start of the next flag, so the space form fails at the shell and the `=` form is the one worth
+  printing;
+* the frame cost is the mean of the **last twenty** frames rather than `FrameClock::stats`'s whole
+  record. A readout is asked "what is it costing me *now*", and an average taken over a session
+  that began in another scene answers a different question.
+
+**The save key** is `Cmd`+`S`+`C` on macOS, `Ctrl`+`S`+`C` elsewhere: hold the modifier, hold `S`,
+tap `C`. It writes a PNG of the frame into `<Documents>/DayDreams/<scene>-NNN.png`, numbered one
+past the highest already there, so two sessions never overwrite each other and deleting one from
+the middle never sends the next save on top of a file that is still present. PNG rather than the
+BMP `--shot` writes, because these are files a person opens and shares; the `image` crate is
+already a dependency for the glTF loader's textures, and GL's bottom-first rows are flipped on
+the way out (`--shot`'s BMP needs no flip — bottom-first *is* BMP row order, which is why only
+this path has one).
+
+The chord is read in `main.rs` straight off winit's key events rather than through `Input`, and
+that is the whole design. **`S` is walk-backwards.** Routed through `Input` the way every other
+key is, holding it to arm the chord would walk the camera away from the very shot being framed —
+so while the modifier is down the movement keys are swallowed outright, the player stands still,
+and `S` means only "the chord is armed". Pressing the modifier while *already* walking drops the
+held movement keys for the same reason; releasing it disarms the chord, so a later stray `C` can
+never fire a save.
+
+The key works whether or not the overlay is showing — including on the title screen, which has no
+overlay of its own and is the one frame the gameplay path never reaches. The overlay itself is
+deliberately **not** a setting: it never survives a restart, because a readout left on by accident
+in a build handed to someone else is worse than having to press `F3` again.
+
+One flag the readout prints only when it has to: **`--p-scale`**. A scaling tunnel leaves the
+player at some other size (`Physical::try_portal` multiplies `p_scale` by the warp's X-axis
+magnitude), but a run always starts at 1 — so the line printed for a half-size view reproduced
+its *position* at full size, which is a different picture of a different place. The overlay now
+appends `--p-scale 0.500` whenever the scale is not 1, and `--p-scale` stands the player at it.
+The round trip is checked: the command under a `p_scale 0.500` capture of scene 5 brings back
+that frame, eye height and all.
+
+`--save-at FRAME[,FRAME]` is the headless twin of the chord, the way `--e-at` is E's: it fires the
+save on the rendered frames it names, so the binding can be checked without a hand on the
+keyboard. Note that `--frames` only ends a run that has a `--shot`; a `--save-at` run keeps
+playing, which is usually what you want when the point was to watch it.
+
+```sh
+# The overlay, and two saved frames, from the Backrooms' hall
+daydreams --windowed --mute --debug --scene 16 --pos 999,1.5,0.6 --yaw 90 --pitch=-5 --save-at 60,120
+```
+
 ### Dev tooling
 
 ```bash
@@ -2325,7 +2844,7 @@ Options:
       --assets <DIR>       Directory holding Shaders/, Meshes/, Textures/ and assets/ (also: DAYDREAMS_ASSETS)
       --log-level <LEVEL>  off, error, warn, info, debug or trace (also: DAYDREAMS_LOG). Default info
       --no-log-file        Log to the terminal only; do not write the per-user log file
-      --scene <N>          Skip the title and load scene N (0-based, in key order)
+      --scene <N>          Skip the title and load scene N (0-based, in registry order)
       --shot <FILE>        Save a screenshot here after --frames frames and quit. Alone: the title screen
       --frames <K>         Frames to render before the screenshot, so physics settles [default: 90]
       --yaw <DEG>          Camera yaw in degrees (with --scene). Default 0
@@ -2339,7 +2858,7 @@ Options:
 ```
 
 `--shot` **without** `--scene` leaves the menu alone and photographs whatever the game boots into,
-which is the title screen and `scenes::INTRO` (the Backrooms) running behind it — loading a scene would close the
+which is the title screen and `scenes::TITLE` (the Intro) running behind it — loading a scene would close the
 menu that is the thing being looked at. `--yaw`, `--pitch`, `--pos` and the held keys only mean
 something with `--scene`.
 
@@ -2498,10 +3017,13 @@ resolved here.
 in key order -- CodeParade's seven first, in the registration order of `Engine.cpp:41-47`, then
 `8` `9` `0` `-` `=` `[` `]` `\` `;` `'` `,` `.`. `Engine` builds its scene vector from it, the
 level-select menu reads the names from it and the key loop walks it; `scenes::INTRO` is the
-index NEW GAME and the title backdrop use, resolved from the name `"Backrooms"` by
-`scenes::index_of` -- a `const fn`, so reordering the table cannot start the game somewhere
-else, and the same lookup the elevator turns its floor names into indices with at runtime. To
-add a scene, append an entry and make sure `input::key_index` maps its key -- the registry's
-tests check that there are nineteen entries, that keys and names are unique, that
-`SCENES[INTRO]` is the Backrooms, that `index_of` finds every name and nothing else, that every
-constructor builds, and that every key byte is reachable from a physical `KeyCode`.
+index NEW GAME uses, resolved from the name `"Backrooms"`, and `scenes::TITLE` is the one the
+title screen's backdrop uses, resolved from `"Intro"`. Two indices, because they are two jobs:
+NEW GAME opens where the game is played, and the title screen is a photograph that wants the
+shot the game is named for. Both go through `scenes::index_of` -- a `const fn`, so reordering
+the table cannot start the game somewhere else, and the same lookup the elevator turns its
+floor names into indices with at runtime. To add a scene, append an entry and make sure
+`input::key_index` maps its key -- the registry's tests check that there are nineteen entries,
+that keys and names are unique, that `SCENES[INTRO]` is the Backrooms and `SCENES[TITLE]` the
+Intro, that `index_of` finds every name and nothing else, that every constructor builds, and
+that every key byte is reachable from a physical `KeyCode`.

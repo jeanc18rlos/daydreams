@@ -23,8 +23,8 @@ use crate::game_header::{
     gh_clamp, gh_min, GH_DT, GH_FAR, GH_FBO_SIZE, GH_MAX_PORTALS, GH_MAX_RECURSION, GH_MAX_STEPS,
     GH_NEAR_MAX, GH_NEAR_MIN, GH_PLAYER_HEIGHT, GH_USE_SKY,
 };
-// EXT: the scene registry -- every scene's key, name and constructor, in key order.
-use crate::ext::scenes::{INTRO, SCENES};
+// EXT: the scene registry -- every scene's name and constructor (src/ext/scenes.rs).
+use crate::ext::scenes::{INTRO, SCENES, TITLE};
 use crate::input::Input;
 use crate::object::{ObjectT, RenderCtx, UpdateCtx};
 use crate::player::Player;
@@ -102,15 +102,24 @@ pub struct Engine {
     // EXT: dev tooling -- `--shot path` saves the next rendered frame here, then quits.
     shot_path: RefCell<Option<std::path::PathBuf>>,
     shot_after_frames: Cell<i32>,
+    // EXT: developer mode -- the save chord (src/ext/debug.rs) sets this, and the next
+    // rendered frame writes itself to the Documents folder and clears it. A request rather
+    // than a direct call because the key arrives in the platform layer, where there is no
+    // finished frame in the back buffer to read.
+    debug_shot: Cell<bool>,
     // EXT: dev tooling -- key slots `--forward` / `--strafe` / `--sprint` hold down for the
     // whole run, re-asserted at the top of every frame rather than set once, because a focus
     // change drops every key level (main.rs) and a headless window may never be focused at all.
     dev_hold: RefCell<Vec<usize>>,
     // EXT: dev tooling -- `--ride-at N`: rendered frames left until E is pressed once.
     dev_ride_at: Cell<Option<i32>>,
-    // EXT: dev tooling -- `--e-at N`: rendered frames left until E is pressed once as the
-    // keyboard would press it (the `key_press` slot, which the first fixed step sees).
-    dev_e_at: Cell<Option<i32>>,
+    // EXT: dev tooling -- `--e-at N,M`: rendered frames left until each press of E as the
+    // keyboard would press it (the `key_press` slot, which the first fixed step sees). A list,
+    // because E means whatever the crosshair is on: using the key and then grabbing is two.
+    dev_e_at: RefCell<Vec<i32>>,
+    // EXT: dev tooling -- the rendered frames on which `--save-at` fires the developer save
+    // chord, the headless twin of Cmd+S+C (src/ext/debug.rs).
+    dev_save_at: RefCell<Vec<i32>>,
     // EXT: dev tooling -- `--jump-at N`: rendered frames left until Space goes down, and then
     // the frames it stays down for. The jump is read as a level (src/ext/jump.rs), so it is
     // held rather than pressed: a headless frame can run no fixed steps at all, and a one-frame
@@ -126,6 +135,9 @@ pub struct Engine {
     // each frame it names. The wheel is not a key, so it is added to `Input::wheel` rather than
     // to a `key_press` slot; everything downstream of that is the real path.
     dev_wheel_at: RefCell<Vec<i32>>,
+    // EXT: dev tooling -- `--slot-at 3@120`: the same list with the number-row key named too,
+    // so a run can pick a slot outright rather than stepping the wheel round to it.
+    dev_slot_at: RefCell<Vec<(u32, i32)>>,
     // EXT: this frame's inventory input (F, G, the wheel), latched at the top of run_frame
     // before the fixed-step loop's `Input::end_frame` clears the edges, and consumed by
     // `ext_update` (src/ext/inventory.rs).
@@ -168,6 +180,22 @@ fn dev_press_due(left: &RefCell<Vec<i32>>) -> bool {
     let due = left.iter().any(|&n| n <= 1);
     left.retain(|&n| n > 1);
     for n in left.iter_mut() {
+        *n -= 1;
+    }
+    due
+}
+
+/// EXT: dev tooling -- [`dev_press_due`] for a list that names its key as well as its frame
+/// (`--slot-at 3@120`), returning the slots whose frame has come round. Empty unless a press is
+/// due, so the frames that are not one cost no allocation.
+fn dev_keys_due(left: &RefCell<Vec<(u32, i32)>>) -> Vec<u32> {
+    let mut left = left.borrow_mut();
+    if left.is_empty() {
+        return Vec::new();
+    }
+    let due: Vec<u32> = left.iter().filter(|&&(_, n)| n <= 1).map(|&(s, _)| s).collect();
+    left.retain(|&(_, n)| n > 1);
+    for (_, n) in left.iter_mut() {
         *n -= 1;
     }
     due
@@ -251,14 +279,17 @@ impl Engine {
             quit_requested: Cell::new(false),
             shot_path: RefCell::new(None),
             shot_after_frames: Cell::new(0),
+            debug_shot: Cell::new(false),
             dev_hold: RefCell::new(Vec::new()),
             dev_ride_at: Cell::new(None),
-            dev_e_at: Cell::new(None),
+            dev_e_at: RefCell::new(Vec::new()),
+            dev_save_at: RefCell::new(Vec::new()),
             dev_jump_at: Cell::new(None),
             dev_jump_hold: Cell::new(-1),
             dev_stow_at: RefCell::new(Vec::new()),
             dev_drop_at: RefCell::new(Vec::new()),
             dev_wheel_at: RefCell::new(Vec::new()),
+            dev_slot_at: RefCell::new(Vec::new()),
             inv_edges: Cell::new(crate::ext::inventory::Edges::default()),
             scene_has_grabbable: Cell::new(false),
             pad_events: Cell::new(crate::ext::gamepad::PadEvents::default()),
@@ -268,11 +299,11 @@ impl Engine {
             portal_fbos: RefCell::new(Vec::new()),
         };
 
-        // EXT: the title screen draws the INTRO scene -- the Backrooms' meadow -- behind it
-        // (`render_menu_frame`), so the game boots into that scene rather than the ported
-        // scene 0. Nothing is played until
-        // NEW GAME closes the menu; until then the level is only ever a backdrop.
-        engine.load_scene(INTRO);
+        // EXT: the title screen draws the TITLE scene -- the Intro's meadow, with the sunset
+        // sea through its door -- behind it (`render_menu_frame`), so the game boots into that
+        // scene rather than the ported scene 0. Nothing is played until NEW GAME closes the
+        // menu and loads `INTRO`; until then the level is only ever a backdrop.
+        engine.load_scene(TITLE);
         // EXT: a mute saved from a previous session applies to the music the load above just
         // started. Done after the load rather than before, so the toggle has something to stop.
         // EXT: and never toggle a mixer `--mute` already silenced, which would unmute it.
@@ -330,13 +361,12 @@ impl Engine {
         }
         // EXT: `--e-at` is the keyboard's E itself: the press slot, which the latch below
         // picks up for the grab and the first fixed step reads (src/ext/key.rs).
-        if let Some(left) = self.dev_e_at.get() {
-            if left <= 1 {
-                self.input.borrow_mut().key_press[b'E' as usize] = true;
-                self.dev_e_at.set(None);
-            } else {
-                self.dev_e_at.set(Some(left - 1));
-            }
+        // EXT: `--save-at` is the save chord itself, on the frames it names.
+        if dev_press_due(&self.dev_save_at) {
+            self.request_debug_shot();
+        }
+        if dev_press_due(&self.dev_e_at) {
+            self.input.borrow_mut().key_press[b'E' as usize] = true;
         }
         // EXT: `--jump-at` counts down to the frame Space goes down on, and then `dev_jump_hold`
         // counts the frames it stays down: `DEV_JUMP_FRAMES` of held, one that releases it, and
@@ -365,6 +395,11 @@ impl Engine {
         // EXT: and `--wheel-at` is one notch toward the player -- the next slot along the row.
         if dev_press_due(&self.dev_wheel_at) {
             self.input.borrow_mut().wheel -= 1.0;
+        }
+        // EXT: and `--slot-at` is the number-row key for the slot it names, which the latch
+        // below reads exactly as it reads a typed one.
+        for slot in dev_keys_due(&self.dev_slot_at) {
+            self.input.borrow_mut().key_press[(b'1' + slot as u8 - 1) as usize] = true;
         }
         // EXT: and the dev frame-time record. Ticked here, at the top, so one interval spans a
         // whole frame including the swap main.rs does after run_frame returns.
@@ -415,8 +450,8 @@ impl Engine {
                 }
             };
             self.apply_menu_action(action);
-            // EXT: the title screen has its own track. Its backdrop IS the INTRO scene, so the
-            // scene binding alone gave it the Backrooms' fluorescent hum over a night meadow
+            // EXT: the title screen has its own track. Its backdrop is a level like any
+            // other, so the scene binding alone gave it that level's ambience under the menu
             // (src/ext/audio.rs). Told here, after the action, because that is where the title
             // is entered and left; a frame that changes nothing costs a comparison.
             {
@@ -444,22 +479,15 @@ impl Engine {
             // EXT: menu frames are screenshot-able too -- `--shot` with no `--scene` is how the
             // title screen and its backdrop get photographed, and this is the only path it runs.
             self.maybe_screenshot(i_width, i_height);
+            // EXT: and so is the save chord, deliberately -- a title screen is a thing somebody
+            // wants a picture of, and it is the one frame the gameplay path never reaches.
+            self.maybe_debug_shot(i_width, i_height);
             return;
-        }
-
-        // EXT: the C++ hard-codes seven if/else branches for keys 1-7 (Engine.cpp:90-104).
-        // With extension scenes added there are more than nine, so the mapping is table-driven
-        // by the registry's keys (src/ext/scenes.rs).
-        for (i, entry) in SCENES.iter().enumerate() {
-            if self.input.borrow().key_press[entry.key as usize] {
-                self.load_scene(i);
-                break;
-            }
         }
 
         // EXT: latch the edge-triggered extension keys HERE, before the fixed-step loop below
         // calls Input::EndFrame -- which memsets key_press to zero (Input.cpp:11). Anything that
-        // reads key_press after that loop always sees false. The ported scene keys above avoid
+        // reads key_press after that loop always sees false. Anything edge-triggered belongs
         // this only by being checked first.
         //
         // TAKEN, not read. That loop runs ZERO times on a rendered frame shorter than one 2 ms
@@ -474,15 +502,33 @@ impl Engine {
                 self.pad_grab.set(true);
             }
             // EXT: the inventory's own three (src/ext/inventory.rs).
+            // EXT: the number row picks a slot. It used to load the scene of that number
+            // (Engine.cpp:90-104 hard-coded seven such branches); SWITCH LEVEL in the pause
+            // menu is where that lives now, so a number over a row of slots means the slot.
+            // TAKE every pressed digit, first one wins: `find` would leave a second
+            // digit latched in key_press across a zero-step frame (the hazard the
+            // comment above `run_frame`'s latch block documents) and fire it a
+            // frame after the player pressed it.
+            let select = (0..crate::ext::inventory::CAPACITY).fold(None, |sel, i| {
+                let pressed = std::mem::take(&mut input.key_press[(b'1' + i as u8) as usize]);
+                sel.or(if pressed { Some(i) } else { None })
+            });
             self.inv_edges.set(crate::ext::inventory::Edges {
                 stow: std::mem::take(&mut input.key_press[b'F' as usize]),
                 drop: std::mem::take(&mut input.key_press[b'G' as usize]),
                 wheel: std::mem::take(&mut input.wheel),
+                select,
             });
         }
         if std::mem::take(&mut self.input.borrow_mut().key_press[b'M' as usize]) {
             let muted = self.ext.borrow_mut().audio.toggle_mute();
             log::debug!("[audio] {}", if muted { "muted" } else { "unmuted" });
+        }
+        // EXT: first person / third person. Only the RENDER camera moves; see
+        // src/ext/thirdperson.rs for why every gameplay transform stays the eye.
+        if std::mem::take(&mut self.input.borrow_mut().key_press[b'V' as usize]) {
+            let third = crate::ext::thirdperson::toggle();
+            log::debug!("[camera] {}", if third { "third person" } else { "first person" });
         }
 
         // EXT: object rotation. While the modifier is held, this frame's look input is taken
@@ -554,7 +600,11 @@ impl Engine {
         let n = gh_clamp(self.nearest_portal_dist() * 0.5, GH_NEAR_MIN, GH_NEAR_MAX);
         {
             let mut main_cam = self.main_cam.borrow_mut();
-            main_cam.world_view = self.player.borrow().world_to_cam();
+            // EXT: the RENDER camera, which is the eye in first person and the boom's end in
+            // third (`ext/thirdperson.rs`). Every gameplay transform stays the eye -- the
+            // observation cone, the grab ray and the beam all read `cam_to_world` through
+            // `UpdateCtx`, which this does not touch.
+            main_cam.world_view = self.player.borrow().render_world_to_cam();
             main_cam.set_size(i_width, i_height, n, GH_FAR);
             main_cam.use_viewport(&self.gl);
         }
@@ -619,15 +669,48 @@ impl Engine {
             if let Some(hint) = crate::ext::hint::take() {
                 crate::ext::hud::draw_hint(&ext.ui, &hint);
             }
+            // EXT: and the round's clock, on its own slot at the top of the screen -- the
+            // ranked line above is occupied by whatever is in the player's hand for the whole
+            // of a hide-and-seek round (src/ext/hint.rs).
+            if let Some(status) = crate::ext::hint::take_status() {
+                crate::ext::hud::draw_status(&ext.ui, &status);
+            }
             let fade = crate::ext::elevator::fade();
             if fade > 0.0 {
                 ext.ui.fill_rect(0.0, 0.0, i_width as f32, i_height as f32, [0.0, 0.0, 0.0, fade]);
+            }
+            // EXT: the developer readout, last of everything so nothing is drawn over it
+            // (src/ext/debug.rs). Inside the UI bracket, and in the main pass only -- higher up
+            // it would be painted into every portal's framebuffer as well.
+            if ext.debug.on {
+                let (pos, p_scale, yaw, pitch) = {
+                    let p = self.player.borrow();
+                    let (yaw, pitch) = p.look_angles();
+                    (p.obj().pos, p.obj().p_scale, yaw, pitch)
+                };
+                let ix = self.cur_scene_ix.get();
+                crate::ext::debug::draw(
+                    &ext.ui,
+                    &ext.debug,
+                    &crate::ext::debug::Info {
+                        scene_ix: ix,
+                        scene_name: SCENES.get(ix).map_or("(unregistered)", |s| s.name),
+                        pos,
+                        yaw_deg: yaw.to_degrees(),
+                        pitch_deg: pitch.to_degrees(),
+                        p_scale,
+                        fov_deg: crate::ext::view::fov(),
+                        frame_ms: self.frame_clock.borrow().recent_ms(),
+                        held: ext.grab.held,
+                    },
+                );
             }
             ext.ui.end();
         }
 
         // EXT: dev screenshot. Reads the back buffer after everything is drawn.
         self.maybe_screenshot(i_width, i_height);
+        self.maybe_debug_shot(i_width, i_height);
     }
 
     /// EXT: `--scene N --shot path [--frames K] [--yaw deg] [--pitch deg]` support
@@ -649,7 +732,8 @@ impl Engine {
     /// hand and `e_at` presses E as a key on that frame (`--hold-key`, `--e-at`,
     /// src/ext/key.rs). `stow_at` and `drop_at` press F and G on each frame they name, so a
     /// stow, the retrieve after it and a put-down can be driven the same way (`--stow-at`,
-    /// `--drop-at`, src/ext/inventory.rs).
+    /// `--drop-at`, src/ext/inventory.rs), and `slot_at` presses the number-row key for the
+    /// slot it names (`--slot-at 3@120`).
     pub fn start_direct(&self, run: crate::app::cli::DirectRun) {
         use crate::app::cli::{DirectRun, DirectScene};
         let DirectRun {
@@ -669,14 +753,19 @@ impl Engine {
             stow_at,
             drop_at,
             wheel_at,
+            slot_at,
+            save_at,
+            p_scale,
         } = run;
         *self.dev_hold.borrow_mut() = hold;
         self.dev_ride_at.set(ride_at);
-        self.dev_e_at.set(e_at);
+        *self.dev_e_at.borrow_mut() = e_at;
+        *self.dev_save_at.borrow_mut() = save_at;
         self.dev_jump_at.set(jump_at);
         *self.dev_stow_at.borrow_mut() = stow_at;
         *self.dev_drop_at.borrow_mut() = drop_at;
         *self.dev_wheel_at.borrow_mut() = wheel_at;
+        *self.dev_slot_at.borrow_mut() = slot_at;
         if let Some(scene) = scene {
             self.ext.borrow_mut().menu.close();
             if arrive {
@@ -703,6 +792,12 @@ impl Engine {
                     .base
                     .set_position(crate::vector::Vector3::new(p[0], p[1], p[2]));
             }
+            // EXT: `--p-scale` -- stand the player at the size a scaling portal would have left
+            // them. After the position, because the eye height a scale implies is applied on
+            // top of wherever they are standing.
+            if let Some(s) = p_scale {
+                self.player.borrow_mut().base.base.p_scale = s;
+            }
             if let Some(h) = drop_props {
                 crate::ext::physics::with(|w| w.lift_all(h));
             }
@@ -718,6 +813,33 @@ impl Engine {
         }
         *self.shot_path.borrow_mut() = shot;
         self.shot_after_frames.set(frames.max(1));
+    }
+
+    /// EXT: developer mode -- `F3`, and `--debug` at startup (src/ext/debug.rs).
+    pub fn toggle_debug(&self) {
+        self.ext.borrow_mut().debug.toggle();
+    }
+
+    /// EXT: `--debug`.
+    pub fn set_debug(&self, on: bool) {
+        self.ext.borrow_mut().debug.on = on;
+    }
+
+    /// EXT: the save chord asks for the next frame. Written after the render rather than during
+    /// it, so the file holds exactly what the player was looking at -- overlay, cursor and all.
+    pub fn request_debug_shot(&self) {
+        self.debug_shot.set(true);
+    }
+
+    /// EXT: write the frame the save chord asked for, if it asked.
+    fn maybe_debug_shot(&self, width: i32, height: i32) {
+        if !self.debug_shot.replace(false) {
+            return;
+        }
+        let ix = self.cur_scene_ix.get();
+        let name = SCENES.get(ix).map_or("scene", |s| s.name);
+        let outcome = crate::ext::debug::save(&self.gl, width, height, name);
+        self.ext.borrow_mut().debug.report(outcome);
     }
 
     fn maybe_screenshot(&self, width: i32, height: i32) {
@@ -807,9 +929,9 @@ impl Engine {
 
     /// EXT: a frame while a menu is open. Both menus draw the world and then the menu over it;
     /// what differs is which world. The pause menu shows the game the player is standing in,
-    /// frozen where they left it. The title screen shows the INTRO scene (the Backrooms) as a
-    /// backdrop from the vantage composed for it (`ext::meadow::title_view`), stepped rather
-    /// than frozen.
+    /// frozen where they left it. The title screen shows the TITLE scene (the Intro's meadow,
+    /// its door open on the sunset sea) as a backdrop from the vantage composed for it
+    /// (`ext::meadow::title_view`), stepped rather than frozen.
     /// The black wash between the two is drawn by `Menu::draw`, which knows how much its
     /// current screen needs.
     fn render_menu_frame(&self, i_width: i32, i_height: i32) {
@@ -824,7 +946,22 @@ impl Engine {
         }
         self.rec_level.set(GH_MAX_RECURSION);
         let cam = *self.main_cam.borrow();
-        self.render(&cam, None, None);
+        // EXT: the title's backdrop goes through the post chain -- bloom, veil, vignette
+        // (src/ext/postfx.rs). Rendered into its target and resolved to the window before the
+        // menu's own 2D layer draws, so the type stays crisp and unbloomed on top of a
+        // filtered picture. The pause menu does not: it is drawn over the game as the player
+        // left it, and re-grading that would be a lie about what they are going back to.
+        //
+        // The borrow is taken and dropped around `render`, which reaches into `ext` itself.
+        let target = if self.ext.borrow().menu.is_title() {
+            self.ext.borrow().postfx.begin(i_width, i_height)
+        } else {
+            None
+        };
+        self.render(&cam, target, None);
+        if target.is_some() {
+            self.ext.borrow().postfx.resolve();
+        }
 
         let names: Vec<String> = self.scene_names();
         let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
@@ -860,7 +997,8 @@ impl Engine {
             // button left behind -- see `release_input_latches`, and note that it runs *after*
             // any scene load, which resets the player and with them the jump's state.
             MenuAction::NewGame => {
-                // EXT: a new game opens on the INTRO scene (the Backrooms).
+                // EXT: a new game opens on the INTRO scene (the Backrooms) -- not on the
+                // backdrop the title was standing in, which is only ever a photograph.
                 self.load_scene(INTRO);
                 self.ext.borrow_mut().menu.close();
                 self.release_input_latches();
@@ -882,10 +1020,10 @@ impl Engine {
                 self.release_input_latches();
             }
             MenuAction::MainMenu => {
-                // The title screen's backdrop IS the INTRO scene, so leaving a game reloads it;
+                // The title screen's backdrop IS the TITLE scene, so leaving a game reloads it;
                 // otherwise the title would sit in front of whatever level was being played,
                 // seen from a vantage composed for a different world.
-                self.load_scene(INTRO);
+                self.load_scene(TITLE);
                 self.ext.borrow_mut().menu = crate::ext::menu::Menu::new();
             }
             MenuAction::Quit => self.quit_requested.set(true),
@@ -895,7 +1033,7 @@ impl Engine {
         }
     }
 
-    /// EXT: human-readable scene names, in key order, for the level-select menu.
+    /// EXT: human-readable scene names, in registry order, for the level-select menu.
     pub fn scene_names(&self) -> Vec<String> {
         SCENES.iter().map(|entry| entry.name.to_string()).collect()
     }
@@ -946,12 +1084,26 @@ impl Engine {
         // EXT: per-scene shader state starts clean; a scene that wants it sets it in load().
         crate::ext::view::set_mood_enabled(false);
         crate::ext::view::set_far_mood(crate::ext::view::MOOD_SUNSET);
+        crate::ext::view::set_near_mood(0.0);
         crate::ext::view::clear_scene_mood();
         crate::ext::view::set_glow(crate::vector::Vector3::zero(), 0.0);
+        crate::ext::view::clear_spot();
+        // EXT: and the exploration tools' channels (src/ext/tool.rs) -- a tool held at
+        // the switch has no step left to withdraw its standing E claim, and the walker's
+        // last reported presence would haunt instruments in the next scene.
+        crate::ext::tool::reset();
+        // EXT: and the hide and the sleepwalkers' attention with it -- a costume worn
+        // across a scene switch would draw a chair in the next street.
+        crate::ext::disguise::reset();
+        crate::ext::npc::reset();
+        crate::ext::grab::reset_busy();
         crate::ext::view::set_wrap(0.0);
+        crate::ext::view::set_seamless_portals(false);
+        crate::ext::view::clear_fog();
         // EXT: and what the footsteps land on -- a level that declares no surface is silent
         // underfoot rather than walking on the last one's carpet (src/ext/audio.rs).
         crate::ext::audio::set_surface(crate::ext::audio::Surface::None);
+        crate::ext::audio::clear_portal_audible();
         // EXT: and so does the title screen's hold on the doors -- `run_frame` sets it again
         // every frame the title is up, so clearing it here cannot strand a door open.
         crate::ext::door::set_hold_open(false);
@@ -975,6 +1127,13 @@ impl Engine {
         // equivalent of pushing a shared_ptr<Player> into a vector<shared_ptr<Object>>
         // (was: vObjects.push_back(player), Engine.cpp:143).
         self.v_objects.borrow_mut().push(Rc::clone(&self.player) as Rc<RefCell<dyn ObjectT>>);
+        // EXT: and the body that stands where the player is, drawn only when the camera has
+        // stepped back off their shoulder (`ext/thirdperson.rs`). Pushed for every scene so
+        // the toggle is instant, and idle -- neither skinned nor drawn -- in first person.
+        self.v_objects
+            .borrow_mut()
+            .push(Rc::new(RefCell::new(crate::ext::avatar::Avatar::new(&self.gl, &self.res)))
+                as Rc<RefCell<dyn ObjectT>>);
         // EXT: the rigid-body world's static colliders are this scene's scenery
         // (src/ext/physics.rs): the object list is complete now, and the old scene's props,
         // still alive below, unregister themselves when it is dropped.
@@ -1001,13 +1160,19 @@ impl Engine {
             let input = self.input.borrow();
             // EXT: sample the player's eye transform BEFORE the loop, while nothing else holds
             // a borrow on it.
-            let (cam_to_world, player_pos) = {
+            let (cam_to_world, player_pos, player_p_scale) = {
                 let p = self.player.borrow();
-                (p.cam_to_world(), p.obj().pos)
+                (p.cam_to_world(), p.obj().pos, p.obj().p_scale)
             };
             let v_objects = self.v_objects.borrow();
             // EXT: the vector itself rides along, for an object that reads the others.
-            let ctx = UpdateCtx { input: &input, cam_to_world, player_pos, scene: &v_objects };
+            let ctx = UpdateCtx {
+                input: &input,
+                cam_to_world,
+                player_pos,
+                player_p_scale,
+                scene: &v_objects,
+            };
             for i in 0..v_objects.len() {
                 // PORT: `assert(vObjects[i].get())` (Engine.cpp:149) is unnecessary -- an Rc is
                 // never null.
@@ -1199,12 +1364,16 @@ impl Engine {
         skip_portal: Option<u32>,
     ) {
         // EXT: tell materials whether this is the main view or a portal pass, so expensive
-        // shaders can drop detail where it costs the most and shows the least.
-        crate::ext::view::set_detail(if self.rec_level.get() >= GH_MAX_RECURSION {
-            1.0
-        } else {
-            0.0
-        });
+        // shaders can drop detail where it costs the most and shows the least -- unless the
+        // scene's portals are seams rather than doorways, where the saving is what draws the
+        // seam in (`view::set_seamless_portals`).
+        let detail =
+            if self.rec_level.get() >= GH_MAX_RECURSION || crate::ext::view::seamless_portals() {
+                1.0
+            } else {
+                0.0
+            };
+        crate::ext::view::set_detail(detail);
 
         let gl: &glow::Context = &self.gl;
         // EXT: one frustum and one eye per pass, shared by every draw below; and the shared
@@ -1338,6 +1507,25 @@ impl Engine {
             self.rec_level.set(self.rec_level.get() + 1);
         }
 
+        // EXT: the late pass -- objects that must land on the FINISHED frame rather than into
+        // the middle of it. The sky above and the portal quads before it both test depth and
+        // the sky writes at the far plane, so an additive effect that writes no depth is
+        // overwritten by them everywhere it is in front of open sky or of a doorway. See
+        // `ObjectT::draw_late`; nothing in the port implements it.
+        {
+            // Put THIS pass's detail back first. The portal recursion above re-enters `render`,
+            // which sets the flag for its own nested pass and has no reason to restore it on
+            // the way out -- so by the time control reaches here it still says "portal pass",
+            // and every material that skips work in one would skip it in the main view too.
+            // Nothing else reads the flag this late, which is why it went unnoticed until the
+            // late pass arrived and quietly drew nothing.
+            crate::ext::view::set_detail(detail);
+            let v_objects = self.v_objects.borrow();
+            for i in 0..v_objects.len() {
+                v_objects[i].borrow().draw_late(&ctx, cam, cur_fbo);
+            }
+        }
+
         // PORT: the `#if 0` debug-collider block (Engine.cpp:264-269) is dropped along with
         // Object::DebugDraw, which is immediate mode and cannot exist in a core profile.
     }
@@ -1364,8 +1552,18 @@ impl Engine {
         let mut dist = f32::MAX;
         let v_portals = self.v_portals.borrow();
         let player = self.player.borrow();
+        // EXT: from the RENDER camera, which the third-person boom puts behind the player
+        // (`ext/thirdperson.rs`). This distance shrinks the near plane and `Portal::draw`'s
+        // oblique clip; measured from the eye it would be too large for a camera that is
+        // nearer the doorway than the player is, and the quad would clip through. First
+        // person takes the ported path exactly.
+        let from = if crate::ext::thirdperson::enabled() {
+            player.render_cam_to_world().translation()
+        } else {
+            player.obj().pos
+        };
         for i in 0..v_portals.len() {
-            dist = gh_min(dist, v_portals[i].borrow().dist_to(player.obj().pos));
+            dist = gh_min(dist, v_portals[i].borrow().dist_to(from));
         }
         dist
     }
@@ -1380,7 +1578,7 @@ impl Engine {
 impl Engine {
     /// EXT: one rendered frame of the title screen's backdrop.
     ///
-    /// The INTRO scene has to be alive behind the title -- the door swings itself open while
+    /// The TITLE scene has to be alive behind the title -- the door swings itself open while
     /// the menu fades in, the sea moves through it, the blade field settles -- so this runs the
     /// same fixed-step loop `run_frame` does. It differs in the two ways a backdrop differs
     /// from a game:
@@ -1400,6 +1598,12 @@ impl Engine {
     /// further from the door than any player would have to be to open it.
     fn step_title_backdrop(&self) {
         crate::ext::door::set_hold_open(true);
+        // EXT: and the lens the shot is composed on (`ext::meadow::TITLE_FOV`). Set here every
+        // title frame rather than once, because anything can have moved it in between -- the
+        // sprint kick eases it while playing -- and cleared by the next `load_scene`, which
+        // restores `GH_FOV` (`ExtState::on_scene_loaded`). So NEW GAME opens at the playing
+        // field of view without this having to put it back.
+        crate::ext::view::set_fov(crate::ext::meadow::TITLE_FOV);
         let held_input = self.input.replace(Input::new());
 
         // Once before the loop as well as after every step inside it: a frame rendered faster
@@ -1459,6 +1663,38 @@ impl Engine {
         if grab_pressed && key_wants_use {
             crate::ext::key::press();
             grab_pressed = false;
+        }
+        // EXT: then a held exploration tool (src/ext/tool.rs) -- E operates the instrument
+        // in hand (switch, shutter) rather than dropping it; pocketing it is the
+        // inventory's F. Below the key, so a lock in reach still wins the press.
+        if grab_pressed && crate::ext::tool::wants_use() {
+            crate::ext::tool::press();
+            grab_pressed = false;
+        }
+        // EXT: then the hide (src/ext/disguise.rs) -- E on a piece of furniture becomes it,
+        // and E while wearing it steps back out. Below the tool so an instrument in hand
+        // still answers to E; above the grab so becoming a chair is never a pickup.
+        // ...unless the grab has something to do with this press: a tool lying on the chest
+        // you could also become must still be pickable, and the pickup is the rarer, more
+        // specific intent. `grab::busy()` is last frame's answer, which is the safe side.
+        if grab_pressed && !crate::ext::grab::busy() && crate::ext::disguise::wants_use() {
+            crate::ext::disguise::press();
+            grab_pressed = false;
+        }
+
+        // EXT: dev flag -- a torch nobody is holding, from the EYE (never the boom's camera).
+        if crate::ext::view::force_torch() {
+            let cam = self.player.borrow().cam_to_world();
+            let dir = cam.mul_direction(crate::vector::Vector3::new(0.0, 0.0, -1.0));
+            crate::ext::view::set_spot(
+                cam.translation(),
+                dir,
+                18.0,
+                13.0,
+                27.0,
+                [1.00, 0.94, 0.82],
+                1.1,
+            );
         }
 
         let (cam_to_world, steps, feet) = {
@@ -1591,18 +1827,6 @@ impl Engine {
     /// EXT: how many scenes are registered, so the platform layer can bound its cycling.
     pub fn scene_count(&self) -> usize {
         self.v_scenes.len()
-    }
-
-    /// EXT: step to the next or previous scene, wrapping at both ends.
-    /// Bound to the DualSense shoulder buttons and D-pad.
-    pub fn cycle_scene(&self, delta: i32) {
-        let n = self.v_scenes.len() as i32;
-        if n == 0 {
-            return;
-        }
-        let cur = self.cur_scene_ix.get() as i32;
-        let next = (cur + delta).rem_euclid(n);
-        self.load_scene(next as usize);
     }
 
     /// EXT: reach the audio mixer (mute toggle, volume).

@@ -189,6 +189,9 @@ impl Surface {
 thread_local! {
     /// What the level now playing walks on. Cleared by the engine before every scene load.
     static SURFACE: Cell<Surface> = const { Cell::new(Surface::None) };
+    /// EXT: a scene's own answer to `portal_audible`, overriding what its ground would say.
+    /// `None` is "ask the ground". Cleared on every scene load.
+    static PORTAL_HEARD: Cell<Option<bool>> = const { Cell::new(None) };
     /// One-shots asked for from inside the world, drained by [`Audio::tick`].
     static QUEUE: RefCell<Vec<Sfx>> = const { RefCell::new(Vec::new()) };
 }
@@ -199,6 +202,12 @@ pub fn set_surface(surface: Surface) {
     SURFACE.with(|s| s.set(surface));
 }
 
+/// Forget a scene's [`set_portal_audible`], so the next one's ground answers for it again.
+/// `Engine::load_scene` calls it beside [`set_surface`].
+pub fn clear_portal_audible() {
+    PORTAL_HEARD.with(|c| c.set(None));
+}
+
 /// Whether a portal crossing should be heard in the level now playing.
 ///
 /// The level's own surface answers, and that is not a coincidence being exploited: the fifteen
@@ -207,7 +216,20 @@ pub fn set_surface(surface: Surface) {
 /// change what those scenes are. Every level this port added declares its ground, and in those a
 /// portal is a thing you can see and mean to step through.
 pub fn portal_audible() -> bool {
-    SURFACE.with(Cell::get) != Surface::None
+    PORTAL_HEARD.with(Cell::get).unwrap_or_else(|| SURFACE.with(Cell::get) != Surface::None)
+}
+
+/// Say outright whether this scene's portals are heard, instead of letting its ground answer.
+/// Cleared on every scene load, like the surface.
+///
+/// The rule above reads a level's ground as "this portal is a thing you can see and mean to
+/// step through", and that holds for every level that had one when it was written. It stops
+/// holding the moment a level owns its ground *and* hides its portals: the Liminal
+/// Neighborhood declares grass so its footsteps are right, and its two cuts span the whole
+/// street and are meant never to be found (`level31.rs`). An 850 ms whoosh out of a seam with
+/// nothing at it is the one sound that could give it away.
+pub fn set_portal_audible(on: bool) {
+    PORTAL_HEARD.with(|c| c.set(Some(on)));
 }
 
 /// Ask for `sfx` on the next frame, from code that cannot reach `Audio` (see the module docs).
@@ -267,6 +289,9 @@ pub enum Sfx {
     /// The intro door's heavy wooden swing.
     DoorOpen,
     DoorClose,
+    /// An exploration tool's switch, and the photo camera's shutter (src/ext/tool.rs).
+    ToolClick,
+    CameraSnap,
 }
 
 impl Sfx {
@@ -294,10 +319,12 @@ impl Sfx {
             Sfx::UiBack => "ui_back",
             Sfx::DoorOpen => "door_open",
             Sfx::DoorClose => "door_close",
+            Sfx::ToolClick => "tool_click",
+            Sfx::CameraSnap => "camera_snap",
         }
     }
 
-    pub const ALL: [Sfx; 22] = [
+    pub const ALL: [Sfx; 24] = [
         Sfx::Grab,
         Sfx::Release,
         Sfx::Stow,
@@ -320,6 +347,8 @@ impl Sfx {
         Sfx::UiBack,
         Sfx::DoorOpen,
         Sfx::DoorClose,
+        Sfx::ToolClick,
+        Sfx::CameraSnap,
     ];
 }
 
@@ -1043,6 +1072,28 @@ mod tests {
         assert_eq!(queued, [Sfx::Portal, Sfx::UiMove], "a repeat within a frame is dropped");
     }
 
+    /// A level can own its ground and still hide its portals: the Liminal Neighborhood
+    /// declares grass so its footsteps are right, and silences its two cuts because they are
+    /// seams rather than doorways (`level31.rs`).
+    #[test]
+    fn a_scene_can_silence_its_portals_without_giving_up_its_footsteps() {
+        set_surface(Surface::Grass);
+        assert!(portal_audible(), "the ground answers when the scene says nothing");
+        set_portal_audible(false);
+        assert!(!portal_audible(), "the scene's own answer wins");
+        assert_eq!(SURFACE.with(Cell::get), Surface::Grass, "and its footsteps are untouched");
+        // The next scene's ground answers for it again -- `Engine::load_scene` clears it.
+        clear_portal_audible();
+        assert!(portal_audible());
+        // It can go the other way too: a scene with no ground that wants to be heard.
+        set_surface(Surface::None);
+        assert!(!portal_audible());
+        set_portal_audible(true);
+        assert!(portal_audible());
+        clear_portal_audible();
+        set_surface(Surface::None);
+    }
+
     #[test]
     fn the_surface_is_what_was_last_set() {
         set_surface(Surface::Carpet);
@@ -1057,6 +1108,7 @@ mod tests {
     fn a_portal_is_only_audible_where_a_level_declares_its_ground() {
         set_surface(Surface::None);
         assert!(!portal_audible(), "the ported NonEuclidean scenes stay seamless");
+        clear_portal_audible();
         for ground in [
             crate::level15::SURFACE,
             crate::level16::SURFACE,

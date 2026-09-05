@@ -1,0 +1,47 @@
+Model Information:
+* title:	Exploration objects
+* source:	https://sketchfab.com/models/fa99705c1afa4e7da5186938709f0231
+* also:	https://elbolilloduro.itch.io/exploration-objects (the page the licence is quoted from)
+* author:	Elbolillo (https://sketchfab.com/Elbolilloduro / https://elbolilloduro.itch.io)
+
+Model License:
+* license type:	CC0 1.0 (https://creativecommons.org/publicdomain/zero/1.0/)
+* requirements:	None. CC0 is a public domain dedication, not an attribution licence: the author
+		has waived every right that can be waived, and no credit is owed for any use,
+		commercial included.
+
+The pack's itch.io page states it in one line: "The models in this package are under the CC0
+license, you can find more information about the license here" -- "here" linking to the CC0 URL
+above.
+
+Attribution is NOT required. It is given anyway: the in-game Credits screen carries
+"EXPLORATION TOOLS - ELBOLILLO" as a courtesy, placed below the note that says the model lines
+above it are CC-BY-4.0, so that note stays true.
+
+Provenance of this file: the licence was read on the itch.io page at import (2026-08), not
+transcribed from embedded metadata -- this GLB is built here from the pack's FBX, so it carries
+no Sketchfab `asset.extras` block. The pages above are the authority, and they have been read.
+
+CHANGES MADE TO THIS FILE (nothing obliges the record -- CC0 asks nothing -- but it is kept to
+the same standard as the CC-BY meshes, so a fresh download can be checked against it):
+
+  This copy is NOT the file as downloaded. `tools/build_props.py` (headless Blender) converts
+  the pack's FBX (`source/Exploration objects/Exploration_objects.fbx`) into this GLB:
+
+  * The pack's one unnamed mesh, `Cone.001` -- the spirit box -- is renamed `Spirit_Box`.
+  * Every material is set metallic 0 / roughness 1: these are PSX diffuse textures, and
+    glTF's default metallic 1 would render them as dark metal.
+  * Four materials get the pack's `*_Emissor.png` wired as the glTF emissive texture, so
+    their screens glow unlit at night. The EMF detector ships five display states
+    (`*_Emissor_00`..`_04`); the mid state `_Emissor_02` is the one wired -- a fixed mid
+    reading, honest for a prop that cannot swap maps at runtime.
+
+  Nothing else is altered: geometry, UVs, the materials otherwise, and the pack's own layout
+  positions ship as authored.
+
+  Reproduce with:
+      /Applications/Blender.app/Contents/MacOS/Blender --background --python tools/build_props.py
+
+What the file holds: the pack's 8 handheld tools -- EMF_Detector, Flashlight, Flashlight_Poquet,
+Photo_Camera, Spirit_Box, Thermal_Camera, Thermometer, Voice_Recorder -- as takeable, usable
+items for the scene derived from Liminal Neighborhood.

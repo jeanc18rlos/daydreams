@@ -42,6 +42,13 @@ pub struct Player {
     // shape as `hint::take`.
     jumped: Cell<bool>,
     landed: Cell<Option<f32>>,
+
+    // EXT: how much of the third-person boom currently fits, 0..1, resolved every step by
+    // casting it against the scene (see `resolve_boom`). Kept on the player rather than
+    // computed in the renderer because the cast wants `UpdateCtx::scene`, and because the
+    // value has to be smoothed over time -- a boom that snapped to each step's cast would
+    // strobe every time a doorframe clipped its corner.
+    boom_frac: f32,
 }
 
 // Preserved verbatim from the C++ API surface; not every member is reachable from the
@@ -63,6 +70,7 @@ impl Player {
             jump: crate::ext::jump::Jump::new(),
             jumped: Cell::new(false),
             landed: Cell::new(None),
+            boom_frac: 1.0,
         };
         p.reset();
         p.base.hit_spheres.push(Sphere::new_at(Vector3::new(0.0, 0.0, 0.0), GH_PLAYER_RADIUS));
@@ -192,6 +200,10 @@ impl Player {
         move_l += ctx.input.pad_move_l;
         self.move_player(move_f, move_l, &sprint);
 
+        // EXT: keep the third-person camera out of the walls. After the move, so the cast
+        // sees where the body has actually arrived this step.
+        self.resolve_boom(ctx.scene);
+
         //Reset ground state after update finishes
         self.on_ground = false;
     }
@@ -293,6 +305,74 @@ impl Player {
             * Matrix4::rot_x(self.cam_rx)
     }
 
+    // ── EXT: the third-person boom ──────────────────────────────────────────────────────
+    //
+    // `cam_to_world`/`world_to_cam` above stay the EYE, because every gameplay question is
+    // asked of them (see the module docs of `ext/thirdperson.rs`). These two are what the
+    // renderer uses, and nothing else.
+
+    /// The boom offset in camera space, in metres, already scaled by the player's size and
+    /// shortened to whatever fit at the last cast. `Vector3::zero()` in first person.
+    pub fn boom_offset(&self) -> Vector3 {
+        if !crate::ext::thirdperson::enabled() {
+            return Vector3::zero();
+        }
+        crate::ext::thirdperson::BOOM * (self.boom_frac * self.base.base.p_scale)
+    }
+
+    /// What `Engine::render` builds the main camera from.
+    pub fn render_world_to_cam(&self) -> Matrix4 {
+        Matrix4::trans(-self.boom_offset()) * self.world_to_cam()
+    }
+
+    /// The render camera's transform -- the inverse of [`Player::render_world_to_cam`],
+    /// for the cull frustum's eye and anything else that wants where the picture is taken
+    /// from rather than where the player is standing.
+    pub fn render_cam_to_world(&self) -> Matrix4 {
+        self.cam_to_world() * Matrix4::trans(self.boom_offset())
+    }
+
+    /// Cast the boom against the scene and keep the camera out of the walls.
+    ///
+    /// A ray, not a sphere: the engine has no sphere cast, and a ray plus [`CLEARANCE`]
+    /// buys the same thing for a camera that only ever has to avoid looking *through* a
+    /// surface. The result eases rather than snaps -- geometry clipping the boom's corner
+    /// for one step must not strobe the shot -- but a shortening is taken immediately,
+    /// because easing INTO a wall shows the inside of it.
+    ///
+    /// [`CLEARANCE`]: crate::ext::thirdperson::CLEARANCE
+    fn resolve_boom(&mut self, scene: &[std::rc::Rc<std::cell::RefCell<dyn ObjectT>>]) {
+        use crate::ext::thirdperson::{BOOM, CLEARANCE, MIN_FRACTION};
+        if !crate::ext::thirdperson::enabled() {
+            self.boom_frac = 1.0;
+            return;
+        }
+        let p_scale = self.base.base.p_scale;
+        let eye = self.cam_to_world().translation();
+        // The boom's direction and full length in world units.
+        let world = self.cam_to_world().mul_direction(BOOM) * p_scale;
+        let full = world.mag();
+        if full < 1e-4 {
+            self.boom_frac = 1.0;
+            return;
+        }
+        let dir = world / full;
+        // The player's own cell is mutably borrowed for this call; `raycast` treats a cell
+        // it cannot borrow as "not that one" (see UpdateCtx::scene), so the body the camera
+        // is orbiting cannot block its own boom.
+        let clear = CLEARANCE * p_scale;
+        let want = match crate::ext::raycast::raycast(scene, eye, dir, full + clear, None) {
+            Some(hit) => ((hit.dist - clear) / full).clamp(MIN_FRACTION, 1.0),
+            None => 1.0,
+        };
+        // Pull in at once, ease out.
+        self.boom_frac = if want < self.boom_frac {
+            want
+        } else {
+            self.boom_frac + (want - self.boom_frac) * 0.12
+        };
+    }
+
     pub fn cam_offset(&self) -> Vector3 {
         //If bob is too small, don't even bother
         if self.bob_mag < GH_BOB_MIN {
@@ -350,6 +430,14 @@ impl ObjectT for Player {
 impl Player {
     /// EXT: aim the camera directly (radians). Used by the `--shot` dev tooling so a
     /// screenshot can be framed without mouse input.
+    /// EXT: the camera's yaw and pitch in radians, in the order `set_look` takes them --
+    /// which is the order `--yaw` and `--pitch` take them too. Read by the developer
+    /// overlay (src/ext/debug.rs) so a vantage found by hand can be written down as the
+    /// command that reproduces it.
+    pub fn look_angles(&self) -> (f32, f32) {
+        (self.cam_ry, self.cam_rx)
+    }
+
     pub fn set_look(&mut self, yaw: f32, pitch: f32) {
         self.cam_ry = yaw;
         self.cam_rx = pitch;
@@ -444,6 +532,7 @@ mod tests {
                 input: &input,
                 cam_to_world: p.cam_to_world(),
                 player_pos: p.obj().pos,
+                player_p_scale: 1.0,
                 scene: &[],
             };
             p.update_player(&ctx);
@@ -516,6 +605,7 @@ mod tests {
             input,
             cam_to_world: p.cam_to_world(),
             player_pos: p.obj().pos,
+            player_p_scale: 1.0,
             scene: &[],
         };
         p.update_player(&ctx);
@@ -571,6 +661,7 @@ mod tests {
                 input: &input,
                 cam_to_world: a.cam_to_world(),
                 player_pos: a.obj().pos,
+                player_p_scale: 1.0,
                 scene: &[],
             };
             a.update_player(&ctx);
@@ -601,6 +692,7 @@ mod tests {
                 input: &input,
                 cam_to_world: p.cam_to_world(),
                 player_pos: p.obj().pos,
+                player_p_scale: 1.0,
                 scene: &[],
             };
             p.update_player(&ctx);
@@ -742,6 +834,7 @@ mod tests {
                 input: &input,
                 cam_to_world: p.cam_to_world(),
                 player_pos: p.obj().pos,
+                player_p_scale: 1.0,
                 scene: &[],
             };
             p.update_player(&ctx);

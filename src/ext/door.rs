@@ -110,21 +110,38 @@ const EASE: f32 = 0.011;
 /// How far the closed leaf sits proud of the frame's centre plane, so the two never land
 /// coplanar. Small enough to still read as a shut door.
 ///
-/// Zero, now that the loader fits the whole model from one origin: the real door already seats
-/// its leaf 37 mm proud of the frame's reveal mid-plane, and that offset now survives the import
-/// instead of being thrown away and guessed back. Kept as a named constant because the swing
-/// axis genuinely is offset from the frame plane, and a future model might need a nudge.
+/// Zero, because the loader fits the whole model from one origin and whatever seat the file
+/// gives its leaf survives the import instead of being thrown away and guessed back. On the
+/// white PSX door that seat is nothing much -- the leaf sits centred in the casing's depth,
+/// where the door this replaced hung 37 mm proud of its reveal -- so zero is right here for a
+/// different reason than it was there. Kept as a named constant because the swing axis
+/// genuinely can be offset from the frame plane, and the next model may need the nudge.
 const LEAF_SEAT: f32 = 0.0;
 
 /// The source model, loaded at runtime with its own normals, tangents and material maps.
-const MODEL: &str = "Meshes/Classic_Interior_Door.glb";
+///
+/// Icevanilla's "Low-Poly PSX Style Essential Doors Pack" (CC-BY-4.0; licence beside it, credit
+/// in `THIRD_PARTY.md` and on the Credits screen): seven door-and-frame pairs laid out along +x
+/// on one shared colour map. This door is the white one, `Bathroom Door_002.001`, with the knob
+/// that hangs under it and the frame beside it.
+///
+/// The shipped file is the pack with a **half-turn baked onto those two nodes**
+/// (`tools/turn_white_door.py`). Every door in the pack is modelled with its knob at the low-x
+/// end, so its hinge is the high-x edge -- and `Anchor::Hinge` puts a part's origin on its
+/// low-x edge, which would have swung this leaf about its own doorknob. A half-turn about Y is
+/// a rotation rather than a mirror, so winding survives and the loader carries the normals and
+/// tangents through with it; and it is free to look at, because this door is symmetric front to
+/// back. All it changes is which side the knob is on.
+const MODEL: &str = "Meshes/psx_essential_doors_pack.glb";
 
-/// Texture side the door's maps are capped at. The door is 1.7 units tall (`HALF_H`) and stands
-/// at conversational distance at most, so even 512 is more texel than it can show -- and
-/// halving from 1024 quartered both the packing loop and the resident textures. The shipped GLB
-/// is pre-shrunk to exactly this size by `tools/shrink_glb.py` (its 4096 sources were 79 MB),
-/// so the loader resizes nothing; change this and re-run the tool together.
-const MAP: u32 = 512;
+/// Texture side the door's maps are capped at. The pack's one colour map is 1024x256 and this
+/// is its long side, so the loader resamples nothing.
+///
+/// The 512 that stood here was right for a model with a map to itself: a door seen at
+/// conversational distance cannot show more. This map is an atlas shared by all seven doors in
+/// the pack, so ours has about a seventh of its width -- 146 texels at 1024, and 73 at 512,
+/// which is where the panel edges start to crawl.
+const MAP: u32 = 1024;
 
 /// Half-height of the opening, and so the door's whole size: the loader fits the leaf to
 /// `2 * HALF_H` and scales the frame with it.
@@ -141,14 +158,59 @@ pub const HALF_H: f32 = 0.85;
 /// is why the door's size is set by `HALF_H` alone and this follows. `Door::new` asserts the
 /// loaded model still agrees, so a swapped model fails loudly at load rather than quietly
 /// leaving the leaf too narrow for its frame.
-const LEAF_ASPECT: f32 = 0.468;
+///
+/// The white PSX leaf measures 0.756 x 1.806 in the file, so 0.756 / 1.806. The door it replaced
+/// was 0.468, a hand's width broader for its height; `Meshes/intro_door_collide.obj` is
+/// re-derived from the `HALF_W` this gives, and `collider_posts_match_half_w` holds the two
+/// together.
+const LEAF_ASPECT: f32 = 0.4186;
 pub const HALF_W: f32 = LEAF_ASPECT * HALF_H;
 
-/// How deep the frame's collision posts stand either side of the opening. Scales with the door,
-/// and `Meshes/intro_door_collide.obj` is written to match; `collider_posts_match_half_w` below
-/// is what keeps the two in step.
+/// How deep the frame's collision posts stand either side of the opening: the casing's own jamb
+/// width, so the player meets the frame exactly where they can see it. Scales with the door, and
+/// `Meshes/intro_door_collide.obj` is written to match; `collider_posts_match_half_w` below is
+/// what keeps the two in step.
+///
+/// The white PSX frame is 0.897 wide against its 0.756 leaf, so each jamb is 0.0705 in the file
+/// and 0.0664 once fitted -- 0.0781 of `HALF_H`. The 0.09 that stood here was the old door's
+/// jamb; kept on this frame it would have left a centimetre of collision standing proud of the
+/// casing on each side, which is a sliver of nothing to walk into.
 #[allow(dead_code)] // Documents the asset; only `collider_posts_match_half_w` reads it.
-pub const POST_DEPTH: f32 = 0.09 * HALF_H;
+pub const POST_DEPTH: f32 = 0.0781 * HALF_H;
+
+/// The file and how its two parts are gathered. A function rather than a literal inside
+/// `Door::new` so the tests can measure the very spec the door loads, without a GL context:
+/// the `debug_assert` below needs one, so nothing in `cargo test` would otherwise notice a
+/// model swapped for one of different proportions.
+fn load_spec() -> Load<'static> {
+    Load {
+        path: MODEL,
+        parts: &[
+            PartSpec {
+                name: "leaf",
+                roots: &["Bathroom Door_002.001"],
+                skip: &[],
+                frame: Frame::Scene,
+                // Origin ON THE HINGE: Object rotates about its own origin, so the
+                // leaf's local x=0 must be its hinge edge or it would orbit instead of
+                // swing. The baked half-turn (see MODEL) is what puts the hinge there.
+                anchor: Anchor::Hinge,
+            },
+            PartSpec {
+                name: "frame",
+                roots: &["Bathroom Doorframe_001.001"],
+                skip: &[],
+                frame: Frame::Scene,
+                anchor: Anchor::Around("leaf"),
+            },
+        ],
+        fit: Fit::Part { part: "leaf", height: HALF_H * 2.0 },
+        max_map: MAP,
+        translucent: &[],
+        metallic_override: &[],
+        cut_boxes: &[],
+    }
+}
 
 pub struct Door {
     /// The frame. Its transform is the door's transform.
@@ -173,43 +235,14 @@ impl Door {
         glows: bool,
         link: Option<DoorLink>,
     ) -> Door {
-        // The leaf is gathered from MatrixTransform_37, NOT from the "Door" node above it: that
-        // node carries a 55-degree Y rotation modelling the door hanging ajar in the original
-        // scene. Walking from the natural root would import the leaf pre-rotated and every
-        // hinge calculation below would be nonsense. The handle is a sibling sub-tree and rides
-        // with the leaf, so both land in one part and swing together.
-        let model = GltfModel::acquire(
-            gl,
-            &Load {
-                path: MODEL,
-                parts: &[
-                    PartSpec {
-                        name: "leaf",
-                        roots: &["MatrixTransform_37", "Door4_Handle"],
-                        skip: &[],
-                        // ...but keep that node's TRANSLATION, or the leaf loses its position
-                        // in the assembly and the frame has to be re-aligned to it by hand.
-                        frame: Frame::Translated("Door"),
-                        // Origin ON THE HINGE: Object rotates about its own origin, so the
-                        // leaf's local x=0 must be its hinge edge or it would orbit instead of
-                        // swing.
-                        anchor: Anchor::Hinge,
-                    },
-                    PartSpec {
-                        name: "frame",
-                        roots: &["Door4_Frame"],
-                        skip: &[],
-                        frame: Frame::Local,
-                        anchor: Anchor::Around("leaf"),
-                    },
-                ],
-                fit: Fit::Part { part: "leaf", height: HALF_H * 2.0 },
-                max_map: MAP,
-                translucent: &[],
-                metallic_override: &[],
-                cut_boxes: &[],
-            },
-        );
+        // Both parts are walked from the scene root (`Frame::Scene`), which is what makes the
+        // offset between them real: `Anchor::Around("leaf")` reads the frame's true seat around it
+        // rebate straight out of the file instead of it being guessed back as a constant. The
+        // knob hangs UNDER the leaf's node, so it is gathered with it and swings with it.
+        //
+        // The pack's own layout puts the seven doors side by side along x; naming two nodes
+        // gathers only those two, and the other six are never walked.
+        let model = GltfModel::acquire(gl, &load_spec());
 
         let leaf_b = model.bounds("leaf");
         debug_assert!(
@@ -372,6 +405,58 @@ pub fn yaw_facing(dir: Vector3) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    /// The model measured without a GL context, which is the only way `cargo test` can see it:
+    /// the guard inside `Door::new` is a `debug_assert` behind `GltfModel::acquire`, so a model
+    /// swapped for one of different proportions passes the whole suite and fails only when
+    /// somebody launches the intro in a debug build.
+    ///
+    /// What it holds: the leaf is fitted to the opening and hung by its low-x edge, so its
+    /// bounds run 0..2*HALF_W from the hinge; the frame is anchored around it, so it straddles
+    /// the origin and is wider than the leaf by a jamb either side. Get the hinge edge wrong --
+    /// the pack this door comes from models every one of its doors knob-first -- and the leaf's
+    /// bounds still look right while it swings about its own doorknob, which is why the knob's
+    /// side is checked too.
+    #[test]
+    fn the_model_is_the_door_the_constants_describe() {
+        use crate::ext::gltf_model::GltfModel;
+        let spec = super::load_spec();
+        let leaf = GltfModel::probe_bounds(&spec, "leaf");
+        let frame = GltfModel::probe_bounds(&spec, "frame");
+        // Fitted to the opening's height, to the millimetre.
+        assert!((leaf[3] - leaf[2] - 2.0 * super::HALF_H).abs() < 1e-3, "leaf {leaf:?}");
+        // Hung by its low-x edge: that is what `Anchor::Hinge` means and what `place_leaf`
+        // assumes when it puts the leaf's origin on the hinge post.
+        assert!(leaf[0].abs() < 1e-4, "the leaf's hinge edge is at x = {}, not 0", leaf[0]);
+        assert!((leaf[1] - 2.0 * super::HALF_W).abs() < 2e-3, "leaf is {} wide", leaf[1]);
+        // The frame straddles the opening and overhangs it by a jamb on each side.
+        assert!(frame[0] < -super::HALF_W && frame[1] > super::HALF_W, "frame {frame:?}");
+        let jamb = 0.5 * ((frame[1] - frame[0]) - (leaf[1] - leaf[0]));
+        assert!(
+            (jamb - super::POST_DEPTH).abs() < 5e-3,
+            "the casing's jamb is {jamb}, but the collision posts stand {} deep",
+            super::POST_DEPTH
+        );
+        assert!(frame[3] > 2.0 * super::HALF_H * 0.98, "the frame is shorter than the opening");
+
+        // And the KNOB is at the far end from the hinge, which is the whole of the reason this
+        // file ships turned (see `MODEL`). Bounds cannot say so -- a leaf hung backwards has
+        // exactly the same box -- so the knob is picked out of the geometry: it is the only
+        // part of the leaf that stands proud of the panel's thickness, so the vertices furthest
+        // from the panel's mid-plane in z ARE the knob, and their x says which edge it is on.
+        let (pos, idx) = GltfModel::probe_triangles(&spec, "leaf");
+        let mid_z = 0.5 * (leaf[4] + leaf[5]);
+        let mut proud: Vec<[f32; 3]> = idx.iter().map(|&i| pos[i as usize]).collect::<Vec<_>>();
+        proud.sort_by(|a, b| (b[2] - mid_z).abs().total_cmp(&(a[2] - mid_z).abs()));
+        proud.truncate(proud.len() / 10);
+        let knob_x = proud.iter().map(|p| p[0]).sum::<f32>() / proud.len() as f32;
+        assert!(
+            knob_x > super::HALF_W,
+            "the knob sits at x = {knob_x}, the hinge half of a leaf spanning 0..{} -- the \
+             door is hung backwards and would swing about its own handle",
+            2.0 * super::HALF_W
+        );
+    }
+
     /// The frame's collision posts are a hand-written OBJ (glTF carries no colliders), so
     /// nothing recomputes them when HALF_W changes. If they drift, the player either walks
     /// through the frame or bumps into thin air beside it.

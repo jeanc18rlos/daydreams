@@ -189,6 +189,8 @@ pub fn key_index(k: winit::keyboard::KeyCode) -> Option<usize> {
         KeyCode::KeyG => b'G',
         // EXT: rotate-modifier on keyboard (hold R + mouse).
         KeyCode::KeyR => b'R',
+        // EXT: first person / third person (src/ext/thirdperson.rs).
+        KeyCode::KeyV => b'V',
         // EXT: sprint (hold). Both Shifts land in the Win32 VK_SHIFT slot (16), the slot the
         // C++ WndProc's `wParam & 0xFF` indexing would have given them (Engine.cpp:295-313).
         KeyCode::ShiftLeft | KeyCode::ShiftRight => 16,
@@ -215,7 +217,7 @@ mod tests {
     /// indexes with `wParam & 0xFF`, the Win32 virtual-key numbers for the rest.
     #[test]
     fn every_key_the_game_reads_lands_in_its_slot() {
-        let table: [(KeyCode, usize); 40] = [
+        let table: [(KeyCode, usize); 39] = [
             (KeyCode::KeyW, b'W' as usize),
             (KeyCode::KeyA, b'A' as usize),
             (KeyCode::KeyS, b'S' as usize),
@@ -253,21 +255,34 @@ mod tests {
             (KeyCode::Enter, 13),
             (KeyCode::Backspace, 8),
             (KeyCode::Space, b' ' as usize),
-            // The scene keys in the registry's own terms.
-            (KeyCode::Digit1, crate::ext::scenes::SCENES[0].key as usize),
-            (KeyCode::Quote, crate::ext::scenes::SCENES[crate::ext::scenes::INTRO].key as usize),
-            (KeyCode::Semicolon, crate::ext::scenes::SCENES[15].key as usize),
+            // The number row, which the inventory's slots read (ext/inventory.rs). It used to
+            // load scenes; SWITCH LEVEL in the pause menu does that now.
+            (KeyCode::Digit1, b'1' as usize),
+            (KeyCode::Digit6, b'6' as usize),
         ];
         for (code, slot) in table {
             assert_eq!(key_index(code), Some(slot), "{code:?}");
             assert!(slot < 256);
         }
-        // Every registered scene key is reached by exactly one physical key above.
-        for entry in crate::ext::scenes::SCENES {
-            let hits = table.iter().filter(|(_, s)| *s == entry.key as usize).count();
-            assert!(hits >= 1, "scene key {:?} is not typeable", entry.key as char);
+        // Every inventory slot is reachable from the number row.
+        for (i, code) in DIGITS.iter().take(crate::ext::inventory::CAPACITY).enumerate() {
+            let digit = b'1' + i as u8;
+            assert_eq!(key_index(*code), Some(digit as usize), "slot {} is not typeable", i + 1);
         }
     }
+
+    /// The number-row keys, in slot order, so the test above can walk them.
+    const DIGITS: [KeyCode; 9] = [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+        KeyCode::Digit7,
+        KeyCode::Digit8,
+        KeyCode::Digit9,
+    ];
 
     #[test]
     fn keys_the_game_does_not_read_map_nowhere() {

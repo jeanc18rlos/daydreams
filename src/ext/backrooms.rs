@@ -106,8 +106,13 @@ fn load_spec() -> Load<'static> {
 /// while still within the fenced footprint `(lo, hi)` on x and z. Outside that footprint
 /// nothing is under them either, but nothing of the building's is to blame and the scene's
 /// fence is what keeps them from getting there.
-pub fn fell_out(pos: Vector3, carpet_y: f32, (lo, hi): (Vector3, Vector3)) -> bool {
-    let feet = pos.y - crate::game_header::GH_PLAYER_HEIGHT;
+pub fn fell_out(pos: Vector3, p_scale: f32, carpet_y: f32, (lo, hi): (Vector3, Vector3)) -> bool {
+    // The drop from eye to sole is the player's HEIGHT TIMES THEIR SIZE. A scale mouth
+    // (`ext/warphouse.rs`) halves `p_scale`, and measuring a halved player's feet as though
+    // they were full size puts them three quarters of a metre underground -- so stepping
+    // off a kerb read as falling out of the world, and the rule respawned them on the spot,
+    // over and over.
+    let feet = pos.y - crate::game_header::GH_PLAYER_HEIGHT * p_scale;
     feet < carpet_y - FALL_DEPTH && pos.x >= lo.x && pos.x <= hi.x && pos.z >= lo.z && pos.z <= hi.z
 }
 
@@ -191,13 +196,13 @@ pub const WALL_FOG: [f32; 4] = [0.40, 0.33, 0.16, 1.0];
 const CAP_MARGIN: f32 = 120.0;
 /// How far below the carpet the cap sits, so it never z-fights the floor quads yet reads as
 /// the floor continuing through any gap in an outer wall.
-const CAP_DROP: f32 = 0.05;
+pub const CAP_DROP: f32 = 0.05;
 /// The cap's colour, and what it fogs to: the interior sky's horizon tone, byte for byte
 /// (`sky.frag`, the `mood > 1.5` branch, at n.y = 0). The cap's far edge lies beyond the far
 /// plane, so what the eye sees along the horizon is the cap at full fog meeting the sky at
 /// the horizon -- and if those two differ at all, the seam is a bright line. With the walls'
 /// brown as the fog target there was a 1-3 px band of it along the whole horizon.
-const CAP_COLOR: [f32; 4] = [0.030, 0.024, 0.016, 1.0];
+pub const CAP_COLOR: [f32; 4] = [0.030, 0.024, 0.016, 1.0];
 
 /// A dark, unlit plane under a whole interior and far past it.
 ///
@@ -217,6 +222,11 @@ pub struct GroundCap {
     base: Object,
     shader: Rc<Shader>,
     white: Rc<Texture>,
+    /// What it is, and what its distance fades to -- the same colour, so the cap is one flat
+    /// tone from underfoot to the horizon. Taken from the scene's fog if it has one, ONCE, at
+    /// construction: `ext/moon.rs` clears the fog for the length of its own draw, so reading it
+    /// at draw time would hand the cap whatever the object before it happened to leave behind.
+    color: [f32; 4],
 }
 
 impl GroundCap {
@@ -236,10 +246,19 @@ impl GroundCap {
         base.euler.x = -std::f32::consts::FRAC_PI_2;
         base.scale =
             Vector3::new(0.5 * (hi.x - lo.x) + CAP_MARGIN, 0.5 * (hi.z - lo.z) + CAP_MARGIN, 1.0);
+        // EXT: the cap's whole job is to be the tone the horizon fades to -- the comment on
+        // `CAP_COLOR` says so, and says what happens when it is not: a bright line where its far
+        // edge meets the sky. So a scene that fades its distance somewhere else of its own
+        // (`view::Fog`) takes the cap with it.
+        let color = match crate::ext::view::fog() {
+            Some(f) => [f.color[0], f.color[1], f.color[2], 1.0],
+            None => CAP_COLOR,
+        };
         GroundCap {
             base,
             shader: res.acquire_shader("gltfunlit"),
             white: res.acquire_texture("white.bmp", 1, 1),
+            color,
         }
     }
 }
@@ -267,8 +286,8 @@ impl ObjectT for GroundCap {
         self.shader.set_mvp(Some(&mvp), None);
         self.shader.set_mat4("model", &local_to_world);
         self.shader.set_vec4("cam_pos", [eye.x, eye.y, eye.z, 1.0]);
-        self.shader.set_vec4("base_color", CAP_COLOR);
-        self.shader.set_vec4("fog_color", CAP_COLOR);
+        self.shader.set_vec4("base_color", self.color);
+        self.shader.set_vec4("fog_color", self.color);
         self.shader.set_vec4("emissive", [0.0; 4]);
         self.shader.set_f32("alpha_cutoff", -1.0);
         self.shader.set_i32("tex", 0);
@@ -394,16 +413,21 @@ mod tests {
     fn fell_out_means_under_the_carpet_inside_the_footprint() {
         let bounds = (Vector3::new(-10.0, -2.0, -5.0), Vector3::new(10.0, 3.0, 5.0));
         let standing = Vector3::new(0.0, GH_PLAYER_HEIGHT, 0.0);
-        assert!(!fell_out(standing, 0.0, bounds));
+        assert!(!fell_out(standing, 1.0, 0.0, bounds));
         // Dipped a little: a skirting, a step, not a fall.
-        assert!(!fell_out(standing - Vector3::new(0.0, FALL_DEPTH * 0.9, 0.0), 0.0, bounds));
+        assert!(!fell_out(standing - Vector3::new(0.0, FALL_DEPTH * 0.9, 0.0), 1.0, 0.0, bounds));
         // Past the depth: out.
         let under = standing - Vector3::new(0.0, FALL_DEPTH * 1.1, 0.0);
-        assert!(fell_out(under, 0.0, bounds));
+        assert!(fell_out(under, 1.0, 0.0, bounds));
         // The same depth outside the footprint is not the building's problem.
-        assert!(!fell_out(under + Vector3::new(11.0, 0.0, 0.0), 0.0, bounds));
-        assert!(!fell_out(under + Vector3::new(0.0, 0.0, -6.0), 0.0, bounds));
+        assert!(!fell_out(under + Vector3::new(11.0, 0.0, 0.0), 1.0, 0.0, bounds));
+        assert!(!fell_out(under + Vector3::new(0.0, 0.0, -6.0), 1.0, 0.0, bounds));
         // Measured against the carpet wherever it is.
-        assert!(!fell_out(under, -1.0, bounds));
+        assert!(!fell_out(under, 1.0, -1.0, bounds));
+        // And a HALVED player standing on the same carpet has not fallen out either: their
+        // eye is only 0.75 m up, which measured at full height reads as underground.
+        let small = Vector3::new(0.0, 0.0 + crate::game_header::GH_PLAYER_HEIGHT * 0.5, 0.0);
+        assert!(!fell_out(small, 0.5, 0.0, bounds), "a shrunk player must not read as fallen");
+        assert!(fell_out(small, 1.0, 0.0, bounds), "and the full-size rule is unchanged");
     }
 }

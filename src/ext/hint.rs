@@ -42,6 +42,15 @@ thread_local! {
     static INSISTED: RefCell<Option<String>> = const { RefCell::new(None) };
     /// The noticed hint since the last take, if any; between the two.
     static NOTICE: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// EXT: the round's own line (`ext/hunt.rs`), on its own slot with its own take and its
+    /// own place on screen.
+    ///
+    /// It is deliberately NOT part of the ranking above. A held tool insists its reading
+    /// every frame (`ext/tool.rs`) and a worn disguise insists how to shed it
+    /// (`ext/disguise.rs`), so the ranked line is occupied for the whole of exactly the
+    /// activity a hide-and-seek round consists of -- a clock written with `set` would never
+    /// once be seen. Two lines, two jobs: what you are doing, and how long you have.
+    static STATUS: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// Offer a hint line for this frame. A later call before the frame's [`take`] replaces it.
@@ -60,6 +69,17 @@ pub fn insist(text: impl Into<String>) {
 /// earlier one.
 pub fn notice(text: impl Into<String>) {
     NOTICE.with(|h| *h.borrow_mut() = Some(text.into()));
+}
+
+/// Offer the round's status line for this frame (the clock, the phase, the result). Its own
+/// slot: it neither outranks nor yields to the three above, because it is drawn elsewhere.
+pub fn status(text: impl Into<String>) {
+    STATUS.with(|h| *h.borrow_mut() = Some(text.into()));
+}
+
+/// The status line for this frame, consumed. Independent of [`take`].
+pub fn take_status() -> Option<String> {
+    STATUS.with(|h| h.borrow_mut().take())
 }
 
 /// The hint for this frame, consumed -- the insisted one if there is one, then a notice, then the

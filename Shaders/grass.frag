@@ -36,6 +36,23 @@ float snap_freq(float f) {
 uniform float mood;
 uniform vec4 glow;
 uniform float detail;   // 0 inside portal passes; see src/ext/view.rs
+
+// Ground mist. Must match Shaders/grassblade.frag exactly -- see the note there.
+
+// The door's light pool: how far it carries, and its colour. Nineteen units is most of the
+// visible meadow, and deliberately so -- this is the ONLY light source in the shot, and a pool
+// that stopped a few metres out read as a spotlight on a stage rather than as a door left open
+// in a field. The 2.2 exponent is what keeps it from looking like a disc: it falls off quickly
+// enough near the door to have a bright centre, and slowly enough far out to tint. Duplicated
+// across the materials the meadow uses -- grass.frag, grassblade.frag, gltfpbr.frag -- which
+// must agree, or the blades, the ground under them and the door itself would each be lit by a
+// different lamp.
+#define GLOW_REACH 19.0
+#define GLOW_WARM vec3(1.00, 0.72, 0.42)
+
+#define MIST_BASE 1.5
+#define MIST_FALL 0.30
+#define MIST_DENSITY 0.40
 in vec3 ex_world;
 in vec3 ex_normal;
 out vec4 fragColor;
@@ -68,9 +85,15 @@ void main(void) {
 	float shade  = texture(tex, uv * snap_freq(0.0032) + vec2(time * 0.0035, time * 0.0012)).r;
 	float cloudShadow = 1.0 - 0.42 * smoothstep(0.50, 0.78, shade);
 
+	// Tussock-scale colour, matching Shaders/grassblade.frag: the same tap at the same
+	// frequency, so the blade patch and the ground texture beyond its edge break up together
+	// and the handover between them stays invisible.
+	float tuft = texture(tex, uv * snap_freq(0.085)).b;
 	vec3 lush = vec3(0.14, 0.34, 0.08);
 	vec3 dry  = vec3(0.34, 0.40, 0.15);
 	vec3 base = mix(lush, dry, smoothstep(0.28, 0.80, patch));
+	base = mix(base, lush * 0.75, smoothstep(0.42, 0.05, tuft) * 0.45);
+	base = mix(base, dry, smoothstep(0.68, 0.98, tuft) * 0.35);
 	base *= 0.78 + 0.44 * blades;
 
 	// Slope lighting: wrap diffuse plus a sharper sun-facing term so ridges catch light.
@@ -85,21 +108,58 @@ void main(void) {
 	float sheen = pow(max(dot(V, L), 0.0), 5.0);
 	col += vec3(0.95, 0.85, 0.45) * sheen * 0.30 * (0.4 + 0.6 * blades) * cloudShadow;
 
+	// ── Wildflowers ───────────────────────────────────────────────────────────────────────
+	// The ground's half of the flowers in Shaders/grassblade.frag -- these are the ones showing
+	// through the gaps between blades, and the ones still there past the blade patch's edge.
+	// One candidate per cell of a lattice snapped to the world period, so the torus wrap cannot
+	// slide the flowers sideways; faded out well before the cell is smaller than a pixel, where
+	// they would boil into noise rather than resolve into dots.
+	float fdist = length(ex_world - cam_pos.xyz);
+	if (detail > 0.5 && fdist < 34.0) {
+		float ff = snap_freq(2.2);
+		vec2 g = uv * ff;
+		vec2 cell = floor(g);
+		float hh = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+		if (hh > 0.86) {
+			vec2 at = vec2(fract(hh * 731.0), fract(hh * 197.0));
+			float bloom = smoothstep(0.26, 0.05, length(g - cell - at));
+			bloom *= 1.0 - smoothstep(14.0, 34.0, fdist);
+			float which = fract(hh * 53.0);
+			vec3 petal = which > 0.62 ? vec3(0.95, 0.94, 0.88)
+			           : (which > 0.26 ? vec3(0.98, 0.87, 0.36) : vec3(0.94, 0.71, 0.77));
+			col = mix(col, petal * (diffuse * 0.55 + 0.45) * cloudShadow, bloom * 0.85);
+		}
+	}
+
 	// Gust waves: leaning blades catch more light on the windward side.
 	col *= 1.0 + 0.16 * wind + 0.05 * flutter;
 
-	// The open door spills warm light onto the ground in front of it. Applied BEFORE the
-	// weather grade, so it reads as light in the scene rather than yellow paint on top of an
-	// already-darkened surface -- which is what made the first version look radioactive.
+	// The open door spills warm light into the meadow. Two terms, because a doorway does two
+	// things: it LIGHTS what it faces -- multiplied into the surface, so grass in shadow stays
+	// grass and does not turn into yellow paint -- and it fills the air in front of it, which
+	// is added regardless of what the surface is. The radius is wide on purpose: in the
+	// reference this one light source tints most of the lower half of the frame, and a pool
+	// that stopped a few metres out read as a spotlight on a stage.
+	float pool = 0.0;
 	if (glow.w > 0.0) {
 		float gd = length(ex_world - glow.xyz);
-		float pool = glow.w * pow(max(1.0 - gd / 3.5, 0.0), 2.0);
-		col += col * vec3(1.00, 0.86, 0.62) * pool * 0.9;
+		pool = glow.w * pow(max(1.0 - gd / GLOW_REACH, 0.0), 2.2);
+		col += col * GLOW_WARM * pool * 1.35;
+		col += GLOW_WARM * pool * 0.055;
 	}
 
 	// Weather grade: the storm kills the sun and sinks the palette; sunset warms it.
 	vec3 hazeCol = vec3(0.74, 0.82, 0.90);
-	if (mood > 0.5) {
+	if (mood > 2.5) {
+		// DUSK -- see Shaders/grassblade.frag, whose grade this matches.
+		col = mix(col, vec3(dot(col, vec3(0.3, 0.59, 0.11))), 0.12) * vec3(0.54, 0.58, 0.62);
+		// The sky's own dusk horizon (Shaders/sky.frag `hor`) scaled down, so distant ground
+		// fades toward the colour of the sky it fades INTO. Aerial perspective is in-scattered
+		// path radiance and converges on the sky's radiance in that direction; no scattering
+		// process puts a green notch in it, and the previous R == B > G made the far knoll a
+		// violet wedge.
+		hazeCol = vec3(0.375, 0.385, 0.395);
+	} else if (mood > 0.5) {
 		col *= vec3(0.95, 0.72, 0.62);
 		hazeCol = vec3(0.95, 0.62, 0.52);
 	} else if (mood > -0.5) {
@@ -108,10 +168,17 @@ void main(void) {
 	}
 
 
-	// Atmospheric perspective toward the sky's horizon colour.
+	// Atmospheric perspective toward the sky's horizon colour, plus the ground mist that
+	// gathers in the hollows -- see Shaders/grassblade.frag, whose constants these are.
 	float dist = length(ex_world - cam_pos.xyz);
-	float fog = 1.0 - exp(-dist * 0.0080);
-	col = mix(col, hazeCol, fog * 0.9);
+	float fog = 1.0 - exp(-dist * 0.0105);
+	float mist = exp(-max(ex_world.y - MIST_BASE, 0.0) * MIST_FALL) * (1.0 - exp(-dist * 0.028));
+	// Capped short of 1: the far meadow keeps a trace of its own colour, so it stays a hair
+	// DARKER than the sky it meets. Let it reach the haze colour exactly and the horizon
+	// inverts -- the ground ends up brighter than the overcast above it and reads as a pale
+	// band laid across the frame rather than as distance.
+	hazeCol = mix(hazeCol, GLOW_WARM * 0.62, clamp(pool * 1.4, 0.0, 0.85));
+	col = mix(col, hazeCol, clamp(fog * 0.9 + mist * MIST_DENSITY, 0.0, 0.93));
 
 	fragColor = vec4(col, 1.0);
 }

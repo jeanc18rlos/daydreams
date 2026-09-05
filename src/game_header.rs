@@ -10,10 +10,11 @@
 
 //Windows
 // EXT: the game's name. The C++ ships as a tech demo called "NonEuclideanDemo"; this is a game
-// called DayDreams, and this string is what the OS window bar and the dock/taskbar show. The
-// title SCREEN draws `ext::menu::TITLE_TEXT` instead -- same name, set separately because it is
-// typeset rather than labelled.
-pub const GH_TITLE: &str = "DayDreams";
+// called Hide 'N Dream, and this string is what the OS window bar and the dock/taskbar show.
+// The title SCREEN typesets the same const in the display face rather than labelling with it,
+// which is the only difference between the two uses -- so they read it from the same place and
+// cannot come to disagree about the game's name.
+pub const GH_TITLE: &str = crate::ext::ui_atlas::TITLE_TEXT;
 // PORT: GH_CLASS is the Win32 window-class name registered by RegisterClassEx; winit owns
 // the window class, so nothing consumes it (was: static const char GH_CLASS[] = "NED", GameHeader.h:8).
 #[allow(dead_code)]

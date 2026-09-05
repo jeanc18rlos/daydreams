@@ -1,6 +1,6 @@
 """Shrink the embedded PNG maps of a GLB to a fixed square, in place.
 
-    python3 tools/shrink_glb.py Meshes/Classic_Interior_Door.glb 512
+    python3 tools/shrink_glb.py Meshes/some_model.glb 512
 
 # Why
 

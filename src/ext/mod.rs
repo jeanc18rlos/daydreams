@@ -52,11 +52,15 @@
 //! | `inventory` | Six slots the player stows things into, which survive a scene load          |
 
 pub mod audio;
+pub mod avatar;
 pub mod backrooms;
 pub mod bounds;
 pub mod carve;
 pub mod cull;
+pub mod debug;
+pub mod disguise;
 pub mod door;
+pub mod doorlight;
 pub mod elevator;
 pub mod frametime;
 pub mod gamepad;
@@ -66,19 +70,26 @@ pub mod gltf_prop;
 pub mod grab;
 pub mod grassfield;
 pub mod grassgen;
+pub mod hideseek;
 pub mod hint;
 pub mod hud;
+pub mod hunt;
 pub mod interior;
 pub mod inventory;
 pub mod jump;
 pub mod key;
 pub mod meadow;
 pub mod menu;
+pub mod moon;
+pub mod npc;
 pub mod occlusion;
 pub mod outline;
+pub mod pack;
 pub mod painting;
 pub mod physics;
 pub mod portrait_atlas;
+pub mod postfx;
+pub mod prochouse;
 pub mod raycast;
 pub mod rigid;
 pub mod room;
@@ -86,14 +97,19 @@ pub mod rotate;
 pub mod scenes;
 pub mod scissor;
 pub mod settings;
+pub mod skinned;
 pub mod skybake;
 pub mod sprint;
 pub mod terrain;
+pub mod thirdperson;
+pub mod tool;
 pub mod trimesh;
 pub mod ui;
 pub mod ui_atlas;
 pub mod view;
+pub mod village_catalog;
 pub mod visibility;
+pub mod warphouse;
 pub mod window;
 
 use audio::{Audio, Sfx};
@@ -101,6 +117,7 @@ use grab::GrabState;
 use inventory::Inventory;
 use menu::Menu;
 use outline::Outline;
+use postfx::PostFx;
 use rotate::Rotate;
 use sprint::Sprint;
 use ui::Ui;
@@ -116,8 +133,15 @@ pub struct ExtState {
     pub audio: Audio,
     pub ui: Ui,
     pub outline: Outline,
+    /// The title screen's bloom-and-veil chain. Owned here rather than by the menu because it
+    /// is a renderer, not a widget: `Engine::render_menu_frame` brackets `Engine::render` with
+    /// it (src/ext/postfx.rs).
+    pub postfx: PostFx,
     pub rotate: Rotate,
     pub menu: Menu,
+    /// EXT: developer mode -- the camera readout and the save-to-Documents key
+    /// (src/ext/debug.rs). Not a setting: it never survives a restart.
+    pub debug: debug::DebugMode,
     /// Shader for the translucent "ghost" copy drawn while a held object is being shrunk to fit.
     pub ghost_shader: std::rc::Rc<crate::shader::Shader>,
     /// Baked cloud panorama the sky shader samples (see skybake.rs).
@@ -143,8 +167,10 @@ impl ExtState {
             audio: Audio::new(),
             ui: Ui::new(gl, res),
             outline: Outline::new(gl, res),
+            postfx: PostFx::new(gl, res),
             rotate: Rotate::default(),
             menu: Menu::new(),
+            debug: debug::DebugMode::default(),
             ghost_shader: res.acquire_shader("ghost"),
             sky: skybake::SkyBake::new(gl, res),
             grass: grassfield::GrassMesh::acquire(gl),

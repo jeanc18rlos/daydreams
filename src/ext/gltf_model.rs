@@ -105,6 +105,11 @@ pub enum Frame<'a> {
     /// system. The door's leaf hangs under a node carrying both the ajar rotation and the
     /// leaf's position in the assembly; walking from below that node drops the rotation but
     /// also the position, which is what separated leaf and frame into unrelated spaces.
+    // EXT: unused since the intro door stopped needing it -- the door it was written for hung
+    // its leaf under a node carrying a 55-degree "ajar" pose that had to be dropped while its
+    // translation was kept. Left in place because that is a shape glTF exports fall into
+    // routinely, and the next model posed in its source scene will want it back.
+    #[allow(dead_code)]
     Translated(&'a str),
     /// Every ancestor's full transform, from the scene root down: the part lands exactly where
     /// the file puts it, in the same space as a part gathered from the scene root -- and in
@@ -796,6 +801,18 @@ impl GltfModel {
         shader.set_f32("mood", crate::ext::view::mood_for(eye));
         shader.set_vec4("glow", crate::ext::view::glow());
         shader.set_f32("detail", crate::ext::view::detail());
+        // EXT: the scene's own fog, if it set one (`view::Fog`). Zeroes mean "the weather's",
+        // which is what the shader does with them and what GL would have held anyway.
+        let (over, shape) = match crate::ext::view::fog() {
+            Some(f) => {
+                ([f.color[0], f.color[1], f.color[2], 1.0], [f.density, f.squareness, f.cap, 0.0])
+            }
+            None => ([0.0; 4], [0.0; 4]),
+        };
+        shader.set_vec4("fog_over", over);
+        shader.set_vec4("fog_shape", shape);
+        // EXT: the flashlight's cone (src/ext/view.rs).
+        crate::ext::view::upload_spot(shader);
         shader.set_i32("tex", 0);
         shader.set_i32("tex2", 1);
         shader.set_i32("tex3", 2);

@@ -33,7 +33,7 @@ pub const BLADES: usize = 130_000;
 pub const SEGMENTS: usize = 4;
 const BLADE_H: (f32, f32) = (0.22, 0.55);
 /// Wider than real grass: thin blades alias into wire at distance.
-const BLADE_W: (f32, f32) = (0.020, 0.038);
+const BLADE_W: (f32, f32) = (0.014, 0.026);
 const SEED: u64 = 11;
 
 /// Cull cells per side. 2 units each over the 26-unit patch: small enough that a cell behind

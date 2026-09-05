@@ -1,0 +1,39 @@
+Model Information:
+* title:	Low-Poly PSX Style Essential Doors Pack
+* source:	https://sketchfab.com/3d-models/low-poly-psx-style-essential-doors-pack-20d55059056044b885a5267c2de1ec18
+* short link:	https://skfb.ly/pFOP7
+* author:	Icevanilla — vanillao03 (https://sketchfab.com/vanillao03)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+"Low-Poly PSX Style Essential Doors Pack" (https://skfb.ly/pFOP7) by Icevanilla is licensed under
+Creative Commons Attribution (http://creativecommons.org/licenses/by/4.0/).
+
+Provenance of this file: the source, short link and licence above are the credit line the project
+owner supplied at import; the author line also records the Sketchfab account name the GLB's own
+`asset.extras` block carries (`vanillao03`), written by Sketchfab's exporter at download time.
+"Icevanilla" is the display name on the model's page. VERIFY ON SKETCHFAB: the page at the source
+URL is the authority.
+
+CHANGES MADE TO THIS FILE (CC-BY-4.0 asks that modifications be indicated):
+
+  This copy is NOT the file as downloaded. `tools/turn_white_door.py` has composed a half-turn
+  about Y onto the transforms of exactly two nodes -- "Bathroom Door_002.001" and "Bathroom
+  Doorframe_001.001", the white door the game uses. Nothing else is touched: no geometry, no
+  UVs, no materials, no images, and none of the other six doors. Running that tool on a fresh
+  download reproduces this file byte for byte.
+
+  Why: the game hangs a door leaf by the low-x edge of its own bounding box, and every door in
+  this pack is modelled with its knob at that end -- so the leaf would have swung about its own
+  doorknob. A rotation rather than a mirror, so winding, normals and tangents are unaffected;
+  and invisible in play, because the door is symmetric front to back. All it changes is which
+  side the knob is on.
+
+What the file holds: seven door-and-frame pairs laid out along +x, sharing one 1024x256 colour
+map through their UVs. The game uses ONE of them -- the white "Bathroom Door_002.001" with its
+knob ("Circle.002") and its frame ("Bathroom Doorframe_001.001") -- as the intro meadow's door
+and the Backrooms' (src/ext/door.rs). The other six ship unused: the colour map is shared by all
+seven, so cutting them would save geometry measured in kilobytes and no texture at all.

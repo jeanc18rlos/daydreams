@@ -14,7 +14,7 @@ pub const CURSOR_OPEN: Sprite = Sprite { x: 130, y: 0, w: 55, h: 41 };
 pub const CURSOR_CLOSED: Sprite = Sprite { x: 187, y: 0, w: 49, h: 42 };
 
 /// One glyph: atlas rect, then bearing (left, top) and advance, all in atlas pixels
-/// at the baked size `FONT_SIZE`. Scale by (target_px / FONT_SIZE) when drawing.
+/// at its face's baked size. Scale by (target_px / FONT_SIZE) when drawing.
 #[derive(Clone, Copy)]
 pub struct Glyph {
     pub x: u32,
@@ -25,104 +25,137 @@ pub struct Glyph {
     pub by: i32,
     pub adv: i32,
 }
-pub const FONT_ATLAS: (u32, u32) = (1024, 512);
-pub const FONT_SIZE: f32 = 72.0;
-pub const FONT_ASCENT: f32 = 67.0;
+
+// ── The interface face: every heading, row, hint and credit ──
+pub const FONT_ATLAS: (u32, u32) = (2048, 1024);
+pub const FONT_SIZE: f32 = 176.0;
+/// Where the baseline sits below the top of the line box, in baked pixels.
+///
+/// Nothing places a baseline directly -- every glyph carries its own offset from the
+/// line box's top, which is what `Ui::draw_in` adds to the y it is given -- but this is
+/// the other half of what that offset means, and setting the two faces on one line
+/// would need it.
+#[allow(dead_code)] // the atlas describing itself, not a call site
+pub const FONT_ASCENT: f32 = 206.0;
 /// Indexed by (codepoint - 32) for ASCII 32..=126.
 pub const GLYPHS: [Glyph; 95] = [
-    Glyph { x: 2, y: 2, w: 17, h: 1, bx: 0, by: 67, adv: 17 }, // ' '
-    Glyph { x: 21, y: 2, w: 19, h: 52, bx: 0, by: 16, adv: 19 }, // '!'
-    Glyph { x: 42, y: 2, w: 23, h: 54, bx: 0, by: 13, adv: 23 }, // '"'
-    Glyph { x: 67, y: 2, w: 38, h: 51, bx: 0, by: 16, adv: 38 }, // '#'
-    Glyph { x: 107, y: 2, w: 36, h: 67, bx: 0, by: 8, adv: 36 }, // '$'
-    Glyph { x: 145, y: 2, w: 46, h: 53, bx: 0, by: 15, adv: 46 }, // '%'
-    Glyph { x: 193, y: 2, w: 42, h: 53, bx: 0, by: 15, adv: 42 }, // '&'
-    Glyph { x: 237, y: 2, w: 12, h: 54, bx: 0, by: 13, adv: 12 }, // "'"
-    Glyph { x: 251, y: 2, w: 23, h: 73, bx: 0, by: 10, adv: 23 }, // '('
-    Glyph { x: 276, y: 2, w: 23, h: 73, bx: 0, by: 10, adv: 23 }, // ')'
-    Glyph { x: 301, y: 2, w: 33, h: 51, bx: 0, by: 16, adv: 33 }, // '*'
-    Glyph { x: 336, y: 2, w: 34, h: 43, bx: 0, by: 24, adv: 34 }, // '+'
-    Glyph { x: 372, y: 2, w: 18, h: 22, bx: 0, by: 58, adv: 18 }, // ','
-    Glyph { x: 392, y: 2, w: 26, h: 27, bx: 0, by: 40, adv: 26 }, // '-'
-    Glyph { x: 420, y: 2, w: 21, h: 12, bx: 0, by: 56, adv: 21 }, // '.'
-    Glyph { x: 443, y: 2, w: 25, h: 55, bx: -1, by: 16, adv: 24 }, // '/'
-    Glyph { x: 470, y: 2, w: 36, h: 53, bx: 0, by: 15, adv: 36 }, // '0'
-    Glyph { x: 508, y: 2, w: 36, h: 51, bx: 0, by: 16, adv: 36 }, // '1'
-    Glyph { x: 546, y: 2, w: 36, h: 52, bx: 0, by: 15, adv: 36 }, // '2'
-    Glyph { x: 584, y: 2, w: 36, h: 53, bx: 0, by: 15, adv: 36 }, // '3'
-    Glyph { x: 622, y: 2, w: 36, h: 51, bx: 0, by: 16, adv: 36 }, // '4'
-    Glyph { x: 660, y: 2, w: 36, h: 52, bx: 0, by: 16, adv: 36 }, // '5'
-    Glyph { x: 698, y: 2, w: 36, h: 52, bx: 0, by: 16, adv: 36 }, // '6'
-    Glyph { x: 736, y: 2, w: 36, h: 51, bx: 0, by: 16, adv: 36 }, // '7'
-    Glyph { x: 774, y: 2, w: 36, h: 53, bx: 0, by: 15, adv: 36 }, // '8'
-    Glyph { x: 812, y: 2, w: 36, h: 52, bx: 0, by: 15, adv: 36 }, // '9'
-    Glyph { x: 850, y: 2, w: 20, h: 41, bx: 0, by: 27, adv: 20 }, // ':'
-    Glyph { x: 872, y: 2, w: 18, h: 53, bx: 0, by: 27, adv: 18 }, // ';'
-    Glyph { x: 892, y: 2, w: 32, h: 39, bx: 0, by: 28, adv: 32 }, // '<'
-    Glyph { x: 926, y: 2, w: 36, h: 35, bx: 0, by: 32, adv: 36 }, // '='
-    Glyph { x: 964, y: 2, w: 33, h: 39, bx: 0, by: 28, adv: 33 }, // '>'
-    Glyph { x: 2, y: 77, w: 32, h: 53, bx: 0, by: 15, adv: 32 }, // '?'
-    Glyph { x: 36, y: 77, w: 55, h: 66, bx: 0, by: 17, adv: 55 }, // '@'
-    Glyph { x: 93, y: 77, w: 43, h: 51, bx: 0, by: 16, adv: 43 }, // 'A'
-    Glyph { x: 138, y: 77, w: 40, h: 51, bx: 0, by: 16, adv: 40 }, // 'B'
-    Glyph { x: 180, y: 77, w: 41, h: 53, bx: 0, by: 15, adv: 41 }, // 'C'
-    Glyph { x: 223, y: 77, w: 41, h: 51, bx: 0, by: 16, adv: 41 }, // 'D'
-    Glyph { x: 266, y: 77, w: 35, h: 51, bx: 0, by: 16, adv: 35 }, // 'E'
-    Glyph { x: 303, y: 77, w: 34, h: 51, bx: 0, by: 16, adv: 34 }, // 'F'
-    Glyph { x: 339, y: 77, w: 42, h: 53, bx: 0, by: 15, adv: 42 }, // 'G'
-    Glyph { x: 383, y: 77, w: 44, h: 51, bx: 0, by: 16, adv: 44 }, // 'H'
-    Glyph { x: 429, y: 77, w: 19, h: 51, bx: 0, by: 16, adv: 19 }, // 'I'
-    Glyph { x: 450, y: 77, w: 35, h: 52, bx: 0, by: 16, adv: 35 }, // 'J'
-    Glyph { x: 487, y: 77, w: 41, h: 51, bx: 0, by: 16, adv: 40 }, // 'K'
-    Glyph { x: 530, y: 77, w: 34, h: 51, bx: 0, by: 16, adv: 34 }, // 'L'
-    Glyph { x: 566, y: 77, w: 55, h: 51, bx: 0, by: 16, adv: 55 }, // 'M'
-    Glyph { x: 623, y: 77, w: 44, h: 51, bx: 0, by: 16, adv: 44 }, // 'N'
-    Glyph { x: 669, y: 77, w: 43, h: 53, bx: 0, by: 15, adv: 43 }, // 'O'
-    Glyph { x: 714, y: 77, w: 41, h: 51, bx: 0, by: 16, adv: 41 }, // 'P'
-    Glyph { x: 757, y: 77, w: 43, h: 61, bx: 0, by: 15, adv: 43 }, // 'Q'
-    Glyph { x: 802, y: 77, w: 40, h: 51, bx: 0, by: 16, adv: 40 }, // 'R'
-    Glyph { x: 844, y: 77, w: 39, h: 53, bx: 0, by: 15, adv: 39 }, // 'S'
-    Glyph { x: 885, y: 77, w: 39, h: 51, bx: 0, by: 16, adv: 39 }, // 'T'
-    Glyph { x: 926, y: 77, w: 41, h: 52, bx: 0, by: 16, adv: 41 }, // 'U'
-    Glyph { x: 969, y: 77, w: 42, h: 51, bx: 0, by: 16, adv: 42 }, // 'V'
-    Glyph { x: 2, y: 145, w: 54, h: 51, bx: 0, by: 16, adv: 54 }, // 'W'
-    Glyph { x: 58, y: 145, w: 40, h: 51, bx: 0, by: 16, adv: 40 }, // 'X'
-    Glyph { x: 100, y: 145, w: 39, h: 51, bx: 0, by: 16, adv: 39 }, // 'Y'
-    Glyph { x: 141, y: 145, w: 38, h: 51, bx: 0, by: 16, adv: 38 }, // 'Z'
-    Glyph { x: 181, y: 145, w: 19, h: 72, bx: 0, by: 7, adv: 19 }, // '['
-    Glyph { x: 202, y: 145, w: 29, h: 55, bx: 0, by: 16, adv: 27 }, // '\\'
-    Glyph { x: 233, y: 145, w: 19, h: 72, bx: 0, by: 7, adv: 19 }, // ']'
-    Glyph { x: 254, y: 145, w: 28, h: 51, bx: 0, by: 16, adv: 28 }, // '^'
-    Glyph { x: 284, y: 145, w: 29, h: 8, bx: 0, by: 67, adv: 29 }, // '_'
-    Glyph { x: 315, y: 145, w: 24, h: 54, bx: 0, by: 13, adv: 24 }, // '`'
-    Glyph { x: 341, y: 145, w: 34, h: 40, bx: 0, by: 28, adv: 34 }, // 'a'
-    Glyph { x: 377, y: 145, w: 36, h: 55, bx: 0, by: 13, adv: 36 }, // 'b'
-    Glyph { x: 415, y: 145, w: 33, h: 40, bx: 0, by: 28, adv: 33 }, // 'c'
-    Glyph { x: 450, y: 145, w: 36, h: 55, bx: 0, by: 13, adv: 36 }, // 'd'
-    Glyph { x: 488, y: 145, w: 34, h: 40, bx: 0, by: 28, adv: 34 }, // 'e'
-    Glyph { x: 524, y: 145, w: 24, h: 55, bx: 0, by: 12, adv: 24 }, // 'f'
-    Glyph { x: 550, y: 145, w: 36, h: 54, bx: 0, by: 28, adv: 36 }, // 'g'
-    Glyph { x: 588, y: 145, w: 35, h: 54, bx: 0, by: 13, adv: 35 }, // 'h'
-    Glyph { x: 625, y: 145, w: 18, h: 54, bx: 0, by: 13, adv: 18 }, // 'i'
-    Glyph { x: 645, y: 145, w: 20, h: 69, bx: -2, by: 13, adv: 18 }, // 'j'
-    Glyph { x: 667, y: 145, w: 35, h: 54, bx: 0, by: 13, adv: 34 }, // 'k'
-    Glyph { x: 704, y: 145, w: 18, h: 54, bx: 0, by: 13, adv: 18 }, // 'l'
-    Glyph { x: 724, y: 145, w: 53, h: 39, bx: 0, by: 28, adv: 53 }, // 'm'
-    Glyph { x: 779, y: 145, w: 35, h: 39, bx: 0, by: 28, adv: 35 }, // 'n'
-    Glyph { x: 816, y: 145, w: 36, h: 40, bx: 0, by: 28, adv: 36 }, // 'o'
-    Glyph { x: 854, y: 145, w: 36, h: 54, bx: 0, by: 28, adv: 36 }, // 'p'
-    Glyph { x: 892, y: 145, w: 36, h: 54, bx: 0, by: 28, adv: 36 }, // 'q'
-    Glyph { x: 930, y: 145, w: 24, h: 39, bx: 0, by: 28, adv: 24 }, // 'r'
-    Glyph { x: 956, y: 145, w: 33, h: 40, bx: 0, by: 28, adv: 33 }, // 's'
-    Glyph { x: 991, y: 145, w: 22, h: 48, bx: 0, by: 20, adv: 22 }, // 't'
-    Glyph { x: 2, y: 219, w: 35, h: 39, bx: 0, by: 29, adv: 35 }, // 'u'
-    Glyph { x: 39, y: 219, w: 32, h: 38, bx: 0, by: 29, adv: 32 }, // 'v'
-    Glyph { x: 73, y: 219, w: 46, h: 38, bx: 0, by: 29, adv: 46 }, // 'w'
-    Glyph { x: 121, y: 219, w: 33, h: 38, bx: 0, by: 29, adv: 33 }, // 'x'
-    Glyph { x: 156, y: 219, w: 32, h: 53, bx: 0, by: 29, adv: 32 }, // 'y'
-    Glyph { x: 190, y: 219, w: 33, h: 38, bx: 0, by: 29, adv: 33 }, // 'z'
-    Glyph { x: 225, y: 219, w: 21, h: 69, bx: 0, by: 11, adv: 21 }, // '{'
-    Glyph { x: 248, y: 219, w: 18, h: 60, bx: 0, by: 16, adv: 18 }, // '|'
-    Glyph { x: 268, y: 219, w: 21, h: 69, bx: 0, by: 11, adv: 21 }, // '}'
-    Glyph { x: 291, y: 219, w: 40, h: 29, bx: 0, by: 38, adv: 40 }, // '~'
+    Glyph { x: 2, y: 2, w: 57, h: 1, bx: 0, by: 206, adv: 57 }, // ' '
+    Glyph { x: 61, y: 2, w: 52, h: 141, bx: 0, by: 69, adv: 52 }, // '!'
+    Glyph { x: 115, y: 2, w: 81, h: 141, bx: 0, by: 65, adv: 81 }, // '"'
+    Glyph { x: 198, y: 2, w: 108, h: 124, bx: 0, by: 82, adv: 108 }, // '#'
+    Glyph { x: 308, y: 2, w: 113, h: 164, bx: 0, by: 54, adv: 113 }, // '$'
+    Glyph { x: 423, y: 2, w: 154, h: 163, bx: 0, by: 55, adv: 154 }, // '%'
+    Glyph { x: 579, y: 2, w: 144, h: 140, bx: 0, by: 69, adv: 144 }, // '&'
+    Glyph { x: 725, y: 2, w: 46, h: 141, bx: 0, by: 65, adv: 46 }, // "'"
+    Glyph { x: 773, y: 2, w: 67, h: 188, bx: 0, by: 50, adv: 67 }, // '('
+    Glyph { x: 842, y: 2, w: 66, h: 187, bx: 0, by: 51, adv: 66 }, // ')'
+    Glyph { x: 910, y: 2, w: 89, h: 148, bx: 0, by: 58, adv: 89 }, // '*'
+    Glyph { x: 1001, y: 2, w: 114, h: 101, bx: 0, by: 105, adv: 114 }, // '+'
+    Glyph { x: 1117, y: 2, w: 45, h: 60, bx: -1, by: 178, adv: 44 }, // ','
+    Glyph { x: 1164, y: 2, w: 82, h: 70, bx: 0, by: 136, adv: 82 }, // '-'
+    Glyph { x: 1248, y: 2, w: 49, h: 34, bx: 0, by: 176, adv: 49 }, // '.'
+    Glyph { x: 1299, y: 2, w: 76, h: 178, bx: -1, by: 55, adv: 73 }, // '/'
+    Glyph { x: 1377, y: 2, w: 130, h: 140, bx: 0, by: 69, adv: 130 }, // '0'
+    Glyph { x: 1509, y: 2, w: 84, h: 139, bx: 0, by: 69, adv: 84 }, // '1'
+    Glyph { x: 1595, y: 2, w: 123, h: 139, bx: 0, by: 70, adv: 123 }, // '2'
+    Glyph { x: 1720, y: 2, w: 115, h: 140, bx: 0, by: 69, adv: 115 }, // '3'
+    Glyph { x: 1837, y: 2, w: 120, h: 142, bx: 0, by: 68, adv: 120 }, // '4'
+    Glyph { x: 2, y: 192, w: 112, h: 141, bx: 0, by: 69, adv: 112 }, // '5'
+    Glyph { x: 116, y: 192, w: 124, h: 143, bx: 0, by: 65, adv: 124 }, // '6'
+    Glyph { x: 242, y: 192, w: 101, h: 142, bx: 0, by: 69, adv: 101 }, // '7'
+    Glyph { x: 345, y: 192, w: 110, h: 141, bx: 0, by: 68, adv: 110 }, // '8'
+    Glyph { x: 457, y: 192, w: 105, h: 140, bx: 0, by: 70, adv: 105 }, // '9'
+    Glyph { x: 564, y: 192, w: 52, h: 102, bx: 0, by: 108, adv: 52 }, // ':'
+    Glyph { x: 618, y: 192, w: 52, h: 129, bx: 0, by: 109, adv: 52 }, // ';'
+    Glyph { x: 672, y: 192, w: 114, h: 109, bx: 0, by: 97, adv: 114 }, // '<'
+    Glyph { x: 788, y: 192, w: 114, h: 89, bx: 0, by: 117, adv: 114 }, // '='
+    Glyph { x: 904, y: 192, w: 114, h: 109, bx: 0, by: 97, adv: 114 }, // '>'
+    Glyph { x: 1020, y: 192, w: 91, h: 141, bx: 0, by: 68, adv: 91 }, // '?'
+    Glyph { x: 1113, y: 192, w: 153, h: 154, bx: 0, by: 93, adv: 153 }, // '@'
+    Glyph { x: 1268, y: 192, w: 139, h: 143, bx: 0, by: 67, adv: 139 }, // 'A'
+    Glyph { x: 1409, y: 192, w: 121, h: 140, bx: 0, by: 69, adv: 121 }, // 'B'
+    Glyph { x: 1532, y: 192, w: 132, h: 142, bx: 0, by: 68, adv: 132 }, // 'C'
+    Glyph { x: 1666, y: 192, w: 140, h: 140, bx: 0, by: 71, adv: 140 }, // 'D'
+    Glyph { x: 1808, y: 192, w: 110, h: 140, bx: 0, by: 69, adv: 110 }, // 'E'
+    Glyph { x: 1920, y: 192, w: 103, h: 136, bx: 0, by: 72, adv: 103 }, // 'F'
+    Glyph { x: 2, y: 348, w: 145, h: 142, bx: 0, by: 68, adv: 145 }, // 'G'
+    Glyph { x: 149, y: 348, w: 138, h: 142, bx: 0, by: 68, adv: 138 }, // 'H'
+    Glyph { x: 289, y: 348, w: 57, h: 139, bx: 0, by: 70, adv: 57 }, // 'I'
+    Glyph { x: 348, y: 348, w: 108, h: 141, bx: 0, by: 68, adv: 108 }, // 'J'
+    Glyph { x: 458, y: 348, w: 129, h: 143, bx: 0, by: 68, adv: 129 }, // 'K'
+    Glyph { x: 589, y: 348, w: 103, h: 138, bx: 0, by: 69, adv: 103 }, // 'L'
+    Glyph { x: 694, y: 348, w: 165, h: 139, bx: 0, by: 70, adv: 165 }, // 'M'
+    Glyph { x: 861, y: 348, w: 139, h: 141, bx: 0, by: 67, adv: 139 }, // 'N'
+    Glyph { x: 1002, y: 348, w: 143, h: 142, bx: 0, by: 68, adv: 143 }, // 'O'
+    Glyph { x: 1147, y: 348, w: 114, h: 141, bx: 0, by: 68, adv: 114 }, // 'P'
+    Glyph { x: 1263, y: 348, w: 142, h: 164, bx: 0, by: 66, adv: 142 }, // 'Q'
+    Glyph { x: 1407, y: 348, w: 129, h: 140, bx: 0, by: 69, adv: 129 }, // 'R'
+    Glyph { x: 1538, y: 348, w: 110, h: 141, bx: 0, by: 69, adv: 110 }, // 'S'
+    Glyph { x: 1650, y: 348, w: 120, h: 140, bx: 0, by: 70, adv: 119 }, // 'T'
+    Glyph { x: 1772, y: 348, w: 134, h: 139, bx: 0, by: 69, adv: 134 }, // 'U'
+    Glyph { x: 1908, y: 348, w: 127, h: 143, bx: 0, by: 67, adv: 125 }, // 'V'
+    Glyph { x: 2, y: 514, w: 186, h: 144, bx: 0, by: 66, adv: 185 }, // 'W'
+    Glyph { x: 190, y: 514, w: 119, h: 142, bx: -1, by: 67, adv: 117 }, // 'X'
+    Glyph { x: 311, y: 514, w: 115, h: 141, bx: 0, by: 68, adv: 114 }, // 'Y'
+    Glyph { x: 428, y: 514, w: 112, h: 141, bx: 0, by: 68, adv: 112 }, // 'Z'
+    Glyph { x: 542, y: 514, w: 83, h: 184, bx: 0, by: 52, adv: 83 }, // '['
+    Glyph { x: 627, y: 514, w: 81, h: 178, bx: 0, by: 55, adv: 81 }, // '\\'
+    Glyph { x: 710, y: 514, w: 83, h: 183, bx: 0, by: 52, adv: 83 }, // ']'
+    Glyph { x: 795, y: 514, w: 114, h: 127, bx: 0, by: 79, adv: 114 }, // '^'
+    Glyph { x: 911, y: 514, w: 90, h: 30, bx: 0, by: 206, adv: 90 }, // '_'
+    Glyph { x: 1003, y: 514, w: 88, h: 154, bx: 0, by: 52, adv: 88 }, // '`'
+    Glyph { x: 1093, y: 514, w: 119, h: 100, bx: 0, by: 108, adv: 119 }, // 'a'
+    Glyph { x: 1214, y: 514, w: 105, h: 149, bx: 0, by: 59, adv: 105 }, // 'b'
+    Glyph { x: 1321, y: 514, w: 97, h: 99, bx: 0, by: 108, adv: 97 }, // 'c'
+    Glyph { x: 1420, y: 514, w: 109, h: 150, bx: 0, by: 59, adv: 109 }, // 'd'
+    Glyph { x: 1531, y: 514, w: 96, h: 99, bx: 0, by: 108, adv: 96 }, // 'e'
+    Glyph { x: 1629, y: 514, w: 96, h: 150, bx: 0, by: 60, adv: 86 }, // 'f'
+    Glyph { x: 1727, y: 514, w: 107, h: 148, bx: 0, by: 108, adv: 107 }, // 'g'
+    Glyph { x: 1836, y: 514, w: 108, h: 148, bx: 0, by: 61, adv: 108 }, // 'h'
+    Glyph { x: 1946, y: 514, w: 54, h: 145, bx: 0, by: 64, adv: 54 }, // 'i'
+    Glyph { x: 2, y: 700, w: 79, h: 190, bx: -19, by: 63, adv: 60 }, // 'j'
+    Glyph { x: 83, y: 700, w: 118, h: 147, bx: 0, by: 61, adv: 118 }, // 'k'
+    Glyph { x: 203, y: 700, w: 54, h: 147, bx: 0, by: 61, adv: 54 }, // 'l'
+    Glyph { x: 259, y: 700, w: 164, h: 100, bx: 0, by: 108, adv: 164 }, // 'm'
+    Glyph { x: 425, y: 700, w: 109, h: 102, bx: 0, by: 107, adv: 109 }, // 'n'
+    Glyph { x: 536, y: 700, w: 103, h: 100, bx: 0, by: 108, adv: 103 }, // 'o'
+    Glyph { x: 641, y: 700, w: 110, h: 149, bx: 0, by: 108, adv: 110 }, // 'p'
+    Glyph { x: 753, y: 700, w: 108, h: 152, bx: 0, by: 108, adv: 108 }, // 'q'
+    Glyph { x: 863, y: 700, w: 91, h: 101, bx: 0, by: 108, adv: 91 }, // 'r'
+    Glyph { x: 956, y: 700, w: 84, h: 100, bx: 0, by: 108, adv: 84 }, // 's'
+    Glyph { x: 1042, y: 700, w: 85, h: 123, bx: 0, by: 85, adv: 85 }, // 't'
+    Glyph { x: 1129, y: 700, w: 108, h: 101, bx: 0, by: 108, adv: 108 }, // 'u'
+    Glyph { x: 1239, y: 700, w: 100, h: 101, bx: 0, by: 108, adv: 100 }, // 'v'
+    Glyph { x: 1341, y: 700, w: 149, h: 102, bx: 0, by: 107, adv: 149 }, // 'w'
+    Glyph { x: 1492, y: 700, w: 99, h: 103, bx: 0, by: 107, adv: 99 }, // 'x'
+    Glyph { x: 1593, y: 700, w: 103, h: 150, bx: 0, by: 108, adv: 103 }, // 'y'
+    Glyph { x: 1698, y: 700, w: 99, h: 100, bx: 0, by: 109, adv: 99 }, // 'z'
+    Glyph { x: 1799, y: 700, w: 78, h: 190, bx: 0, by: 49, adv: 78 }, // '{'
+    Glyph { x: 1879, y: 700, w: 57, h: 186, bx: 0, by: 51, adv: 57 }, // '|'
+    Glyph { x: 1938, y: 700, w: 76, h: 189, bx: 0, by: 49, adv: 76 }, // '}'
+    Glyph { x: 2, y: 892, w: 114, h: 76, bx: 0, by: 130, adv: 114 }, // '~'
+];
+
+// ── The title face: the wordmark and nothing else ──
+/// The game's name, as the title screen sets it. Baked here rather than written in
+/// `ext::menu` because `TITLE_GLYPHS` holds exactly the characters it uses: the two
+/// are one edit in `tools/gen_ui.py`, and cannot come apart.
+pub const TITLE_TEXT: &str = "Hide 'N Dream";
+pub const TITLE_ATLAS: (u32, u32) = (1024, 512);
+pub const TITLE_FONT_SIZE: f32 = 224.0;
+#[allow(dead_code)] // see FONT_ASCENT
+pub const TITLE_ASCENT: f32 = 255.0;
+/// Sorted by character, so a lookup is a scan of at most this many entries.
+pub const TITLE_GLYPHS: [(char, Glyph); 11] = [
+    (' ', Glyph { x: 2, y: 2, w: 60, h: 1, bx: 0, by: 255, adv: 60 }),
+    ('\'', Glyph { x: 64, y: 2, w: 39, h: 175, bx: 0, by: 80, adv: 39 }),
+    ('D', Glyph { x: 105, y: 2, w: 163, h: 188, bx: 0, by: 105, adv: 163 }),
+    ('H', Glyph { x: 270, y: 2, w: 167, h: 227, bx: 0, by: 58, adv: 166 }),
+    ('N', Glyph { x: 439, y: 2, w: 180, h: 210, bx: 0, by: 93, adv: 179 }),
+    ('a', Glyph { x: 621, y: 2, w: 126, h: 163, bx: 0, by: 115, adv: 118 }),
+    ('d', Glyph { x: 749, y: 2, w: 123, h: 223, bx: 0, by: 32, adv: 117 }),
+    ('e', Glyph { x: 874, y: 2, w: 97, h: 131, bx: 0, by: 124, adv: 97 }),
+    ('i', Glyph { x: 2, y: 231, w: 68, h: 176, bx: 0, by: 79, adv: 68 }),
+    ('m', Glyph { x: 72, y: 231, w: 159, h: 119, bx: 0, by: 136, adv: 159 }),
+    ('r', Glyph { x: 233, y: 231, w: 107, h: 154, bx: 0, by: 101, adv: 93 }),
 ];

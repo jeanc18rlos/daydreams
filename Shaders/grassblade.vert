@@ -73,6 +73,7 @@ out vec3 ex_world;
 out vec3 ex_normal;
 out float ex_t;           // height along blade, for AO and colour
 out float ex_rand;
+out float ex_h;           // metres above this blade's own soil, for canopy occlusion
 
 // Cheap value noise; the wind field only needs to be smooth, not detailed.
 float hash12(vec2 p) {
@@ -110,6 +111,33 @@ void main(void) {
 	vec3 root = (l2w * vec4(in_pos, 1.0)).xyz;
 	vec3 world = root;
 
+	// ── Clumping ─────────────────────────────────────────────────────────────────────────
+	// Grass does not grow to one length. It stands in tussocks a metre or two across -- long
+	// where it has been left alone, cropped where something has been over it -- and the
+	// silhouette of that is most of what tells a real field from a carpet with a texture on
+	// it. The generator already varies blade length per blade, but per-blade randomness is
+	// invisible at any distance: what the eye reads is the LOW-frequency envelope, which is
+	// this. One noise tap per vertex, and it costs nothing at all in the fragment shader.
+	//
+	// Snapped and lattice-wrapped like every other world-space pattern here, or the tussocks
+	// would slide sideways the moment the player crossed the torus seam.
+	// TWO octaves, not one. Snapped, the coarse tap lands on an 11.6 metre cell -- so the
+	// whole visible field sits inside about one of them and the skyline is a near-constant
+	// fringe of equal tips, which is the tell. The second is at 1.8 metres, which is the
+	// scale a tussock actually is. Weighted 0.65/0.35 rather than evenly: near-equal weights
+	// cut the combined deviation to 0.71 of a single tap and the result reads as noise
+	// instead of as clumping.
+	float cf = snap_freq(0.085);
+	float cf2 = snap_freq(0.55);
+	float clump = vnoise(root.xz * cf, cf * wrap) * 0.65
+	            + vnoise(root.xz * cf2, cf2 * wrap) * 0.35;
+	clump = clump * clump * (3.0 - 2.0 * clump);
+	float base_y = (l2w * vec4(0.0, 0.0, 0.0, 1.0)).y;
+	// The low end binds: below about 0.45 the pockets open far enough to show the terrain
+	// behind the fringe, which is a grey the blade green does not match. The high end is
+	// bounded by the cull box's `SWAY_PAD` slack (ext/grassfield.rs).
+	world.y = base_y + (world.y - base_y) * mix(0.45, 1.45, clump);
+
 	// Gust field: two scales drifting downwind, plus a fast flutter per blade.
 	vec2 wdir = normalize(vec2(0.82, 0.57));
 	float f1 = snap_freq(0.055), f2 = snap_freq(0.180);
@@ -129,6 +157,10 @@ void main(void) {
 	world.y -= length(sway) * 0.35 * t;
 	// Stand the blade on the terrain. Sampled at the blade's ROOT (its unswayed xz) rather than
 	// at this vertex, so the whole blade rises together instead of shearing along a slope.
+	// Height above this blade's OWN soil, before the terrain lifts it: what the canopy
+	// occlusion in the fragment shader attenuates by. Taken here so it excludes the hill and
+	// includes the gust bend -- a blade laid flat by the wind is deeper in the sward.
+	ex_h = world.y - base_y;
 	world.y += terrain_h(root.xz);
 
 	gl_Position = vp * vec4(world, 1.0);

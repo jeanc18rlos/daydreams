@@ -31,6 +31,12 @@ pub struct UpdateCtx<'a> {
     // it during the loop would alias its RefCell.
     pub cam_to_world: crate::vector::Matrix4,
     pub player_pos: crate::vector::Vector3,
+    // EXT: how big the player currently is. `player_pos` is their EYE, and the distance
+    // down to their soles is `GH_PLAYER_HEIGHT * p_scale` -- which a scaling portal
+    // (`ext/warphouse.rs`) halves. Anything that stands something on the ground under the
+    // player needs it, and it cannot be read from the player object during the loop for
+    // the same aliasing reason `cam_to_world` is passed here.
+    pub player_p_scale: f32,
     // EXT: the scene's object vector, for an object that has to look at the others during
     // its step -- a held key asking what the crosshair is on (src/ext/key.rs). The cell of
     // the object being updated is mutably borrowed for the call, so a reader goes through
@@ -114,7 +120,8 @@ impl Object {
                 }
             }
             let mv = self.world_to_local().transposed();
-            let mvp = cam.matrix() * self.local_to_world();
+            let local_to_world = self.local_to_world();
+            let mvp = cam.matrix() * local_to_world;
             shader.use_program();
             if let Some(texture) = &self.texture {
                 texture.use_texture();
@@ -133,6 +140,14 @@ impl Object {
             // EXT: world period for scenes that wrap (the toroidal meadow). 0 elsewhere, which
             // every shader reads as "do not quantise anything".
             shader.set_f32("wrap", crate::ext::view::wrap());
+            // EXT: the flashlight's cone (src/ext/view.rs). A silent no-op on the shaders
+            // that do not declare it, exactly like `glow` above.
+            crate::ext::view::upload_spot(shader);
+            // EXT: and the object's own transform, so a vertex shader can hand the fragment
+            // a WORLD position -- which a cone needs and `mvp`/`mv` cannot give it. Already
+            // set by hand before this call by the two materials that needed it first
+            // (ext/rigid.rs, ext/key.rs); setting it here makes those redundant, not wrong.
+            shader.set_mat4("model", &local_to_world);
             mesh.draw();
         }
     }
@@ -199,6 +214,22 @@ pub trait ObjectT {
     fn draw(&self, ctx: &RenderCtx, cam: &Camera, _cur_fbo: Option<glow::Framebuffer>) {
         self.base().draw_impl(ctx, cam)
     }
+
+    // EXT: a second, optional draw, run after the sky and after the portal quads
+    // (`Engine::render`). Nothing in the port needs it; additive effects that write no depth
+    // do, and cannot work without it.
+    //
+    // The ported renderer draws the objects, THEN the sky into everything they left uncovered,
+    // THEN the portals. Both of those later passes test depth and the sky writes at the far
+    // plane, so anything drawn in the object loop that does not write depth -- a particle, a
+    // volumetric slice -- is simply painted over wherever it was in front of open sky or of a
+    // portal. Which is precisely where such things are meant to be seen. See
+    // `ext::doorlight`, whose motes vanished against the sky for exactly this reason.
+    //
+    // Writing depth instead is not an alternative: it would poke the particle's own depth into
+    // the buffer and stop the PORTAL from drawing behind it, punching dark specks through the
+    // view the effect is meant to be dust in front of.
+    fn draw_late(&self, _ctx: &RenderCtx, _cam: &Camera, _cur_fbo: Option<glow::Framebuffer>) {}
 
     fn update(&mut self, _ctx: &UpdateCtx) {}
 
@@ -279,6 +310,20 @@ pub trait ObjectT {
     // face out of the surface (`grab::flat_euler`).
     fn place_flat(&self) -> bool {
         false
+    }
+
+    // EXT: a tool the hand HOLDS rather than positions -- `Some(offset)` puts this object at
+    // that fixed offset in camera space, aimed down the view axis, at a fixed size, for as
+    // long as it is held (`ext/grab.rs`).
+    //
+    // The forced-perspective carry is the right rule for cargo -- a thing you are moving from
+    // here to there, whose size is the distance you release it at -- and exactly the wrong one
+    // for an instrument. A flashlight that swelled to the size of a wardrobe because the
+    // corridor behind it was long, and tumbled as the room turned, was not a flashlight; it
+    // was luggage that happened to emit light. This makes it an instrument: same size in every
+    // room, always pointing where you are looking.
+    fn carry_fixed(&self) -> Option<Vector3> {
+        None
     }
 
     // EXT: a prompt for the HUD while the crosshair is on this object (`ext::hint`): what

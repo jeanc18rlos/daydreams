@@ -274,6 +274,8 @@ impl ObjectT for GrassField {
         shader.set_f32("mood", crate::ext::view::mood_for(eye));
         shader.set_vec4("glow", crate::ext::view::glow());
         shader.set_f32("wrap", crate::ext::view::wrap());
+        // EXT: the flashlight's cone (src/ext/view.rs).
+        crate::ext::view::upload_spot(shader);
 
         let gl = ctx.gl;
         unsafe {
